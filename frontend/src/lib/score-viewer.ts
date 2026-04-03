@@ -158,7 +158,6 @@ export class ScoreViewer {
     const svgEl = this.container.querySelector('svg')
     if (!svgEl) return
     const svgRect = svgEl.getBoundingClientRect()
-    const svgTopPx = svgRect.top
     const svgH     = svgRect.height
     console.log(`[ScoreViewer] buildTimeMap: svgH=${svgH}, containerH=${this.container.getBoundingClientRect().height}`)
 
@@ -169,27 +168,31 @@ export class ScoreViewer {
     cursor.show()
     cursor.reset()
 
-    // Use the container as the position reference, not the SVG element.
-    // OSMD renders the cursor as an absolutely-positioned <div> INSIDE the
-    // container (not inside the SVG).  getBoundingClientRect() gives viewport
-    // coordinates; subtracting the container's viewport top gives the position
-    // within the container's scrollable content area — which is exactly what
-    // we need for scrollTop comparisons later.
     const containerRect = this.container.getBoundingClientRect()
     let step = 0
+    // Accumulate seconds via deltas rather than using RealValue directly.
+    // RealValue is the musical timestamp from the start of the score; on a
+    // repeat jump it resets to the earlier value, making the timeline
+    // non-monotonic.  Accumulating deltas keeps the timeline strictly
+    // increasing across repeats (one note = one forward step in time).
+    let cumulativeSeconds = 0
+
     while (!cursor.iterator.EndReached) {
-      const wholeNotes: number = cursor.iterator.currentTimeStamp?.RealValue ?? 0
+      const realValue: number = cursor.iterator.currentTimeStamp?.RealValue ?? 0
       const measureIdx: number = cursor.iterator.CurrentMeasureIndex ?? 0
       const bpm = measureBpm.get(measureIdx) ?? measureBpm.get(0) ?? 120
-      map.push({ seconds: (wholeNotes * 240) / bpm, step, xPx: -1, topPx: -1 })
+
+      // Duration of this beat in whole notes, needed when a repeat jump
+      // means nextRealValue ≤ realValue so we cannot use the delta.
+      const beatWholeNotes = this.getBeatDuration(cursor)
+
+      map.push({ seconds: cumulativeSeconds, step, xPx: -1, topPx: -1 })
 
       try {
         const el = cursor.cursorElement as HTMLElement | null
         if (el) {
           const r = el.getBoundingClientRect()
-          // Top relative to container's content area (for system detection).
           const top = r.top - containerRect.top + this.container.scrollTop
-          // Left relative to SVG (for click-to-seek x matching).
           const left = r.left - svgRect.left
           geoms.push({ top, height: r.height })
           map[map.length - 1].xPx = left
@@ -203,6 +206,20 @@ export class ScoreViewer {
 
       cursor.next()
       step++
+
+      if (!cursor.iterator.EndReached) {
+        const nextRealValue: number = cursor.iterator.currentTimeStamp?.RealValue ?? 0
+        const delta = nextRealValue - realValue
+        if (delta > 0) {
+          // Normal forward step: use the actual inter-step delta for accuracy.
+          cumulativeSeconds += (delta * 240) / bpm
+        } else {
+          // Repeat jump (or D.C./D.S.): nextRealValue went backward or stayed
+          // the same.  Use the note's own duration so the timeline advances
+          // by exactly one beat.
+          cumulativeSeconds += (beatWholeNotes * 240) / bpm
+        }
+      }
     }
 
     this.timeMap = map
@@ -210,8 +227,29 @@ export class ScoreViewer {
     cursor.reset()
     cursor.show()
 
-    console.log(`[ScoreViewer] walked ${geoms.length} steps; svgH=${svgH}px; first5 geoms:`, geoms.slice(0, 5))
+    console.log(`[ScoreViewer] walked ${geoms.length} steps (incl. repeats); svgH=${svgH}px`)
     this.buildSystemMapFromGeoms(geoms, svgH)
+  }
+
+  /**
+   * Return the duration in whole notes of the beat currently under the cursor,
+   * derived from the shortest note in any voice entry at this position.
+   * Falls back to a quarter note (0.25) if nothing else is available.
+   */
+  private getBeatDuration(cursor: OSMD): number {
+    try {
+      const entries: unknown[] = cursor.VoicesUnderCursor?.() ?? []
+      let min = Infinity
+      for (const entry of entries as Array<{ Notes?: Array<{ Length?: { RealValue?: number } }> }>) {
+        for (const note of entry.Notes ?? []) {
+          const len = note.Length?.RealValue ?? 0
+          if (len > 0 && len < min) min = len
+        }
+      }
+      return Number.isFinite(min) ? min : 0.25
+    } catch {
+      return 0.25
+    }
   }
 
   private buildSystemMapFromGeoms(
