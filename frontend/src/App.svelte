@@ -57,9 +57,8 @@
   let playbackPosition = 0
   let playbackDuration = 0
   let playbackFrame: number | null = null
-  let globalVolume = 0.5
+  let globalVolume = 1.0
   let trackLevels: Record<string, number> = {}
-  let gaugeMultiplier = 6
 
   onMount(async () => {
     if (isPublicRoute && publicAccessKey) {
@@ -247,7 +246,7 @@
     playbackState = 'stopped'
     playbackPosition = 0
     playbackDuration = 0
-    globalVolume = 0.5
+    globalVolume = 1.0
     mixerTracks = []
     playerMode = null
     midiLoading = false
@@ -293,6 +292,7 @@
           streamUrl: s.stream_url,
         })),
       )
+      stemPlayer.setLevelMultiplier(15)
       mixerTracks = loaded.tracks
       playbackDuration = loaded.duration
       playbackPosition = 0
@@ -422,12 +422,6 @@
         midiPlayer.setTrackVolume(track.id, globalVolume)
       }
     }
-  }
-
-  function updateGaugeMultiplier(event: Event) {
-    const target = event.currentTarget as HTMLInputElement
-    gaugeMultiplier = Number(target.value)
-    stemPlayer?.setLevelMultiplier(gaugeMultiplier)
   }
 
   function toggleTrackMute(trackId: string) {
@@ -603,27 +597,12 @@
                     <input
                       type="range"
                       min="0"
-                      max="100"
+                      max="200"
                       value={Math.round(globalVolume * 100)}
                       on:input={updateGlobalVolume}
                     />
                   </div>
                   <p class="channel-name">All</p>
-                </div>
-
-                <div class="channel-strip global-strip">
-                  <span class="channel-level">x{gaugeMultiplier}</span>
-                  <div class="channel-fader">
-                    <input
-                      type="range"
-                      min="1"
-                      max="20"
-                      step="1"
-                      value={gaugeMultiplier}
-                      on:input={updateGaugeMultiplier}
-                    />
-                  </div>
-                  <p class="channel-name">Gain</p>
                 </div>
 
                 <div class="channel-divider"></div>
@@ -641,7 +620,7 @@
                       <input
                         type="range"
                         min="0"
-                        max="100"
+                        max="200"
                         value={percentVolume(track.volume)}
                         on:input={(event) => updateTrackVolume(track.id, event)}
                       />

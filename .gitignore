@@ -9,4 +9,4 @@ backend/.env
 soundfonts/
 backend/data/
 **/.vscode/
-sfizz/
+binaries/

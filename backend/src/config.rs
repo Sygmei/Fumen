@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub musescore_bin: Option<String>,
     pub soundfont_dir: Option<PathBuf>,
     pub sfizz_bin: Option<String>,
+    pub fluidsynth_bin: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +93,10 @@ impl AppConfig {
             .ok()
             .filter(|value| !value.trim().is_empty());
 
+        let fluidsynth_bin = env::var("FLUIDSYNTH_BIN")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+
         Ok(Self {
             bind_address,
             admin_password,
@@ -101,6 +106,7 @@ impl AppConfig {
             musescore_bin,
             soundfont_dir,
             sfizz_bin,
+            fluidsynth_bin,
         })
     }
 

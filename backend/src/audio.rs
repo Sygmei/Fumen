@@ -114,6 +114,9 @@ pub async fn generate_stems(
         }
     };
 
+    // FluidSynth is optional — only required when mapping.json points to SF2 files.
+    let fluidsynth = find_fluidsynth_binary(config).await;
+
     let sfz_dir = match find_soundfont_dir(config) {
         Some(dir) => dir,
         None => {
@@ -217,6 +220,8 @@ pub async fn generate_stems(
         stem_wav_path: PathBuf,
         stem_ogg_path: PathBuf,
         sfizz: String,
+        /// Set to the fluidsynth binary path when `sfz_path` is an SF2 file.
+        fluidsynth: Option<String>,
         ffmpeg: String,
     }
 
@@ -263,12 +268,17 @@ pub async fn generate_stems(
             track_name: track_info.track_name.clone(),
             program: track_info.program,
             is_percussion: track_info.is_percussion,
-            sfz_path,
+            sfz_path: sfz_path.clone(),
             stem_midi,
             stem_mid_path: output_dir.join(format!("stem_{chunk_idx}.mid")),
             stem_wav_path: output_dir.join(format!("stem_{chunk_idx}.wav")),
             stem_ogg_path: output_dir.join(format!("stem_{chunk_idx}.ogg")),
             sfizz: sfizz.clone(),
+            fluidsynth: if sfz_path.extension().map_or(false, |e| e.eq_ignore_ascii_case("sf2")) {
+                fluidsynth.clone()
+            } else {
+                None
+            },
             ffmpeg: ffmpeg.clone(),
         });
     }
@@ -290,49 +300,104 @@ pub async fn generate_stems(
                 return None;
             }
 
-            // Render WAV with sfizz_render.
+            // Render WAV: use FluidSynth for SF2 soundfonts, sfizz for SFZ.
             // Use 48000 Hz to match Opus's native sample rate — ffmpeg will
             // then pass the samples through without resampling, eliminating
             // a source of inter-stem timing drift.
-            match Command::new(&task.sfizz)
-                .arg("--sfz")
-                .arg(&task.sfz_path)
-                .arg("--midi")
-                .arg(&task.stem_mid_path)
-                .arg("--wav")
-                .arg(&task.stem_wav_path)
-                .arg("--samplerate")
-                .arg("48000")
-                .output()
-                .await
-            {
-                Ok(out) if out.status.success() => {}
-                Ok(out) => {
-                    tracing::warn!(
-                        "stems: [{}/{}] '{}' – sfizz_render failed: {}",
-                        task.stem_idx + 1,
-                        total,
-                        task.track_name,
-                        String::from_utf8_lossy(&out.stderr).trim()
-                    );
-                    return None;
+            let is_sf2 = task.sfz_path.extension()
+                .map_or(false, |e| e.eq_ignore_ascii_case("sf2"));
+
+            if is_sf2 {
+                let fluidsynth_bin = match &task.fluidsynth {
+                    Some(bin) => bin.clone(),
+                    None => {
+                        tracing::warn!(
+                            "stems: [{}/{}] '{}' – SF2 soundfont requires FluidSynth but it \
+                            was not found. Install FluidSynth and add it to PATH (or set \
+                            FLUIDSYNTH_BIN).",
+                            task.stem_idx + 1,
+                            total,
+                            task.track_name,
+                        );
+                        return None;
+                    }
+                };
+                match Command::new(&fluidsynth_bin)
+                    .arg("-ni")
+                    .arg("-q")
+                    .arg("-r").arg("48000")
+                    .arg("-F").arg(&task.stem_wav_path)
+                    .arg(&task.sfz_path)
+                    .arg(&task.stem_mid_path)
+                    .output()
+                    .await
+                {
+                    Ok(out) if out.status.success() => {}
+                    Ok(out) => {
+                        tracing::warn!(
+                            "stems: [{}/{}] '{}' – FluidSynth failed: {}",
+                            task.stem_idx + 1,
+                            total,
+                            task.track_name,
+                            String::from_utf8_lossy(&out.stderr).trim()
+                        );
+                        return None;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "stems: [{}/{}] '{}' – FluidSynth spawn error: {e}",
+                            task.stem_idx + 1,
+                            total,
+                            task.track_name,
+                        );
+                        return None;
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        "stems: [{}/{}] '{}' – sfizz_render spawn error: {e}",
-                        task.stem_idx + 1,
-                        total,
-                        task.track_name,
-                    );
-                    return None;
+            } else {
+                match Command::new(&task.sfizz)
+                    .arg("--sfz")
+                    .arg(&task.sfz_path)
+                    .arg("--midi")
+                    .arg(&task.stem_mid_path)
+                    .arg("--wav")
+                    .arg(&task.stem_wav_path)
+                    .arg("--samplerate")
+                    .arg("48000")
+                    .output()
+                    .await
+                {
+                    Ok(out) if out.status.success() => {}
+                    Ok(out) => {
+                        tracing::warn!(
+                            "stems: [{}/{}] '{}' – sfizz_render failed: {}",
+                            task.stem_idx + 1,
+                            total,
+                            task.track_name,
+                            String::from_utf8_lossy(&out.stderr).trim()
+                        );
+                        return None;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "stems: [{}/{}] '{}' – sfizz_render spawn error: {e}",
+                            task.stem_idx + 1,
+                            total,
+                            task.track_name,
+                        );
+                        return None;
+                    }
                 }
             }
 
-            // Encode WAV → Opus
+            // Encode WAV → Opus with EBU R128 loudness normalisation so that
+            // every stem lands at the same perceived volume regardless of how
+            // loud the individual soundfont samples are recorded.
             match Command::new(&task.ffmpeg)
                 .arg("-y")
                 .arg("-i")
                 .arg(&task.stem_wav_path)
+                .arg("-af")
+                .arg("loudnorm=I=-16:TP=-1.5:LRA=11")
                 .arg("-c:a")
                 .arg("libopus")
                 .arg("-b:a")
@@ -735,6 +800,23 @@ async fn find_sfizz_binary(config: &AppConfig) -> Option<String> {
     for candidate in ["sfizz_render", "sfizz_render.exe"] {
         if Command::new(candidate)
             .arg("--help")
+            .output()
+            .await
+            .is_ok()
+        {
+            return Some(candidate.to_owned());
+        }
+    }
+    None
+}
+
+async fn find_fluidsynth_binary(config: &AppConfig) -> Option<String> {
+    if let Some(path) = &config.fluidsynth_bin {
+        return Some(path.clone());
+    }
+    for candidate in ["fluidsynth", "fluidsynth.exe"] {
+        if Command::new(candidate)
+            .arg("--version")
             .output()
             .await
             .is_ok()

@@ -41,7 +41,7 @@ export class StemMixerPlayer {
   private context: AudioContext | null = null
   private tracks = new Map<string, InternalTrack>()
   private _duration = 0
-  private _levelMultiplier = 6
+  private _levelMultiplier = 15
 
   // Playback position tracking via the AudioContext clock.
   private _isPlaying = false
@@ -65,7 +65,7 @@ export class StemMixerPlayer {
         trackIndex: Number(s.id),
         name: s.name,
         instrumentName: s.instrumentName,
-        volume: 0.5,
+        volume: 1.0,
         muted: false,
       }))
 
@@ -91,7 +91,7 @@ export class StemMixerPlayer {
     }
 
     const gain = this.context!.createGain()
-    gain.gain.value = 0.5
+    gain.gain.value = 1.0
     const analyser = this.context!.createAnalyser()
     analyser.fftSize = 1024
     analyser.smoothingTimeConstant = 0.6
@@ -103,7 +103,7 @@ export class StemMixerPlayer {
       gain,
       analyser,
       analyserData: new Uint8Array(new ArrayBuffer(analyser.fftSize)),
-      volume: 0.5,
+      volume: 1.0,
       muted: false,
       source: null,
     })
@@ -202,7 +202,7 @@ export class StemMixerPlayer {
   setTrackVolume(trackId: string, volume: number): void {
     const t = this.tracks.get(trackId)
     if (!t || !this.context) return
-    t.volume = Math.max(0, Math.min(1, volume))
+    t.volume = Math.max(0, volume)
     if (!t.muted) {
       t.gain.gain.setTargetAtTime(t.volume, this.context.currentTime, 0.01)
     }
