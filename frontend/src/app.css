@@ -304,6 +304,7 @@ h3 {
 
 .score-container.loaded {
   visibility: visible;
+  cursor: pointer;
   /* height and overflow are controlled by score-viewer.ts inline styles.
      NO padding here — padding offsets the scroll coordinate space and causes
      the next system to bleed into view at the bottom.  Visual spacing is
@@ -558,9 +559,24 @@ h3 {
     gap: 0;
   }
 
-  /* gauge is height-driven by JS — hide on mobile, slider is enough */
+  /* gauge: repurpose as a thin horizontal level bar above the slider */
   .channel-gauge {
-    display: none;
+    display: block;
+    width: 100%;
+    height: 5px;
+    border-radius: 3px;
+    margin-bottom: 4px;
+  }
+
+  .channel-gauge-fill {
+    /* desktop fill is driven by height%; on mobile drive width instead */
+    height: 100% !important;
+    width: var(--l, 0%);
+    /* reset the bottom-anchored absolute positioning to a left-anchored one */
+    bottom: 0;
+    left: 0;
+    right: auto;
+    border-radius: 3px;
   }
 
   .channel-fader input[type='range'] {

@@ -18,6 +18,10 @@ type OSMD = any
 interface TimeEntry {
   seconds: number
   step: number
+  /** Cursor element left edge relative to SVG left; -1 if not measured. */
+  xPx: number
+  /** Cursor element top relative to container content area; -1 if not measured. */
+  topPx: number
 }
 
 /** Y pixel offset (relative to SVG top) for each rendered system. */
@@ -33,6 +37,10 @@ export class ScoreViewer {
   private currentStep = 0
   private currentSystemIdx = -1
   private container: HTMLElement
+  private _clickHandler: ((e: MouseEvent) => void) | null = null
+
+  /** Called when the user clicks on the score. Argument is seconds into the piece. */
+  onClickSeek: ((seconds: number) => void) | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -124,6 +132,7 @@ export class ScoreViewer {
 
       this.osmd.cursor.show()
       this.snapToSystem(0)
+      this.attachClickHandler()
     } catch (cursorErr) {
       console.warn('[ScoreViewer] cursor init failed (non-fatal):', cursorErr)
       this.container.style.overflow = 'hidden'
@@ -172,15 +181,19 @@ export class ScoreViewer {
       const wholeNotes: number = cursor.iterator.currentTimeStamp?.RealValue ?? 0
       const measureIdx: number = cursor.iterator.CurrentMeasureIndex ?? 0
       const bpm = measureBpm.get(measureIdx) ?? measureBpm.get(0) ?? 120
-      map.push({ seconds: (wholeNotes * 240) / bpm, step })
+      map.push({ seconds: (wholeNotes * 240) / bpm, step, xPx: -1, topPx: -1 })
 
       try {
         const el = cursor.cursorElement as HTMLElement | null
         if (el) {
           const r = el.getBoundingClientRect()
-          // Position relative to container's content area top.
+          // Top relative to container's content area (for system detection).
           const top = r.top - containerRect.top + this.container.scrollTop
+          // Left relative to SVG (for click-to-seek x matching).
+          const left = r.left - svgRect.left
           geoms.push({ top, height: r.height })
+          map[map.length - 1].xPx = left
+          map[map.length - 1].topPx = top
         } else {
           geoms.push({ top: -1, height: 0 })
         }
@@ -345,6 +358,78 @@ export class ScoreViewer {
     } catch { /* ignore */ }
   }
 
+  /**
+   * Attach a click listener on the score SVG.  A click is mapped to the
+   * nearest time-map entry by comparing the click's X coordinate (as a
+   * fraction of SVG width) to each step's cursor X position.
+   *
+   * Because the cursor element is a <div> overlay on top of the SVG, we
+   * listen on the container for both; the SVG and the cursor <div> both
+   * bubble up to it.  We convert the viewport-Y of the click back into
+   * SVG coordinates to find which system was clicked, then pick the
+   * time-map entry whose cursor Y is closest to that system's top, and
+   * whose cursor X is closest to the click X.
+   */
+  private attachClickHandler(): void {
+    if (this._clickHandler) {
+      this.container.removeEventListener('click', this._clickHandler)
+    }
+
+    this._clickHandler = (e: MouseEvent) => {
+      if (this.timeMap.length === 0 || !this.osmd?.cursor) return
+
+      const svgEl = this.container.querySelector('svg')
+      if (!svgEl) return
+
+      const svgRect = svgEl.getBoundingClientRect()
+      // Y relative to SVG top = same coordinate space as systemMap.topPx and entry.topPx.
+      // svgRect.top already accounts for scroll: when container.scrollTop = S, the SVG
+      // is shifted S px upward in the viewport, so svgRect.top = containerTop − S.
+      // Therefore (e.clientY − svgRect.top) = (e.clientY − containerTop + S), which
+      // is exactly the offset from the SVG's top edge — no need to add scrollTop again.
+      const clickYInSvg = e.clientY - svgRect.top
+      // X relative to SVG left (same coordinate space as entry.xPx).
+      const clickXInSvg = e.clientX - svgRect.left
+
+      // Find which system was clicked.
+      let clickedSystem = 0
+      for (let i = 0; i < this.systemMap.length; i++) {
+        if (this.systemMap[i].topPx <= clickYInSvg + 4) clickedSystem = i
+      }
+
+      // Filter to entries that belong to the clicked system.
+      // An entry belongs to system[i] when its topPx falls inside that
+      // system's vertical band [systemMap[i].topPx, systemMap[i+1].topPx).
+      const inSystem = this.timeMap.filter((entry) => {
+        if (entry.topPx < 0) return false
+        let sysIdx = 0
+        for (let i = 0; i < this.systemMap.length; i++) {
+          if (this.systemMap[i].topPx <= entry.topPx + 4) sysIdx = i
+        }
+        return sysIdx === clickedSystem
+      })
+
+      const pool = inSystem.filter(e => e.xPx >= 0)
+      if (pool.length === 0) return
+
+      // The cursor xPx is the LEFT edge of each note.  The note occupies the
+      // horizontal span from its own xPx up to the next note's xPx.  So the
+      // right choice is always the LAST entry whose xPx is ≤ clickX — i.e.
+      // the note that starts at or before the click position.
+      // Fall back to the first entry if the click is to the left of every note.
+      const sorted = [...pool].sort((a, b) => a.xPx - b.xPx)
+      let best = sorted[0]
+      for (const entry of sorted) {
+        if (entry.xPx <= clickXInSvg) best = entry
+        else break
+      }
+
+      this.onClickSeek?.(best.seconds)
+    }
+
+    this.container.addEventListener('click', this._clickHandler)
+  }
+
   reset(): void {
     this.osmd?.cursor?.reset()
     this.currentStep = 0
@@ -355,6 +440,10 @@ export class ScoreViewer {
   }
 
   dispose(): void {
+    if (this._clickHandler) {
+      this.container.removeEventListener('click', this._clickHandler)
+      this._clickHandler = null
+    }
     try { this.osmd?.cursor?.hide() } catch { /* ignore */ }
     this.osmd = null
     this.timeMap = []

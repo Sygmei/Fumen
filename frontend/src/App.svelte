@@ -218,6 +218,7 @@
       if (music.musicxml_url && scoreContainer) {
         scoreLoading = true
         const sv = new ScoreViewer(scoreContainer)
+        sv.onClickSeek = (seconds: number) => handleScoreSeek(seconds)
         scoreViewer = sv
         scoreTask = sv
           .load(music.musicxml_url)
@@ -376,8 +377,24 @@
 
     const target = event.currentTarget as HTMLInputElement
     const seconds = Number(target.value)
-    player.seek(seconds)
+    handleScoreSeek(seconds)
+  }
+
+  async function handleScoreSeek(seconds: number) {
+    scoreViewer?.seek(seconds)
     playbackPosition = seconds
+    const player = stemPlayer ?? midiPlayer
+    if (!player) return
+    const wasPlaying = playbackState === 'playing'
+    if (wasPlaying) {
+      player.pause()
+      stopPlaybackLoop()
+    }
+    player.seek(seconds)
+    if (wasPlaying) {
+      await player.play()
+      startPlaybackLoop()
+    }
   }
 
   function updateTrackVolume(trackId: string, event: Event) {
@@ -618,7 +635,7 @@
                       <div class="channel-gauge">
                         <div
                           class="channel-gauge-fill"
-                          style="height: {Math.round((trackLevels[track.id] ?? 0) * 100)}%"
+                          style="height: {Math.round((trackLevels[track.id] ?? 0) * 100)}%; --l: {Math.round((trackLevels[track.id] ?? 0) * 100)}%"
                         ></div>
                       </div>
                       <input

@@ -117,6 +117,10 @@ export class MidiMixerPlayer {
     transport.start()
   }
 
+  async play(): Promise<void> {
+    return this.start()
+  }
+
   pause(): void {
     Tone.getTransport().pause()
   }
