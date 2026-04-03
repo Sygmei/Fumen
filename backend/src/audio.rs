@@ -1,16 +1,48 @@
 use crate::config::AppConfig;
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use midly::{MetaMessage, MidiMessage, Smf, TrackEventKind};
-use std::collections::HashMap;
+use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
+
+/// A `programs` entry can be either a plain SFZ path string (for
+/// instruments with a single articulation) or a detail object that bundles
+/// the sustain SFZ together with optional staccato, vibrato and in-track
+/// program-override variants.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum ProgramEntry {
+    Simple(String),
+    Detailed(ProgramDetail),
+}
+
+#[derive(serde::Deserialize)]
+struct ProgramDetail {
+    /// Primary (sustain / default) SFZ path relative to the soundfonts dir.
+    sfz: String,
+    /// Short-note (<STACCATO_THRESHOLD_US) SFZ, e.g. spiccato or staccato.
+    #[serde(default)]
+    staccato: Option<String>,
+    /// Long-note (≥VIBRATO_THRESHOLD_US) SFZ that adds natural vibrato.
+    #[serde(default)]
+    vibrato: Option<String>,
+    /// In-track GM program-change overrides.  Key = transient program seen
+    /// mid-track (e.g. "45" for pizzicato); value = SFZ path for those notes.
+    #[serde(default)]
+    overrides: HashMap<String, String>,
+}
 
 #[derive(serde::Deserialize)]
 struct SfzMapping {
     percussion: Option<String>,
     fallback: Option<String>,
-    programs: HashMap<String, String>,
+    programs: HashMap<String, ProgramEntry>,
+    /// Per-soundfont gain corrections (dB) produced by the `normalize_mapping`
+    /// CLI tool.  Key = relative SFZ path (forward-slash, e.g.
+    /// "VSCO-2-CE-1.1.0/CelloEnsSusVib.sfz").  Absent keys → 0 dB.
+    #[serde(default)]
+    gains: HashMap<String, f64>,
 }
 
 async fn load_sfz_mapping(sfz_dir: &Path) -> Result<SfzMapping> {
@@ -18,8 +50,21 @@ async fn load_sfz_mapping(sfz_dir: &Path) -> Result<SfzMapping> {
     let text = tokio::fs::read_to_string(&path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&text)
-        .with_context(|| format!("parsing {}", path.display()))
+    let mut mapping: SfzMapping = serde_json::from_str(&text)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    // Load gain corrections from the separate gains.json (written by
+    // normalize_mapping).  Missing file is non-fatal — all gains default to 0.
+    let gains_path = sfz_dir.join("gains.json");
+    if gains_path.exists() {
+        match tokio::fs::read_to_string(&gains_path).await {
+            Ok(g) => match serde_json::from_str::<HashMap<String, f64>>(&g) {
+                Ok(g) => mapping.gains = g,
+                Err(e) => tracing::warn!("gains.json parse error: {e}"),
+            },
+            Err(e) => tracing::warn!("gains.json read error: {e}"),
+        }
+    }
+    Ok(mapping)
 }
 
 pub enum ConversionOutcome {
@@ -222,7 +267,40 @@ pub async fn generate_stems(
         sfizz: String,
         /// Set to the fluidsynth binary path when `sfz_path` is an SF2 file.
         fluidsynth: Option<String>,
+        /// Pre-computed gain correction in dB from mapping.json `gains` table.
+        /// Applied as a ffmpeg `volume` filter at encode time (0.0 = no change).
+        gain_db: f64,
+        /// When `Some`, this track has been split by note duration.
+        /// Short notes are rendered through this staccato SFZ and mixed with
+        /// the sustain stem before encoding to Opus.
+        staccato_sfz_path: Option<PathBuf>,
+        staccato_midi: Option<Vec<u8>>,
+        staccato_mid_path: PathBuf,
+        staccato_wav_path: PathBuf,
+        /// Gain correction for the staccato SFZ (0.0 if not calibrated).
+        staccato_gain_db: f64,
+        /// When `Some`, long notes (≥ VIBRATO_THRESHOLD_US) for this track are
+        /// rendered through this vibrato SFZ and mixed with the other stems.
+        vibrato_sfz_path: Option<PathBuf>,
+        vibrato_midi: Option<Vec<u8>>,
+        vibrato_mid_path: PathBuf,
+        vibrato_wav_path: PathBuf,
+        /// Gain correction for the vibrato SFZ (0.0 if not calibrated).
+        vibrato_gain_db: f64,
+        /// Extra renders produced by in-track program changes (e.g. pizzicato
+        /// sections detected via GM program 45 in a string track).  Each entry
+        /// is rendered through its own SFZ patch and mixed with the main stem.
+        extra_stems: Vec<ExtraStem>,
         ffmpeg: String,
+    }
+
+    /// One extra render job produced by an in-track GM program-change event.
+    struct ExtraStem {
+        sfz_path: PathBuf,
+        midi: Vec<u8>,
+        mid_path: PathBuf,
+        wav_path: PathBuf,
+        gain_db: f64,
     }
 
     let mut task_list: Vec<StemTask> = Vec::new();
@@ -259,8 +337,142 @@ pub async fn generate_stems(
             sfz_path.file_name().unwrap_or_default().to_string_lossy(),
         );
 
-        // 2-track Format-1 MIDI: clean tempo track + this instrument track
-        let stem_midi = build_stem_midi(&midi_bytes, &clean_tempo_chunk, chunks[chunk_idx]);
+        // --- Program-change override split ---------------------------------
+        // When a track contains in-track GM program changes (e.g. violins
+        // switching to program 45 = Pizzicato Strings), extract those notes
+        // into separate extra stems rendered through per-program SFZ patches.
+        // The main stem canonical_mtrk only contains notes at the canonical
+        // program so the wrong SFZ is never applied to the wrong notes.
+        let (canonical_mtrk, extra_stems) = {
+            let canon_key = track_info.program.to_string();
+            let overrides = if !track_info.is_percussion {
+                match sfz_mapping.programs.get(&canon_key) {
+                    Some(ProgramEntry::Detailed(d)) if !d.overrides.is_empty() =>
+                        Some(&d.overrides),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some(overrides) = overrides {
+                let groups = extract_program_groups(&midi_bytes, chunk_idx);
+                tracing::debug!(
+                    "stems: '{}' program-groups found: {:?}",
+                    track_info.track_name,
+                    groups.keys().collect::<Vec<_>>()
+                );
+                let canon_events = groups.get(&track_info.program)
+                    .cloned()
+                    .unwrap_or_default();
+                // Fall back to the raw chunk only when parsing failed entirely
+                // (groups is empty).  When groups is non-empty but canon_events
+                // is empty the track has *only* override-program notes (e.g.
+                // pure pizzicato cello) — the correct canon track is silent so
+                // the extra stems handle all playback.
+                let canon_mtrk = if groups.is_empty() {
+                    chunks[chunk_idx].to_vec()
+                } else {
+                    build_mtrk(canon_events)
+                };
+                let mut extras: Vec<ExtraStem> = Vec::new();
+                for (prog, events) in &groups {
+                    if *prog == track_info.program || events.is_empty() { continue; }
+                    let prog_key = prog.to_string();
+                    if let Some(sfz_rel) = overrides.get(&prog_key) {
+                        let sfz_p = sfz_dir.join(sfz_rel);
+                        if sfz_p.exists() {
+                            let extra_mtrk = build_mtrk(events.clone());
+                            let extra_midi = build_stem_midi(
+                                &midi_bytes, &clean_tempo_chunk, &extra_mtrk
+                            );
+                            let gain = sfz_p
+                                .strip_prefix(&sfz_dir).ok()
+                                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                                .and_then(|r| sfz_mapping.gains.get(&r).copied())
+                                .unwrap_or(0.0);
+                            let n = extras.len();
+                            extras.push(ExtraStem {
+                                sfz_path: sfz_p,
+                                midi: extra_midi,
+                                mid_path: output_dir.join(format!("stem_{chunk_idx}_x{n}.mid")),
+                                wav_path: output_dir.join(format!("stem_{chunk_idx}_x{n}.wav")),
+                                gain_db: gain,
+                            });
+                        } else {
+                            tracing::warn!("Program override SFZ not found: {}",
+                                sfz_dir.join(sfz_rel).display());
+                        }
+                    }
+                }
+                (canon_mtrk, extras)
+            } else {
+                (chunks[chunk_idx].to_vec(), Vec::new())
+            }
+        };
+
+        // --- Note-duration split -------------------------------------------
+        // Notes are classified by sounding duration and routed to dedicated SFZ
+        // patches to capture natural articulation:
+        //   < STACCATO_THRESHOLD_US  → staccato / spiccato patch
+        //   ≥ VIBRATO_THRESHOLD_US   → vibrato sustain patch
+        //   everything in between    → plain (non-vibrato) sustain patch
+        // The split operates on the canonical_mtrk (program-filtered events)
+        // so pizzicato notes that were already extracted above are not also
+        // misrouted to the spiccato patch.
+        let staccato_sfz = if !track_info.is_percussion {
+            staccato_sfz_for_gm_program(track_info.program, &sfz_dir, &sfz_mapping)
+        } else {
+            None
+        };
+        let vibrato_sfz = if !track_info.is_percussion {
+            vibrato_sfz_for_gm_program(track_info.program, &sfz_dir, &sfz_mapping)
+        } else {
+            None
+        };
+
+        let (stem_midi, staccato_midi, vibrato_midi) =
+            if staccato_sfz.is_some() || vibrato_sfz.is_some() {
+                // Build a 2-track MIDI from the canonical (filtered) events
+                // so split_midi_track_3way can be called with track_idx = 1.
+                let split_input = build_stem_midi(
+                    &midi_bytes, &clean_tempo_chunk, &canonical_mtrk
+                );
+                let (stac_chunk, sus_chunk, vib_chunk) = split_midi_track_3way(
+                    &split_input,
+                    1,
+                    staccato_sfz.is_some(),
+                    vibrato_sfz.is_some(),
+                );
+                let sus  = build_stem_midi(&midi_bytes, &clean_tempo_chunk, &sus_chunk);
+                let stac = staccato_sfz.is_some()
+                    .then(|| build_stem_midi(&midi_bytes, &clean_tempo_chunk, &stac_chunk));
+                let vib  = vibrato_sfz.is_some()
+                    .then(|| build_stem_midi(&midi_bytes, &clean_tempo_chunk, &vib_chunk));
+                (sus, stac, vib)
+            } else {
+                (build_stem_midi(&midi_bytes, &clean_tempo_chunk, &canonical_mtrk), None, None)
+            };
+
+        // Look up the per-instrument gain correction from mapping.json.
+        // The key uses forward slashes regardless of OS.
+        let gain_db = sfz_path
+            .strip_prefix(&sfz_dir)
+            .ok()
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .and_then(|rel| sfz_mapping.gains.get(&rel).copied())
+            .unwrap_or(0.0);
+
+        let staccato_gain_db = staccato_sfz.as_ref()
+            .and_then(|p| p.strip_prefix(&sfz_dir).ok())
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .and_then(|rel| sfz_mapping.gains.get(&rel).copied())
+            .unwrap_or(0.0);
+
+        let vibrato_gain_db = vibrato_sfz.as_ref()
+            .and_then(|p| p.strip_prefix(&sfz_dir).ok())
+            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            .and_then(|rel| sfz_mapping.gains.get(&rel).copied())
+            .unwrap_or(0.0);
 
         task_list.push(StemTask {
             stem_idx,
@@ -279,6 +491,18 @@ pub async fn generate_stems(
             } else {
                 None
             },
+            gain_db,
+            staccato_sfz_path: staccato_sfz,
+            staccato_midi,
+            staccato_mid_path: output_dir.join(format!("stem_{chunk_idx}_stac.mid")),
+            staccato_wav_path: output_dir.join(format!("stem_{chunk_idx}_stac.wav")),
+            staccato_gain_db,
+            vibrato_sfz_path: vibrato_sfz,
+            vibrato_midi,
+            vibrato_mid_path: output_dir.join(format!("stem_{chunk_idx}_vib.mid")),
+            vibrato_wav_path: output_dir.join(format!("stem_{chunk_idx}_vib.wav")),
+            vibrato_gain_db,
+            extra_stems,
             ffmpeg: ffmpeg.clone(),
         });
     }
@@ -389,15 +613,182 @@ pub async fn generate_stems(
                 }
             }
 
-            // Encode WAV → Opus with EBU R128 loudness normalisation so that
-            // every stem lands at the same perceived volume regardless of how
-            // loud the individual soundfont samples are recorded.
-            match Command::new(&task.ffmpeg)
-                .arg("-y")
-                .arg("-i")
-                .arg(&task.stem_wav_path)
-                .arg("-af")
-                .arg("loudnorm=I=-16:TP=-1.5:LRA=11")
+            // --- Optional staccato render ------------------------------------
+            // When this track was split by note duration, render the staccato
+            // (short-note) MIDI through the staccato SFZ patch.
+            let staccato_wave_ok =
+                if let (Some(stac_sfz), Some(stac_midi)) =
+                    (&task.staccato_sfz_path, &task.staccato_midi)
+                {
+                    match tokio::fs::write(&task.staccato_mid_path, stac_midi).await {
+                        Err(e) => {
+                            tracing::warn!(
+                                "stems: [{}/{}] '{}' – staccato MIDI write: {e}",
+                                task.stem_idx + 1, total, task.track_name
+                            );
+                            false
+                        }
+                        Ok(()) => {
+                            match Command::new(&task.sfizz)
+                                .arg("--sfz").arg(stac_sfz)
+                                .arg("--midi").arg(&task.staccato_mid_path)
+                                .arg("--wav").arg(&task.staccato_wav_path)
+                                .arg("--samplerate").arg("48000")
+                                .output().await
+                            {
+                                Ok(o) if o.status.success() => {
+                                    tracing::info!(
+                                        "stems: [{}/{}] '{}' – staccato render OK",
+                                        task.stem_idx + 1, total, task.track_name
+                                    );
+                                    true
+                                }
+                                Ok(o) => {
+                                    tracing::warn!(
+                                        "stems: [{}/{}] '{}' – staccato sfizz: {}",
+                                        task.stem_idx + 1, total, task.track_name,
+                                        String::from_utf8_lossy(&o.stderr).trim()
+                                    );
+                                    false
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "stems: [{}/{}] '{}' – staccato sfizz spawn: {e}",
+                                        task.stem_idx + 1, total, task.track_name
+                                    );
+                                    false
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    false
+                };
+
+            // --- Optional vibrato render -------------------------------------
+            // Long notes (≥ VIBRATO_THRESHOLD_US) rendered through the vibrato
+            // SFZ patch and mixed into the stem alongside sustain + staccato.
+            let vibrato_wave_ok =
+                if let (Some(vib_sfz), Some(vib_midi)) =
+                    (&task.vibrato_sfz_path, &task.vibrato_midi)
+                {
+                    match tokio::fs::write(&task.vibrato_mid_path, vib_midi).await {
+                        Err(e) => {
+                            tracing::warn!(
+                                "stems: [{}/{}] '{}' – vibrato MIDI write: {e}",
+                                task.stem_idx + 1, total, task.track_name
+                            );
+                            false
+                        }
+                        Ok(()) => {
+                            match Command::new(&task.sfizz)
+                                .arg("--sfz").arg(vib_sfz)
+                                .arg("--midi").arg(&task.vibrato_mid_path)
+                                .arg("--wav").arg(&task.vibrato_wav_path)
+                                .arg("--samplerate").arg("48000")
+                                .output().await
+                            {
+                                Ok(o) if o.status.success() => {
+                                    tracing::info!(
+                                        "stems: [{}/{}] '{}' – vibrato render OK",
+                                        task.stem_idx + 1, total, task.track_name
+                                    );
+                                    true
+                                }
+                                Ok(o) => {
+                                    tracing::warn!(
+                                        "stems: [{}/{}] '{}' – vibrato sfizz: {}",
+                                        task.stem_idx + 1, total, task.track_name,
+                                        String::from_utf8_lossy(&o.stderr).trim()
+                                    );
+                                    false
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "stems: [{}/{}] '{}' – vibrato sfizz spawn: {e}",
+                                        task.stem_idx + 1, total, task.track_name
+                                    );
+                                    false
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    false
+                };
+
+            // --- Extra stems (program-change overrides, e.g. pizzicato) ----
+            let mut extra_wav_ok: Vec<(PathBuf, f64)> = Vec::new();
+            for extra in &task.extra_stems {
+                if let Err(e) = tokio::fs::write(&extra.mid_path, &extra.midi).await {
+                    tracing::warn!(
+                        "stems: [{}/{}] '{}' – extra stem MIDI write: {e}",
+                        task.stem_idx + 1, total, task.track_name
+                    );
+                    continue;
+                }
+                match Command::new(&task.sfizz)
+                    .arg("--sfz").arg(&extra.sfz_path)
+                    .arg("--midi").arg(&extra.mid_path)
+                    .arg("--wav").arg(&extra.wav_path)
+                    .arg("--samplerate").arg("48000")
+                    .output().await
+                {
+                    Ok(o) if o.status.success() => {
+                        tracing::info!(
+                            "stems: [{}/{}] '{}' – extra stem OK ({})",
+                            task.stem_idx + 1, total, task.track_name,
+                            extra.sfz_path.file_name().unwrap_or_default().to_string_lossy()
+                        );
+                        extra_wav_ok.push((extra.wav_path.clone(), extra.gain_db));
+                    }
+                    Ok(o) => tracing::warn!(
+                        "stems: [{}/{}] '{}' – extra stem sfizz ({}): {}",
+                        task.stem_idx + 1, total, task.track_name,
+                        extra.sfz_path.file_name().unwrap_or_default().to_string_lossy(),
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    ),
+                    Err(e) => tracing::warn!(
+                        "stems: [{}/{}] '{}' – extra stem sfizz spawn: {e}",
+                        task.stem_idx + 1, total, task.track_name
+                    ),
+                }
+            }
+
+            // Encode WAV → Opus.  Collect all stems that rendered successfully
+            // (sustain always present; staccato, vibrato, extra optional), apply
+            // per-SFZ gain correction, and mix in a single ffmpeg pass.
+            let mut sources: Vec<(&PathBuf, f64)> =
+                vec![(&task.stem_wav_path, task.gain_db)];
+            if staccato_wave_ok {
+                sources.push((&task.staccato_wav_path, task.staccato_gain_db));
+            }
+            if vibrato_wave_ok {
+                sources.push((&task.vibrato_wav_path, task.vibrato_gain_db));
+            }
+            for (wav, gain) in &extra_wav_ok {
+                sources.push((wav, *gain));
+            }
+            let mut ffmpeg_cmd = Command::new(&task.ffmpeg);
+            ffmpeg_cmd.arg("-y");
+            for (path, _) in &sources {
+                ffmpeg_cmd.arg("-i").arg(*path);
+            }
+            if sources.len() == 1 {
+                if sources[0].1.abs() > 0.05 {
+                    ffmpeg_cmd.arg("-af").arg(format!("volume={:.2}dB", sources[0].1));
+                }
+            } else {
+                let n = sources.len();
+                let mut filter = String::new();
+                for (i, (_, gain)) in sources.iter().enumerate() {
+                    filter.push_str(&format!("[{i}:a]volume={:.2}dB[a{i}];", gain));
+                }
+                let inputs: String = (0..n).map(|i| format!("[a{i}]")).collect();
+                filter.push_str(&format!("{}amix=inputs={n}:normalize=0[aout]", inputs));
+                ffmpeg_cmd.arg("-filter_complex").arg(&filter).arg("-map").arg("[aout]");
+            }
+            ffmpeg_cmd
                 .arg("-c:a")
                 .arg("libopus")
                 .arg("-b:a")
@@ -408,9 +799,8 @@ pub async fn generate_stems(
                 .arg("audio")
                 .arg("-ar")
                 .arg("48000")
-                .arg(&task.stem_ogg_path)
-                .output()
-                .await
+                .arg(&task.stem_ogg_path);
+            match ffmpeg_cmd.output().await
             {
                 Ok(out) if out.status.success() => {}
                 Ok(out) => {
@@ -965,7 +1355,8 @@ fn sfz_for_gm_program(
     } else {
         let key = program.to_string();
         match mapping.programs.get(&key) {
-            Some(p) => p.as_str(),
+            Some(ProgramEntry::Simple(p)) => p.as_str(),
+            Some(ProgramEntry::Detailed(d)) => d.sfz.as_str(),
             None => mapping.fallback.as_deref().unwrap_or("VSCO-2-CE-1.1.0/UprightPiano.sfz"),
         }
     };
@@ -1043,4 +1434,383 @@ fn gm_instrument_name(program: u8, is_percussion: bool) -> &'static str {
         79 => "Ocarina",
         _ => "Instrument",
     }
+}
+
+// ---------------------------------------------------------------------------
+// Articulation note-duration splitting
+// ---------------------------------------------------------------------------
+
+/// Notes shorter than this wall-clock duration (µs) use the staccato SFZ.
+/// 200 ms covers typical staccato marks at any orchestral tempo.
+const STACCATO_THRESHOLD_US: u64 = 200_000;
+
+/// Notes sustaining for at least this wall-clock duration (µs) use the
+/// vibrato SFZ when one is configured.  800 ms ≈ a half note at 75 BPM,
+/// which captures most consciously held notes in an orchestral score.
+const VIBRATO_THRESHOLD_US:  u64 = 800_000;
+
+/// Return the staccato SFZ path configured for a GM program number, or `None`
+/// if the program entry has no staccato variant.
+fn staccato_sfz_for_gm_program(
+    program: u8,
+    sfz_dir: &Path,
+    mapping: &SfzMapping,
+) -> Option<PathBuf> {
+    let rel = match mapping.programs.get(&program.to_string())? {
+        ProgramEntry::Detailed(d) => d.staccato.as_deref()?,
+        _ => return None,
+    };
+    let path = sfz_dir.join(rel);
+    if path.exists() {
+        Some(path)
+    } else {
+        tracing::warn!("Staccato SFZ not found: {}", path.display());
+        None
+    }
+}
+
+/// Return the vibrato SFZ path configured for a GM program number, or `None`
+/// if the program entry has no vibrato variant.
+fn vibrato_sfz_for_gm_program(
+    program: u8,
+    sfz_dir: &Path,
+    mapping: &SfzMapping,
+) -> Option<PathBuf> {
+    let rel = match mapping.programs.get(&program.to_string())? {
+        ProgramEntry::Detailed(d) => d.vibrato.as_deref()?,
+        _ => return None,
+    };
+    let path = sfz_dir.join(rel);
+    if path.exists() {
+        Some(path)
+    } else {
+        tracing::warn!("Vibrato SFZ not found: {}", path.display());
+        None
+    }
+}
+
+/// Split one MIDI track's note events into three MTrk chunks based on
+/// sounding duration:
+///
+/// - `stac_chunk`: notes shorter than `STACCATO_THRESHOLD_US`  (only when
+///   `has_staccato` is true; otherwise those notes go to `sus_chunk`)
+/// - `vib_chunk`:  notes at least `VIBRATO_THRESHOLD_US` long  (only when
+///   `has_vibrato` is true; otherwise those notes go to `sus_chunk`)
+/// - `sus_chunk`:  everything in between, plus any notes not split above
+///
+/// All non-note MIDI events are duplicated into every chunk so each can be
+/// rendered independently by sfizz.  Returns `(stac_chunk, sus_chunk, vib_chunk)`.
+fn split_midi_track_3way(
+    midi_bytes: &[u8],
+    track_idx: usize,
+    has_staccato: bool,
+    has_vibrato: bool,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let smf = match Smf::parse(midi_bytes) {
+        Ok(s) => s,
+        Err(_) => return (Vec::new(), Vec::new(), Vec::new()),
+    };
+
+    let ticks_per_qn: u32 = match smf.header.timing {
+        Timing::Metrical(t) => u16::from(t) as u32,
+        _ => 480,
+    };
+
+    let Some(track) = smf.tracks.get(track_idx) else {
+        return (Vec::new(), Vec::new(), Vec::new());
+    };
+
+    let tempo_map = match smf.tracks.first() {
+        Some(t) => build_tempo_map(t),
+        None => vec![(0u32, 500_000u32)],
+    };
+
+    // --- Pass 1: compute absolute ticks and classify each NoteOn ------------
+
+    let mut abs_ticks: Vec<u32> = Vec::with_capacity(track.len());
+    {
+        let mut abs = 0u32;
+        for ev in track.iter() {
+            abs = abs.saturating_add(u32::from(ev.delta));
+            abs_ticks.push(abs);
+        }
+    }
+
+    let mut active: HashMap<(u8, u8), u32> = HashMap::new();
+    let mut staccato_set: HashSet<(u8, u8, u32)> = HashSet::new();
+    let mut vibrato_set:  HashSet<(u8, u8, u32)> = HashSet::new();
+
+    for (i, ev) in track.iter().enumerate() {
+        let tick = abs_ticks[i];
+        let TrackEventKind::Midi { channel, message } = &ev.kind else { continue };
+        let ch = u8::from(*channel);
+        match message {
+            MidiMessage::NoteOn { key, vel } if u8::from(*vel) > 0 => {
+                active.insert((ch, u8::from(*key)), tick);
+            }
+            MidiMessage::NoteOff { key, .. } | MidiMessage::NoteOn { key, .. } => {
+                let note = u8::from(*key);
+                if let Some(on_tick) = active.remove(&(ch, note)) {
+                    let dur_us = ticks_to_us(
+                        on_tick,
+                        tick.saturating_sub(on_tick),
+                        &tempo_map,
+                        ticks_per_qn,
+                    );
+                    if has_staccato && dur_us < STACCATO_THRESHOLD_US {
+                        staccato_set.insert((ch, note, on_tick));
+                    } else if has_vibrato && dur_us >= VIBRATO_THRESHOLD_US {
+                        vibrato_set.insert((ch, note, on_tick));
+                    }
+                    // else → sustain (default / middle tier)
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // --- Pass 2: route events into staccato / sustain / vibrato streams -----
+
+    let mut open_stac: HashSet<(u8, u8)> = HashSet::new();
+    let mut open_vib:  HashSet<(u8, u8)> = HashSet::new();
+    let mut stac_events: Vec<(u32, Vec<u8>)> = Vec::new();
+    let mut sus_events:  Vec<(u32, Vec<u8>)> = Vec::new();
+    let mut vib_events:  Vec<(u32, Vec<u8>)> = Vec::new();
+
+    let mut abs = 0u32;
+    for ev in track.iter() {
+        abs = abs.saturating_add(u32::from(ev.delta));
+        let tick = abs;
+        let TrackEventKind::Midi { channel, message } = &ev.kind else { continue };
+        let ch = u8::from(*channel);
+        let encoded = encode_midi_event(ch, message);
+        if encoded.is_empty() {
+            continue;
+        }
+        match message {
+            MidiMessage::NoteOn { key, vel } if u8::from(*vel) > 0 => {
+                let note = u8::from(*key);
+                if staccato_set.contains(&(ch, note, tick)) {
+                    open_stac.insert((ch, note));
+                    stac_events.push((tick, encoded));
+                } else if vibrato_set.contains(&(ch, note, tick)) {
+                    open_vib.insert((ch, note));
+                    vib_events.push((tick, encoded));
+                } else {
+                    sus_events.push((tick, encoded));
+                }
+            }
+            MidiMessage::NoteOff { key, .. } | MidiMessage::NoteOn { key, .. } => {
+                let note = u8::from(*key);
+                if open_stac.remove(&(ch, note)) {
+                    stac_events.push((tick, encoded));
+                } else if open_vib.remove(&(ch, note)) {
+                    vib_events.push((tick, encoded));
+                } else {
+                    sus_events.push((tick, encoded));
+                }
+            }
+            _ => {
+                // Non-note events → all chunks so each is self-contained.
+                stac_events.push((tick, encoded.clone()));
+                vib_events.push((tick, encoded.clone()));
+                sus_events.push((tick, encoded));
+            }
+        }
+    }
+
+    (build_mtrk(stac_events), build_mtrk(sus_events), build_mtrk(vib_events))
+}
+
+/// Collect tempo change events from a MIDI track into a sorted
+/// `Vec<(abs_tick, µs_per_quarter_note)>`.  Defaults to 120 BPM (500 000 µs).
+fn build_tempo_map(track: &[midly::TrackEvent<'_>]) -> Vec<(u32, u32)> {
+    let mut map: Vec<(u32, u32)> = vec![(0, 500_000)];
+    let mut abs = 0u32;
+    for ev in track {
+        abs = abs.saturating_add(u32::from(ev.delta));
+        if let TrackEventKind::Meta(MetaMessage::Tempo(t)) = &ev.kind {
+            let us = u32::from(*t);
+            if let Some(last) = map.last_mut() {
+                if last.0 == abs {
+                    last.1 = us;
+                    continue;
+                }
+            }
+            map.push((abs, us));
+        }
+    }
+    map
+}
+
+/// Convert a tick-based note duration to wall-clock microseconds, correctly
+/// handling tempo changes within the note's span.
+fn ticks_to_us(
+    start_tick: u32,
+    duration_ticks: u32,
+    tempo_map: &[(u32, u32)],
+    ticks_per_qn: u32,
+) -> u64 {
+    if duration_ticks == 0 || ticks_per_qn == 0 {
+        return 0;
+    }
+    let end_tick = start_tick.saturating_add(duration_ticks);
+    let mut us = 0u64;
+    let mut cursor = start_tick;
+    for i in 0..tempo_map.len() {
+        let seg_start = tempo_map[i].0;
+        let seg_tempo = tempo_map[i].1 as u64;
+        let seg_end   = tempo_map.get(i + 1).map(|t| t.0).unwrap_or(u32::MAX);
+        if seg_end  <= cursor    { continue; }
+        if seg_start >= end_tick { break;    }
+        let ticks = (end_tick.min(seg_end) - cursor.max(seg_start)) as u64;
+        us += ticks * seg_tempo / ticks_per_qn as u64;
+        cursor = end_tick.min(seg_end);
+        if cursor >= end_tick { break; }
+    }
+    us
+}
+
+/// Encode a single MIDI channel-voice event to raw bytes (no delta prefix).
+/// Returns an empty `Vec` for event types that are intentionally skipped.
+fn encode_midi_event(channel: u8, message: &MidiMessage) -> Vec<u8> {
+    match message {
+        MidiMessage::NoteOn  { key, vel } =>
+            vec![0x90 | channel, u8::from(*key), u8::from(*vel)],
+        MidiMessage::NoteOff { key, vel } =>
+            vec![0x80 | channel, u8::from(*key), u8::from(*vel)],
+        MidiMessage::Controller { controller, value } =>
+            vec![0xB0 | channel, u8::from(*controller), u8::from(*value)],
+        MidiMessage::ProgramChange { program } =>
+            vec![0xC0 | channel, u8::from(*program)],
+        MidiMessage::Aftertouch { key, vel } =>
+            vec![0xA0 | channel, u8::from(*key), u8::from(*vel)],
+        MidiMessage::ChannelAftertouch { vel } =>
+            vec![0xD0 | channel, u8::from(*vel)],
+        MidiMessage::PitchBend { bend } => {
+            // bend.0 is the raw u14 value: 0x0000=min, 0x2000=center, 0x3FFF=max
+            let raw = u16::from(bend.0);
+            vec![0xE0 | channel, (raw & 0x7F) as u8, ((raw >> 7) & 0x7F) as u8]
+        }
+    }
+}
+
+/// Pack a sorted list of `(abs_tick, event_bytes)` pairs into a valid MTrk
+/// chunk.  Delta times are re-computed from the absolute-tick values.
+/// An EndOfTrack meta event is appended automatically.
+fn build_mtrk(events: Vec<(u32, Vec<u8>)>) -> Vec<u8> {
+    let mut body: Vec<u8> = Vec::new();
+    let mut prev = 0u32;
+    for (tick, ev) in &events {
+        vlq_write(&mut body, tick.saturating_sub(prev));
+        body.extend_from_slice(ev);
+        prev = *tick;
+    }
+    vlq_write(&mut body, 0);
+    body.extend_from_slice(&[0xFF, 0x2F, 0x00]); // EndOfTrack
+    let mut chunk = Vec::with_capacity(8 + body.len());
+    chunk.extend_from_slice(b"MTrk");
+    chunk.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    chunk.extend_from_slice(&body);
+    chunk
+}
+
+/// MIDI variable-length quantity (VLQ) encoder.
+fn vlq_write(buf: &mut Vec<u8>, v: u32) {
+    if v < 0x80 {
+        buf.push(v as u8);
+        return;
+    }
+    let mut b = [0u8; 4];
+    let mut n = 0usize;
+    let mut r = v;
+    while r > 0 {
+        b[n] = (r & 0x7F) as u8;
+        n += 1;
+        r >>= 7;
+    }
+    for i in (0..n).rev() {
+        buf.push(if i > 0 { b[i] | 0x80 } else { b[i] });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-track program-change grouping
+// ---------------------------------------------------------------------------
+
+/// Walk a MIDI instrument track and return note events grouped by the GM
+/// program number that was active when each note started.
+///
+/// Non-note MIDI events (controllers, pitch bend, aftertouch) are duplicated
+/// into every group that contains at least one note so each group can be
+/// rendered independently by sfizz.  Program-change events themselves are
+/// discarded — sfizz uses the SFZ file, not GM program numbers.
+///
+/// Returns a `HashMap<program, sorted_abs_tick_events>`.
+fn extract_program_groups(
+    midi_bytes: &[u8],
+    track_idx: usize,
+) -> HashMap<u8, Vec<(u32, Vec<u8>)>> {
+    let smf = match Smf::parse(midi_bytes) {
+        Ok(s) => s,
+        Err(_) => return HashMap::new(),
+    };
+    let Some(track) = smf.tracks.get(track_idx) else {
+        return HashMap::new();
+    };
+
+    // Per-channel current program (MuseScore encodes articulations as separate
+    // channels within the same track, each with its own ProgramChange at t=0).
+    let mut current_program: [u8; 16] = [0u8; 16];
+    let mut groups: HashMap<u8, Vec<(u32, Vec<u8>)>> = HashMap::new();
+    // Tracks which program each open note belongs to so NoteOff goes to
+    // the same group as its paired NoteOn.
+    let mut open_notes: HashMap<(u8, u8), u8> = HashMap::new();
+    // Non-note events collected for later duplication into all groups.
+    let mut shared: Vec<(u32, Vec<u8>)> = Vec::new();
+
+    let mut abs = 0u32;
+    for ev in track.iter() {
+        abs = abs.saturating_add(u32::from(ev.delta));
+        let tick = abs;
+        let TrackEventKind::Midi { channel, message } = &ev.kind else { continue };
+        let ch = u8::from(*channel);
+        match message {
+            MidiMessage::ProgramChange { program } => {
+                current_program[ch as usize] = u8::from(*program);
+                // Not forwarded to sfizz — sfizz uses the --sfz file directly.
+            }
+            MidiMessage::NoteOn { key, vel } if u8::from(*vel) > 0 => {
+                let note = u8::from(*key);
+                let prog = current_program[ch as usize];
+                open_notes.insert((ch, note), prog);
+                let enc = encode_midi_event(ch, message);
+                groups.entry(prog).or_default().push((tick, enc));
+            }
+            MidiMessage::NoteOff { key, .. } | MidiMessage::NoteOn { key, .. } => {
+                let note = u8::from(*key);
+                let prog = open_notes.remove(&(ch, note)).unwrap_or(current_program[ch as usize]);
+                let enc = encode_midi_event(ch, message);
+                groups.entry(prog).or_default().push((tick, enc));
+            }
+            _ => {
+                let enc = encode_midi_event(ch, message);
+                if !enc.is_empty() {
+                    shared.push((tick, enc));
+                }
+            }
+        }
+    }
+
+    // Duplicate shared (non-note) events into every group and re-sort by tick.
+    if !shared.is_empty() {
+        for events in groups.values_mut() {
+            for (tick, enc) in &shared {
+                events.push((*tick, enc.clone()));
+            }
+            events.sort_by_key(|(t, _)| *t);
+        }
+    }
+
+    groups
 }
