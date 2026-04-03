@@ -2,8 +2,25 @@ use crate::config::AppConfig;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use midly::{MetaMessage, MidiMessage, Smf, TrackEventKind};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
+
+#[derive(serde::Deserialize)]
+struct SfzMapping {
+    percussion: Option<String>,
+    fallback: Option<String>,
+    programs: HashMap<String, String>,
+}
+
+async fn load_sfz_mapping(sfz_dir: &Path) -> Result<SfzMapping> {
+    let path = sfz_dir.join("mapping.json");
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&text)
+        .with_context(|| format!("parsing {}", path.display()))
+}
 
 pub enum ConversionOutcome {
     Ready {
@@ -117,6 +134,17 @@ pub async fn generate_stems(
         }
     };
 
+    // --- load soundfont mapping ----------------------------------------------
+
+    let sfz_mapping = match load_sfz_mapping(&sfz_dir).await {
+        Ok(m) => m,
+        Err(e) => {
+            let reason = format!("Failed to load {}/mapping.json: {e}", sfz_dir.display());
+            tracing::warn!("{reason}");
+            return Ok((Vec::new(), "unavailable".to_owned(), Some(reason)));
+        }
+    };
+
     // --- obtain MIDI data ----------------------------------------------------
 
     let midi_path = output_dir.join("preview.mid");
@@ -201,7 +229,7 @@ pub async fn generate_stems(
         }
 
         let sfz_path =
-            match sfz_for_gm_program(track_info.program, track_info.is_percussion, &sfz_dir) {
+            match sfz_for_gm_program(track_info.program, track_info.is_percussion, &sfz_dir, &sfz_mapping) {
                 Some(path) => path,
                 None => {
                     tracing::info!(
@@ -262,7 +290,10 @@ pub async fn generate_stems(
                 return None;
             }
 
-            // Render WAV with sfizz_render
+            // Render WAV with sfizz_render.
+            // Use 48000 Hz to match Opus's native sample rate — ffmpeg will
+            // then pass the samples through without resampling, eliminating
+            // a source of inter-stem timing drift.
             match Command::new(&task.sfizz)
                 .arg("--sfz")
                 .arg(&task.sfz_path)
@@ -271,7 +302,7 @@ pub async fn generate_stems(
                 .arg("--wav")
                 .arg(&task.stem_wav_path)
                 .arg("--samplerate")
-                .arg("44100")
+                .arg("48000")
                 .output()
                 .await
             {
@@ -732,10 +763,11 @@ fn find_soundfont_dir(config: &AppConfig) -> Option<PathBuf> {
             return Some(dir.clone());
         }
     }
-    // Probe common relative paths (relative to the working directory)
-    for candidate in ["./VSCO-2-CE-1.1.0", "../VSCO-2-CE-1.1.0"] {
+    // Probe common relative paths (relative to the working directory).
+    // The soundfonts root is identified by the presence of mapping.json.
+    for candidate in ["./soundfonts", "../soundfonts"] {
         let path = PathBuf::from(candidate);
-        if path.exists() && path.join("FluteSusNV.sfz").exists() {
+        if path.exists() && path.join("mapping.json").exists() {
             return Some(path);
         }
     }
@@ -840,52 +872,23 @@ async fn convert_with_musescore(
 // GM program number → VSCO-2-CE SFZ filename
 // ---------------------------------------------------------------------------
 
-fn sfz_for_gm_program(program: u8, is_percussion: bool, sfz_dir: &Path) -> Option<PathBuf> {
-    let filename: &str = if is_percussion {
-        "GM-StylePerc.sfz"
+fn sfz_for_gm_program(
+    program: u8,
+    is_percussion: bool,
+    sfz_dir: &Path,
+    mapping: &SfzMapping,
+) -> Option<PathBuf> {
+    let rel: &str = if is_percussion {
+        mapping.percussion.as_deref().unwrap_or("VSCO-2-CE-1.1.0/GM-StylePerc.sfz")
     } else {
-        match program {
-            // Piano
-            0..=7 => "UprightPiano.sfz",
-            // Chromatic percussion
-            9 => "Glockenspiel.sfz",
-            12 => "Marimba.sfz",
-            13 => "Xylophone.sfz",
-            14 => "TubularBells.sfz",
-            // Organ
-            16..=23 => "OrganLoud.sfz",
-            // Strings
-            40 => "SViolinVib.sfz",
-            41 => "ViolaEnsSusVib.sfz",
-            42 => "CelloEnsSusVib.sfz",
-            43 => "ContrabassSusVB.sfz",
-            44 => "ViolinEnsTrem.sfz",
-            45 => "SViolinPizz.sfz",
-            46 => "Harp.sfz",
-            47 => "Timpani.sfz",
-            48..=55 => "ViolinEnsSusVib.sfz",
-            // Brass
-            56 => "TrumpetSus.sfz",
-            57 => "TromboneSus.sfz",
-            58 => "TubaSus.sfz",
-            59 => "TrumpetStraightMuteSus.sfz",
-            60 => "FHornSus.sfz",
-            61..=63 => "FHornSus.sfz",
-            // Reed
-            68 => "OboeSusNV.sfz",
-            69 => "OboeSusNV.sfz", // English Horn → Oboe
-            70 => "BassoonSus.sfz",
-            71 => "ClarinetSus.sfz",
-            // Pipe
-            72 => "PiccoloSus.sfz",
-            73 => "FluteSusNV.sfz",
-            74..=79 => "FluteSusNV.sfz",
-            // Synth / unrecognised → piano fallback
-            _ => "UprightPiano.sfz",
+        let key = program.to_string();
+        match mapping.programs.get(&key) {
+            Some(p) => p.as_str(),
+            None => mapping.fallback.as_deref().unwrap_or("VSCO-2-CE-1.1.0/UprightPiano.sfz"),
         }
     };
 
-    let path = sfz_dir.join(filename);
+    let path = sfz_dir.join(rel);
     if path.exists() {
         Some(path)
     } else {

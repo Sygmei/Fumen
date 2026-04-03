@@ -6,7 +6,7 @@ backend/.env
 *.db
 *.db-shm
 *.db-wal
-VSCO-2-CE-1.1.0/
+soundfonts/
 backend/data/
 **/.vscode/
 sfizz/

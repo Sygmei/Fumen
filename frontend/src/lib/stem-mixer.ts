@@ -1,8 +1,15 @@
 /**
  * StemMixerPlayer — plays per-instrument OGG stems rendered by the backend
- * using the Web Audio API.  Each stem gets its own GainNode so volume and
- * muting are independent.  All HTMLAudioElements are started in one
- * microtask to stay closely synchronised.
+ * using the Web Audio API.
+ *
+ * Stems are fully fetched and decoded into AudioBuffers, then played via
+ * AudioBufferSourceNode.  All sources are scheduled to start at the same
+ * future AudioContext clock time (+100 ms), giving sample-accurate
+ * synchronisation that is impossible to achieve with HTMLAudioElement.
+ *
+ * The 100 ms scheduling headroom also eliminates the jitter introduced by
+ * calling HTMLAudioElement.play() in sequence: every source fires at
+ * exactly the same audio-thread sample regardless of JS execution time.
  */
 
 export type StemTrack = {
@@ -20,13 +27,14 @@ export type LoadedStems = {
 }
 
 type InternalTrack = {
-  el: HTMLAudioElement
-  source: MediaElementAudioSourceNode
+  buffer: AudioBuffer
   gain: GainNode
   analyser: AnalyserNode
-  analyserData: Uint8Array
+  analyserData: Uint8Array<ArrayBuffer>
   volume: number
   muted: boolean
+  /** Active source node; recreated on every play/seek. */
+  source: AudioBufferSourceNode | null
 }
 
 export class StemMixerPlayer {
@@ -35,15 +43,20 @@ export class StemMixerPlayer {
   private _duration = 0
   private _levelMultiplier = 6
 
+  // Playback position tracking via the AudioContext clock.
+  private _isPlaying = false
+  /** Offset (seconds) into the audio where the last play() call started. */
+  private _playbackStartOffset = 0
+  /** context.currentTime at which the last play() scheduled the sources. */
+  private _playbackStartCtxTime = 0
+
   async loadStems(
     stems: Array<{ id: string; name: string; instrumentName: string; streamUrl: string }>,
   ): Promise<LoadedStems> {
     await this.dispose()
 
     this.context = new AudioContext()
-    const loadPromises = stems.map((stem) => this.loadOneStem(stem))
-
-    await Promise.all(loadPromises)
+    await Promise.all(stems.map((stem) => this.loadOneStem(stem)))
 
     const result: StemTrack[] = stems
       .filter((s) => this.tracks.has(s.id))
@@ -64,38 +77,35 @@ export class StemMixerPlayer {
     name: string
     streamUrl: string
   }): Promise<void> {
-    const el = new Audio()
-    el.crossOrigin = 'anonymous'
-    el.preload = 'auto'
-    el.src = stem.streamUrl
+    const response = await fetch(stem.streamUrl)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch stem "${stem.name}": HTTP ${response.status}`)
+    }
+    const arrayBuffer = await response.arrayBuffer()
+    // decodeAudioData handles Opus pre-skip trimming automatically, so the
+    // resulting AudioBuffer starts at the true t=0 of the audio signal.
+    const audioBuffer = await this.context!.decodeAudioData(arrayBuffer)
 
-    await new Promise<void>((resolve, reject) => {
-      el.addEventListener('loadedmetadata', () => resolve(), { once: true })
-      el.addEventListener(
-        'error',
-        () => reject(new Error(`Failed to load stem "${stem.name}"`)),
-        { once: true },
-      )
-    })
-
-    if (el.duration > this._duration) {
-      this._duration = el.duration
+    if (audioBuffer.duration > this._duration) {
+      this._duration = audioBuffer.duration
     }
 
-    const source = this.context!.createMediaElementSource(el)
     const gain = this.context!.createGain()
     gain.gain.value = 0.5
     const analyser = this.context!.createAnalyser()
     analyser.fftSize = 1024
     analyser.smoothingTimeConstant = 0.6
-    source.connect(gain)
     gain.connect(analyser)
     analyser.connect(this.context!.destination)
 
     this.tracks.set(stem.id, {
-      el, source, gain, analyser,
-      analyserData: new Uint8Array(analyser.fftSize),
-      volume: 0.5, muted: false,
+      buffer: audioBuffer,
+      gain,
+      analyser,
+      analyserData: new Uint8Array(new ArrayBuffer(analyser.fftSize)),
+      volume: 0.5,
+      muted: false,
+      source: null,
     })
   }
 
@@ -104,31 +114,64 @@ export class StemMixerPlayer {
     if (this.context.state === 'suspended') {
       await this.context.resume()
     }
-    await Promise.all([...this.tracks.values()].map((t) => t.el.play()))
+
+    // Schedule all sources to fire at the same audio-clock instant (+100 ms
+    // of headroom so the audio thread has time to prepare all buffers before
+    // the first sample is due).
+    const startAt = this.context.currentTime + 0.1
+    const offset = this._playbackStartOffset
+
+    for (const t of this.tracks.values()) {
+      if (t.source) {
+        try { t.source.stop() } catch { /* already stopped */ }
+        t.source.disconnect()
+        t.source = null
+      }
+      const src = this.context.createBufferSource()
+      src.buffer = t.buffer
+      src.connect(t.gain)
+      src.start(startAt, offset)
+      t.source = src
+    }
+
+    this._playbackStartCtxTime = startAt
+    this._playbackStartOffset = offset
+    this._isPlaying = true
   }
 
   pause(): void {
-    for (const t of this.tracks.values()) {
-      t.el.pause()
-    }
+    if (!this._isPlaying) return
+    // Snapshot position before stopping so getCurrentTime() stays accurate.
+    this._playbackStartOffset = this.getCurrentTime()
+    this._isPlaying = false
+    this._stopAllSources()
   }
 
   stop(): void {
-    for (const t of this.tracks.values()) {
-      t.el.pause()
-      t.el.currentTime = 0
-    }
+    this._isPlaying = false
+    this._playbackStartOffset = 0
+    this._stopAllSources()
   }
 
   seek(seconds: number): void {
-    for (const t of this.tracks.values()) {
-      t.el.currentTime = Math.max(0, Math.min(seconds, this._duration))
+    const clamped = Math.max(0, Math.min(seconds, this._duration))
+    const wasPlaying = this._isPlaying
+    if (wasPlaying) {
+      this._isPlaying = false
+      this._stopAllSources()
+    }
+    this._playbackStartOffset = clamped
+    if (wasPlaying) {
+      // play() is synchronous when the context is already running.
+      void this.play()
     }
   }
 
   getCurrentTime(): number {
-    const first = this.tracks.values().next().value as InternalTrack | undefined
-    return first?.el.currentTime ?? 0
+    if (!this.context) return this._playbackStartOffset
+    if (!this._isPlaying) return this._playbackStartOffset
+    const elapsed = this.context.currentTime - this._playbackStartCtxTime
+    return Math.min(this._playbackStartOffset + Math.max(0, elapsed), this._duration)
   }
 
   getDuration(): number {
@@ -136,8 +179,7 @@ export class StemMixerPlayer {
   }
 
   isPlaying(): boolean {
-    const first = this.tracks.values().next().value as InternalTrack | undefined
-    return first ? !first.el.paused : false
+    return this._isPlaying
   }
 
   /** Returns a 0–1 RMS level for the given track, suitable for a VU meter. */
@@ -178,18 +220,28 @@ export class StemMixerPlayer {
   }
 
   async dispose(): Promise<void> {
-    this.stop()
+    this._isPlaying = false
+    this._playbackStartOffset = 0
+    this._stopAllSources()
     for (const t of this.tracks.values()) {
-      t.source.disconnect()
       t.gain.disconnect()
       t.analyser.disconnect()
-      t.el.src = ''
     }
     this.tracks.clear()
     this._duration = 0
     if (this.context) {
       await this.context.close()
       this.context = null
+    }
+  }
+
+  private _stopAllSources(): void {
+    for (const t of this.tracks.values()) {
+      if (t.source) {
+        try { t.source.stop() } catch { /* already stopped */ }
+        t.source.disconnect()
+        t.source = null
+      }
     }
   }
 }
