@@ -103,7 +103,7 @@ COPY --from=build /app/backend/target/release/fumen-backend /usr/local/bin/fumen
 COPY --from=sfizz-build /opt/sfizz/bin/sfizz_render /usr/local/bin/sfizz_render
 COPY --from=musescore-build /opt/musescore4 /opt/musescore4
 
-RUN printf '#!/bin/sh\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"\nexport LANG="${LANG:-C.UTF-8}"\nexport LC_ALL="${LC_ALL:-C.UTF-8}"\nexport XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/fumen-musescore-runtime}"\nmkdir -p "$XDG_RUNTIME_DIR"\nexec /opt/musescore4/AppRun -platform offscreen "$@"\n' > /usr/local/bin/musescore4 \
+RUN printf '#!/bin/sh\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"\nexport LANG="${LANG:-C.UTF-8}"\nexport LC_ALL="${LC_ALL:-C.UTF-8}"\nexport XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/fumen-musescore-runtime}"\nmkdir -p "$XDG_RUNTIME_DIR"\nexec /opt/musescore4/AppRun "$@"\n' > /usr/local/bin/musescore4 \
     && chmod +x /usr/local/bin/musescore4 \
     && ln -s /usr/local/bin/musescore4 /usr/local/bin/musescore
 

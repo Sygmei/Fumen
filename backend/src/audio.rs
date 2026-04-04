@@ -1308,8 +1308,6 @@ async fn convert_with_musescore(
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
         .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
-        .arg("-platform")
-        .arg("offscreen")
         .arg("-o")
         .arg(output_path)
         .arg(input_path)
