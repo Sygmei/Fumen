@@ -22,16 +22,16 @@ RUN apt-get update \
         build-essential \
         ca-certificates \
         cmake \
-        curl \
+        git \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp
 
-RUN curl -fsSL "https://github.com/sfztools/sfizz/archive/refs/tags/${SFIZZ_VERSION}.tar.gz" \
-        -o sfizz.tar.gz \
-    && tar -xzf sfizz.tar.gz \
-    && cmake -S "sfizz-${SFIZZ_VERSION}" -B build \
+RUN git clone --branch "${SFIZZ_VERSION}" --depth 1 https://github.com/sfztools/sfizz.git sfizz \
+    && cd sfizz \
+    && git submodule update --init --recursive --depth 1 \
+    && cmake -S /tmp/sfizz -B /tmp/build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/sfizz \
         -DSFIZZ_JACK=OFF \
@@ -40,8 +40,8 @@ RUN curl -fsSL "https://github.com/sfztools/sfizz/archive/refs/tags/${SFIZZ_VERS
         -DSFIZZ_DEMOS=OFF \
         -DSFIZZ_DEVTOOLS=OFF \
         -DSFIZZ_BENCHMARKS=OFF \
-    && cmake --build build --target sfizz_render --parallel \
-    && cmake --install build --component render
+    && cmake --build /tmp/build --target sfizz_render --parallel \
+    && cmake --install /tmp/build --component render
 
 FROM debian:bookworm AS musescore-build
 

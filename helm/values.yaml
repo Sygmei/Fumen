@@ -1,5 +1,5 @@
 backend:
-  version: "latest"
+  version: "0.1.0"
   replicas: 1
   ingress:
     domain: backend.example.com
@@ -7,6 +7,6 @@ backend:
     version: "1.0.0"
 
 frontend:
-  version: "latest"
+  version: "0.1.0"
   ingress:
     domain: app.example.com
