@@ -308,7 +308,7 @@ async fn find_public_music_record(state: &AppState, access_key: &str) -> Result<
         return Ok(Some(record));
     }
 
-    find_music_by_access_key(&state.db_rw, access_key).await
+    Ok(find_music_by_access_key(&state.db_rw, access_key).await?)
 }
 
 async fn find_public_stems(db_primary: &PgPool, db_fallback: &PgPool, music_id: &str) -> Result<Vec<StemRecord>, AppError> {
