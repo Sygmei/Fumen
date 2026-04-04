@@ -1298,7 +1298,18 @@ async fn convert_with_musescore(
         output_path.file_name().unwrap_or_default().to_string_lossy(),
     );
 
+    let xdg_runtime_dir = std::env::temp_dir().join("fumen-musescore-runtime");
+    tokio::fs::create_dir_all(&xdg_runtime_dir)
+        .await
+        .with_context(|| format!("failed to create {}", xdg_runtime_dir.display()))?;
+
     let command_output = Command::new(&binary)
+        .env("QT_QPA_PLATFORM", "offscreen")
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .env("XDG_RUNTIME_DIR", &xdg_runtime_dir)
+        .arg("-platform")
+        .arg("offscreen")
         .arg("-o")
         .arg(output_path)
         .arg(input_path)

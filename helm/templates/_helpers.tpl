@@ -38,3 +38,7 @@ fumen
 {{- define "fumen.issuerAccountSecretName" -}}
 {{- printf "%s-cert-issuer-account-key" (include "fumen.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
+
+{{- define "fumen.adminSecretName" -}}
+{{- printf "%s-admin" (include "fumen.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}

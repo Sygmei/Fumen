@@ -108,7 +108,8 @@ impl IntoResponse for AppError {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "backend=info,tower_http=info".to_owned()),
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "fumen_backend=info,tower_http=info".to_owned()),
         )
         .init();
 
