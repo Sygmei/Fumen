@@ -1,0 +1,12 @@
+backend:
+  version: "latest"
+  replicas: 1
+  ingress:
+    domain: backend.example.com
+  soundfonts:
+    version: "1.0.0"
+
+frontend:
+  version: "latest"
+  ingress:
+    domain: app.example.com

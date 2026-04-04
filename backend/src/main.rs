@@ -19,10 +19,8 @@ use models::{
     StemInfo, StemRecord, UpdateMusicRequest,
 };
 use rand::{Rng, distr::Alphanumeric};
-use sqlx::{
-    SqlitePool,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-};
+use sqlx::{PgPool, postgres::{PgConnectOptions, PgPoolOptions}};
+use std::str::FromStr;
 use std::{net::SocketAddr, path::PathBuf};
 use storage::Storage;
 use tokio::fs;
@@ -36,7 +34,8 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct AppState {
     config: AppConfig,
-    db: SqlitePool,
+    db_rw: PgPool,
+    db_ro: PgPool,
     storage: Storage,
 }
 
@@ -123,13 +122,16 @@ async fn main() -> Result<()> {
         }
     }
 
-    let db = open_database(&config).await?;
-    ensure_schema(&db).await?;
+    let db_admin = open_database_pool(&config.database_url_admin, 1, "admin").await?;
+    ensure_schema(&db_admin).await?;
+    let db_rw = open_database_pool(&config.database_url, 5, "read-write").await?;
+    let db_ro = open_database_pool(&config.database_url_read_only, 5, "read-only").await?;
     let storage = Storage::new(&config).await?;
 
     let state = AppState {
         config,
-        db,
+        db_rw,
+        db_ro,
         storage,
     };
     let api_routes = Router::new()
@@ -183,23 +185,18 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn open_database(config: &AppConfig) -> Result<SqlitePool> {
-    if let Some(parent) = config.database_path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
+async fn open_database_pool(url: &str, max_connections: u32, role: &str) -> Result<PgPool> {
+    let options = PgConnectOptions::from_str(url)
+        .with_context(|| format!("invalid PostgreSQL connection string for {role} pool"))?
+        .statement_cache_capacity(0);
 
-    let connect_options = SqliteConnectOptions::new()
-        .filename(&config.database_path)
-        .create_if_missing(true)
-        .foreign_keys(true);
-
-    Ok(SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(connect_options)
+    Ok(PgPoolOptions::new()
+        .max_connections(max_connections)
+        .connect_with(options)
         .await?)
 }
 
-async fn ensure_schema(db: &SqlitePool) -> Result<()> {
+async fn ensure_schema(db: &PgPool) -> Result<()> {
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS musics (
@@ -228,12 +225,13 @@ async fn ensure_schema(db: &SqlitePool) -> Result<()> {
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS stems (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             music_id TEXT NOT NULL REFERENCES musics(id),
-            track_index INTEGER NOT NULL,
+            track_index BIGINT NOT NULL,
             track_name TEXT NOT NULL,
             instrument_name TEXT NOT NULL,
-            storage_key TEXT NOT NULL
+            storage_key TEXT NOT NULL,
+            size_bytes BIGINT NOT NULL DEFAULT 0
         )
         "#,
     )
@@ -251,40 +249,20 @@ async fn ensure_schema(db: &SqlitePool) -> Result<()> {
     ensure_music_column(db, "musicxml_object_key", "TEXT").await?;
     ensure_music_column(db, "musicxml_status", "TEXT NOT NULL DEFAULT 'unavailable'").await?;
     ensure_music_column(db, "musicxml_error", "TEXT").await?;
-    ensure_stems_column(db, "size_bytes", "INTEGER NOT NULL DEFAULT 0").await?;
+    ensure_stems_column(db, "size_bytes", "BIGINT NOT NULL DEFAULT 0").await?;
 
     Ok(())
 }
 
-async fn ensure_music_column(db: &SqlitePool, name: &str, definition: &str) -> Result<()> {
-    let exists = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM pragma_table_info('musics') WHERE name = ?",
-    )
-    .bind(name)
-    .fetch_one(db)
-    .await?;
-
-    if exists == 0 {
-        let query = format!("ALTER TABLE musics ADD COLUMN {name} {definition}");
-        sqlx::query(&query).execute(db).await?;
-    }
-
+async fn ensure_music_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
+    let query = format!("ALTER TABLE musics ADD COLUMN IF NOT EXISTS {name} {definition}");
+    sqlx::query(&query).execute(db).await?;
     Ok(())
 }
 
-async fn ensure_stems_column(db: &SqlitePool, name: &str, definition: &str) -> Result<()> {
-    let exists = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM pragma_table_info('stems') WHERE name = ?",
-    )
-    .bind(name)
-    .fetch_one(db)
-    .await?;
-
-    if exists == 0 {
-        let query = format!("ALTER TABLE stems ADD COLUMN {name} {definition}");
-        sqlx::query(&query).execute(db).await?;
-    }
-
+async fn ensure_stems_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
+    let query = format!("ALTER TABLE stems ADD COLUMN IF NOT EXISTS {name} {definition}");
+    sqlx::query(&query).execute(db).await?;
     Ok(())
 }
 
@@ -315,14 +293,66 @@ struct StemsTotalRow {
     total_bytes: i64,
 }
 
-async fn fetch_stems_total(db: &SqlitePool, music_id: &str) -> i64 {
+async fn fetch_stems_total(db: &PgPool, music_id: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(SUM(size_bytes), 0) FROM stems WHERE music_id = ?",
+        "SELECT COALESCE(SUM(size_bytes), 0)::BIGINT FROM stems WHERE music_id = $1",
     )
     .bind(music_id)
     .fetch_one(db)
     .await
     .unwrap_or(0)
+}
+
+async fn find_public_music_record(state: &AppState, access_key: &str) -> Result<Option<MusicRecord>, AppError> {
+    if let Some(record) = find_music_by_access_key(&state.db_ro, access_key).await? {
+        return Ok(Some(record));
+    }
+
+    find_music_by_access_key(&state.db_rw, access_key).await
+}
+
+async fn find_public_stems(db_primary: &PgPool, db_fallback: &PgPool, music_id: &str) -> Result<Vec<StemRecord>, AppError> {
+    let query = "SELECT id, music_id, track_index, track_name, instrument_name, storage_key \
+         FROM stems WHERE music_id = $1 ORDER BY track_index";
+
+    let stems = sqlx::query_as::<_, StemRecord>(query)
+        .bind(music_id)
+        .fetch_all(db_primary)
+        .await?;
+
+    if !stems.is_empty() {
+        return Ok(stems);
+    }
+
+    Ok(sqlx::query_as::<_, StemRecord>(query)
+        .bind(music_id)
+        .fetch_all(db_fallback)
+        .await?)
+}
+
+async fn find_public_stem(
+    db_primary: &PgPool,
+    db_fallback: &PgPool,
+    music_id: &str,
+    track_index: i64,
+) -> Result<Option<StemRecord>, AppError> {
+    let query = "SELECT id, music_id, track_index, track_name, instrument_name, storage_key \
+         FROM stems WHERE music_id = $1 AND track_index = $2";
+
+    if let Some(stem) = sqlx::query_as::<_, StemRecord>(query)
+        .bind(music_id)
+        .bind(track_index)
+        .fetch_optional(db_primary)
+        .await?
+    {
+        return Ok(Some(stem));
+    }
+
+    Ok(sqlx::query_as::<_, StemRecord>(query)
+        .bind(music_id)
+        .bind(track_index)
+        .fetch_optional(db_fallback)
+        .await?)
 }
 
 async fn admin_list_musics(
@@ -335,17 +365,17 @@ async fn admin_list_musics(
         r#"
         SELECT id, title, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, created_at
         FROM musics
-        ORDER BY datetime(created_at) DESC
+        ORDER BY created_at DESC
         "#,
     )
-    .fetch_all(&state.db)
+    .fetch_all(&state.db_rw)
     .await?;
 
     // Fetch per-music stem totals in one query
     let total_rows = sqlx::query_as::<_, StemsTotalRow>(
-        "SELECT music_id, COALESCE(SUM(size_bytes), 0) AS total_bytes FROM stems GROUP BY music_id",
+        "SELECT music_id, COALESCE(SUM(size_bytes), 0)::BIGINT AS total_bytes FROM stems GROUP BY music_id",
     )
-    .fetch_all(&state.db)
+    .fetch_all(&state.db_rw)
     .await?;
     let totals: std::collections::HashMap<String, i64> =
         total_rows.into_iter().map(|r| (r.music_id, r.total_bytes)).collect();
@@ -402,7 +432,7 @@ async fn admin_upload_music(
     }
 
     let public_id = normalize_public_id(requested_public_id.as_deref())?;
-    ensure_public_id_available(&state.db, public_id.as_deref(), None).await?;
+    ensure_public_id_available(&state.db_rw, public_id.as_deref(), None).await?;
 
     let music_id = Uuid::new_v4().to_string();
     let public_token = generate_public_token();
@@ -443,7 +473,7 @@ async fn admin_upload_music(
     sqlx::query(
         r#"
         INSERT INTO musics (id, title, filename, content_type, object_key, public_token, public_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(&music_id)
@@ -454,7 +484,7 @@ async fn admin_upload_music(
     .bind(&public_token)
     .bind(&public_id)
     .bind(&created_at)
-    .execute(&state.db)
+    .execute(&state.db_rw)
     .await?;
 
     let (
@@ -478,11 +508,11 @@ async fn admin_upload_music(
     sqlx::query(
         r#"
         UPDATE musics SET
-            audio_object_key   = ?, audio_status   = ?, audio_error   = ?,
-            midi_object_key    = ?, midi_status    = ?, midi_error    = ?,
-            musicxml_object_key = ?, musicxml_status = ?, musicxml_error = ?,
-            stems_status       = ?, stems_error    = ?
-        WHERE id = ?
+            audio_object_key   = $1, audio_status   = $2, audio_error   = $3,
+            midi_object_key    = $4, midi_status    = $5, midi_error    = $6,
+            musicxml_object_key = $7, musicxml_status = $8, musicxml_error = $9,
+            stems_status       = $10, stems_error    = $11
+        WHERE id = $12
         "#,
     )
     .bind(&audio_object_key)
@@ -497,7 +527,7 @@ async fn admin_upload_music(
     .bind(&stems_status)
     .bind(&stems_error)
     .bind(&music_id)
-    .execute(&state.db)
+    .execute(&state.db_rw)
     .await?;
 
     let record = MusicRecord {
@@ -522,7 +552,7 @@ async fn admin_upload_music(
         created_at,
     };
 
-    let stems_total = fetch_stems_total(&state.db, &record.id).await;
+    let stems_total = fetch_stems_total(&state.db_rw, &record.id).await;
     Ok(Json(record_to_admin_response(&state.config, record, stems_total)))
 }
 
@@ -533,7 +563,7 @@ async fn admin_retry_render(
 ) -> Result<Json<AdminMusicResponse>, AppError> {
     require_admin(&headers, &state.config)?;
 
-    let record = find_music_by_id(&state.db, &id)
+    let record = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
@@ -556,9 +586,9 @@ async fn admin_retry_render(
         store_conversion(&state, &id, "musicxml", musicxml_outcome).await?;
 
     // Delete old stems then re-render.
-    sqlx::query("DELETE FROM stems WHERE music_id = ?")
+    sqlx::query("DELETE FROM stems WHERE music_id = $1")
         .bind(&id)
-        .execute(&state.db)
+        .execute(&state.db_rw)
         .await?;
 
     let (stem_results, stems_status, stems_error) =
@@ -569,9 +599,9 @@ async fn admin_retry_render(
 
     sqlx::query(
         "UPDATE musics SET \
-         midi_object_key = ?, midi_status = ?, midi_error = ?, \
-         musicxml_object_key = ?, musicxml_status = ?, musicxml_error = ?, \
-         stems_status = ?, stems_error = ? WHERE id = ?",
+         midi_object_key = $1, midi_status = $2, midi_error = $3, \
+         musicxml_object_key = $4, musicxml_status = $5, musicxml_error = $6, \
+         stems_status = $7, stems_error = $8 WHERE id = $9",
     )
     .bind(&midi_object_key)
     .bind(&midi_status)
@@ -582,14 +612,14 @@ async fn admin_retry_render(
     .bind(&stems_status)
     .bind(&stems_error)
     .bind(&id)
-    .execute(&state.db)
+    .execute(&state.db_rw)
     .await?;
 
-    let updated = find_music_by_id(&state.db, &id)
+    let updated = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
-    let stems_total = fetch_stems_total(&state.db, &id).await;
+    let stems_total = fetch_stems_total(&state.db_rw, &id).await;
     Ok(Json(record_to_admin_response(&state.config, updated, stems_total)))
 }
 
@@ -609,7 +639,7 @@ async fn store_stems(
             .await?;
         sqlx::query(
             "INSERT INTO stems (music_id, track_index, track_name, instrument_name, storage_key, size_bytes) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(music_id)
         .bind(stem.track_index as i64)
@@ -617,7 +647,7 @@ async fn store_stems(
         .bind(&stem.instrument_name)
         .bind(&storage_key)
         .bind(size_bytes)
-        .execute(&state.db)
+        .execute(&state.db_rw)
         .await?;
     }
     Ok((status, error))
@@ -627,17 +657,11 @@ async fn public_music_stems(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Json<Vec<StemInfo>>, AppError> {
-    let record = find_music_by_access_key(&state.db, &access_key)
+    let record = find_public_music_record(&state, &access_key)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
-    let stems = sqlx::query_as::<_, StemRecord>(
-        "SELECT id, music_id, track_index, track_name, instrument_name, storage_key \
-         FROM stems WHERE music_id = ? ORDER BY track_index",
-    )
-    .bind(&record.id)
-    .fetch_all(&state.db)
-    .await?;
+    let stems = find_public_stems(&state.db_ro, &state.db_rw, &record.id).await?;
 
     let infos = stems
         .into_iter()
@@ -656,19 +680,13 @@ async fn public_music_stem_audio(
     State(state): State<AppState>,
     Path((access_key, track_index)): Path<(String, i64)>,
 ) -> Result<Response, AppError> {
-    let record = find_music_by_access_key(&state.db, &access_key)
+    let record = find_public_music_record(&state, &access_key)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
-    let stem = sqlx::query_as::<_, StemRecord>(
-        "SELECT id, music_id, track_index, track_name, instrument_name, storage_key \
-         FROM stems WHERE music_id = ? AND track_index = ?",
-    )
-    .bind(&record.id)
-    .bind(track_index)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::not_found("Stem not found"))?;
+    let stem = find_public_stem(&state.db_ro, &state.db_rw, &record.id, track_index)
+        .await?
+        .ok_or_else(|| AppError::not_found("Stem not found"))?;
 
     let (bytes, content_type) = state.storage.get_bytes(&stem.storage_key).await?;
     Ok(binary_response(
@@ -716,23 +734,23 @@ async fn admin_update_music(
     require_admin(&headers, &state.config)?;
 
     let public_id = normalize_public_id(payload.public_id.as_deref())?;
-    ensure_public_id_available(&state.db, public_id.as_deref(), Some(&id)).await?;
+    ensure_public_id_available(&state.db_rw, public_id.as_deref(), Some(&id)).await?;
 
-    let update_result = sqlx::query("UPDATE musics SET public_id = ? WHERE id = ?")
+    let update_result = sqlx::query("UPDATE musics SET public_id = $1 WHERE id = $2")
         .bind(&public_id)
         .bind(&id)
-        .execute(&state.db)
+        .execute(&state.db_rw)
         .await?;
 
     if update_result.rows_affected() == 0 {
         return Err(AppError::not_found("Music not found"));
     }
 
-    let record = find_music_by_id(&state.db, &id)
+    let record = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
-    let stems_total = fetch_stems_total(&state.db, &id).await;
+    let stems_total = fetch_stems_total(&state.db_rw, &id).await;
     Ok(Json(record_to_admin_response(&state.config, record, stems_total)))
 }
 
@@ -740,7 +758,7 @@ async fn public_music(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Json<PublicMusicResponse>, AppError> {
-    let record = find_music_by_access_key(&state.db, &access_key)
+    let record = find_public_music_record(&state, &access_key)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
@@ -751,7 +769,7 @@ async fn public_music_audio(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
-    let record = find_music_by_access_key(&state.db, &access_key)
+    let record = find_public_music_record(&state, &access_key)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
@@ -771,7 +789,7 @@ async fn public_music_midi(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
-    let record = find_music_by_access_key(&state.db, &access_key)
+    let record = find_public_music_record(&state, &access_key)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
@@ -794,7 +812,7 @@ async fn public_music_musicxml(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
-    let record = find_music_by_access_key(&state.db, &access_key)
+    let record = find_public_music_record(&state, &access_key)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
@@ -818,7 +836,7 @@ async fn public_music_download(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
-    let record = find_music_by_access_key(&state.db, &access_key)
+    let record = find_public_music_record(&state, &access_key)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
@@ -850,7 +868,7 @@ fn require_admin(headers: &HeaderMap, config: &AppConfig) -> Result<(), AppError
 }
 
 async fn ensure_public_id_available(
-    db: &SqlitePool,
+    db: &PgPool,
     public_id: Option<&str>,
     current_music_id: Option<&str>,
 ) -> Result<(), AppError> {
@@ -858,7 +876,7 @@ async fn ensure_public_id_available(
         return Ok(());
     };
 
-    let existing = sqlx::query_scalar::<_, String>("SELECT id FROM musics WHERE public_id = ?")
+    let existing = sqlx::query_scalar::<_, String>("SELECT id FROM musics WHERE public_id = $1")
         .bind(public_id)
         .fetch_optional(db)
         .await?;
@@ -872,12 +890,12 @@ async fn ensure_public_id_available(
     Ok(())
 }
 
-async fn find_music_by_id(db: &SqlitePool, id: &str) -> Result<Option<MusicRecord>> {
+async fn find_music_by_id(db: &PgPool, id: &str) -> Result<Option<MusicRecord>> {
     Ok(sqlx::query_as::<_, MusicRecord>(
         r#"
         SELECT id, title, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, created_at
         FROM musics
-        WHERE id = ?
+        WHERE id = $1
         "#,
     )
     .bind(id)
@@ -886,14 +904,14 @@ async fn find_music_by_id(db: &SqlitePool, id: &str) -> Result<Option<MusicRecor
 }
 
 async fn find_music_by_access_key(
-    db: &SqlitePool,
+    db: &PgPool,
     access_key: &str,
 ) -> Result<Option<MusicRecord>> {
     Ok(sqlx::query_as::<_, MusicRecord>(
         r#"
         SELECT id, title, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, created_at
         FROM musics
-        WHERE public_token = ? OR public_id = ?
+        WHERE public_token = $1 OR public_id = $2
         LIMIT 1
         "#,
     )

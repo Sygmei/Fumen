@@ -5,7 +5,7 @@ Svelte frontend plus Rust backend for uploading MuseScore `.mscz` files, storing
 ## Included in this MVP
 
 - Hard-coded admin password flow for a private upload screen
-- Rust `axum` backend with SQLite metadata storage
+- Rust `axum` backend with PostgreSQL metadata storage
 - Storage backend that uses S3 when configured and falls back to local filesystem storage otherwise
 - Random public link for each upload
 - Optional friendly public id per score
@@ -39,7 +39,9 @@ Optional settings:
 ```powershell
 $env:APP_BASE_URL="http://localhost:5173"
 $env:BIND_ADDRESS="127.0.0.1:3000"
-$env:DATABASE_PATH="./data/musescore-reader.db"
+$env:DATABASE_URL="postgres://postgres:password@127.0.0.1:6432/musescore_reader"
+$env:DATABASE_URL_ADMIN="postgres://postgres:password@127.0.0.1:5432/musescore_reader"
+$env:DATABASE_URL_READ_ONLY="postgres://postgres:password@127.0.0.1:6433/musescore_reader"
 $env:LOCAL_STORAGE_PATH="./data/storage"
 $env:S3_REGION="eu-west-3"
 $env:S3_ENDPOINT="http://127.0.0.1:9000"
@@ -48,6 +50,10 @@ $env:MUSESCORE_BIN="C:\Program Files\MuseScore Studio 4\bin\MuseScoreStudio.exe"
 ```
 
 If `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` are all unset, the backend stores uploaded files under `LOCAL_STORAGE_PATH`.
+
+`DATABASE_URL` is the read-write application connection. `DATABASE_URL_ADMIN` is used for startup
+schema management, and `DATABASE_URL_READ_ONLY` is used for public read traffic. If the admin or
+read-only URLs are unset, the backend falls back to `DATABASE_URL`.
 
 `MUSESCORE_BIN` enables derivative exports. Browsers cannot natively play `.mscz`, so the backend tries to export:
 
@@ -125,7 +131,6 @@ The backend image defaults to:
 
 ```bash
 BIND_ADDRESS=0.0.0.0:3000
-DATABASE_PATH=/data/musescore-reader.db
 LOCAL_STORAGE_PATH=/data/storage
 SOUNDFONT_DIR=/opt/soundfonts
 ```
@@ -139,5 +144,5 @@ For Kubernetes, the intended setup is:
 The frontend image serves only static files. Route `/api` to the backend with Ingress or another
 cluster-level proxy.
 
-`Dockerfile.backend` includes `ffmpeg` and `fluidsynth`. If you want MIDI export and stem rendering
-fully inside that image, you should extend it to also provide `MUSESCORE_BIN` and `SFIZZ_BIN`.
+`Dockerfile.backend` includes `ffmpeg`, `fluidsynth`, `sfizz_render`, and MuseScore 4. The image
+sets `FLUIDSYNTH_BIN`, `SFIZZ_BIN`, and `MUSESCORE_BIN` automatically.

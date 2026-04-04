@@ -40,6 +40,6 @@ RUN set -euo pipefail; \
         rm -rf "$archive" "$extract_dir"; \
     done
 
-FROM scratch
+FROM alpine:3.22
 
 COPY --from=build /opt/soundfonts /opt/soundfonts

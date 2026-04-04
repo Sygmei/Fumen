@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "musescore-reader.backend.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "musescore-reader.name" . }}
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "musescore-reader.name" . }}
+      app.kubernetes.io/component: backend
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "musescore-reader.name" . }}
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      initContainers:
+        - name: soundfonts
+          image: ghcr.io/sygmei/musescore-reader-soundfonts:{{ .Values.backend.soundfonts.version }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - cp -a /opt/soundfonts/. /mnt/soundfonts/
+          volumeMounts:
+            - name: soundfonts
+              mountPath: /mnt/soundfonts
+      containers:
+        - name: backend
+          image: ghcr.io/sygmei/musescore-reader-backend:{{ .Values.backend.version }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BIND_ADDRESS
+              value: 0.0.0.0:3000
+            - name: APP_BASE_URL
+              value: https://{{ .Values.frontend.ingress.domain }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-credentials
+                  key: connection-string
+            - name: DATABASE_URL_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-credentials
+                  key: connection-string-admin
+            - name: DATABASE_URL_READ_ONLY
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-credentials
+                  key: connection-string-ro
+            - name: SOUNDFONT_DIR
+              value: /opt/soundfonts
+          ports:
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: soundfonts
+              mountPath: /opt/soundfonts
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: soundfonts
+          emptyDir: {}

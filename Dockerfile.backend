@@ -5,7 +5,6 @@ WORKDIR /app/backend
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
-        libsqlite3-dev \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
@@ -14,13 +13,78 @@ COPY backend/src ./src
 
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+FROM debian:bookworm AS sfizz-build
+
+ARG SFIZZ_VERSION=1.2.3
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+
+RUN curl -fsSL "https://github.com/sfztools/sfizz/archive/refs/tags/${SFIZZ_VERSION}.tar.gz" \
+        -o sfizz.tar.gz \
+    && tar -xzf sfizz.tar.gz \
+    && cmake -S "sfizz-${SFIZZ_VERSION}" -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/sfizz \
+        -DSFIZZ_JACK=OFF \
+        -DSFIZZ_SHARED=OFF \
+        -DSFIZZ_TESTS=OFF \
+        -DSFIZZ_DEMOS=OFF \
+        -DSFIZZ_DEVTOOLS=OFF \
+        -DSFIZZ_BENCHMARKS=OFF \
+    && cmake --build build --target sfizz_render --parallel \
+    && cmake --install build --component render
+
+FROM debian:bookworm AS musescore-build
+
+ARG MUSESCORE_APPIMAGE_URL=https://github.com/musescore/MuseScore/releases/download/v4.6.5/MuseScore-Studio-4.6.5.253511702-x86_64.AppImage
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+
+RUN curl -fsSL "$MUSESCORE_APPIMAGE_URL" -o MuseScore.AppImage \
+    && chmod +x MuseScore.AppImage \
+    && ./MuseScore.AppImage --appimage-extract \
+    && mv squashfs-root /opt/musescore4
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
         ffmpeg \
         fluidsynth \
+        libasound2 \
+        libdbus-1-3 \
+        libegl1 \
+        libfontconfig1 \
+        libfreetype6 \
+        libglib2.0-0 \
+        libnss3 \
+        libopengl0 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb-cursor0 \
+        libxcb-icccm4 \
+        libxcb-image0 \
+        libxcb-keysyms1 \
+        libxcb-render-util0 \
+        libxcb-xinerama0 \
+        libxkbcommon-x11-0 \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
@@ -32,11 +96,20 @@ RUN groupadd --system app \
 WORKDIR /app
 
 COPY --from=build /app/backend/target/release/backend /usr/local/bin/musescore-reader
+COPY --from=sfizz-build /opt/sfizz/bin/sfizz_render /usr/local/bin/sfizz_render
+COPY --from=musescore-build /opt/musescore4 /opt/musescore4
+
+RUN printf '#!/bin/sh\nexec /opt/musescore4/AppRun "$@"\n' > /usr/local/bin/musescore4 \
+    && chmod +x /usr/local/bin/musescore4 \
+    && ln -s /usr/local/bin/musescore4 /usr/local/bin/musescore
 
 ENV BIND_ADDRESS=0.0.0.0:3000 \
-    DATABASE_PATH=/data/musescore-reader.db \
     LOCAL_STORAGE_PATH=/data/storage \
-    SOUNDFONT_DIR=/opt/soundfonts
+    SOUNDFONT_DIR=/opt/soundfonts \
+    FLUIDSYNTH_BIN=/usr/bin/fluidsynth \
+    SFIZZ_BIN=/usr/local/bin/sfizz_render \
+    MUSESCORE_BIN=/usr/local/bin/musescore4 \
+    QT_QPA_PLATFORM=offscreen
 
 USER app
 

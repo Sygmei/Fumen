@@ -6,7 +6,9 @@ pub struct AppConfig {
     pub bind_address: String,
     pub admin_password: String,
     pub app_base_url: String,
-    pub database_path: PathBuf,
+    pub database_url: String,
+    pub database_url_admin: String,
+    pub database_url_read_only: String,
     pub storage: StorageConfig,
     pub musescore_bin: Option<String>,
     pub soundfont_dir: Option<PathBuf>,
@@ -37,9 +39,12 @@ impl AppConfig {
             env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "musescore-admin".to_owned());
         let app_base_url =
             env::var("APP_BASE_URL").unwrap_or_else(|_| "http://localhost:5173".to_owned());
-        let database_path = PathBuf::from(
-            env::var("DATABASE_PATH").unwrap_or_else(|_| "./data/musescore-reader.db".to_owned()),
-        );
+        let database_url = env::var("DATABASE_URL")
+            .map_err(|_| anyhow!("Set DATABASE_URL to a PostgreSQL connection string."))?;
+        let database_url_admin =
+            env::var("DATABASE_URL_ADMIN").unwrap_or_else(|_| database_url.clone());
+        let database_url_read_only =
+            env::var("DATABASE_URL_READ_ONLY").unwrap_or_else(|_| database_url.clone());
         let local_storage_path = PathBuf::from(
             env::var("LOCAL_STORAGE_PATH").unwrap_or_else(|_| "./data/storage".to_owned()),
         );
@@ -101,7 +106,9 @@ impl AppConfig {
             bind_address,
             admin_password,
             app_base_url,
-            database_path,
+            database_url,
+            database_url_admin,
+            database_url_read_only,
             storage,
             musescore_bin,
             soundfont_dir,
