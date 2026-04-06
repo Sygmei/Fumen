@@ -23,6 +23,8 @@ pub struct MusicRecord {
     pub public_id: Option<String>,
     pub quality_profile: String,
     pub created_at: String,
+    pub directory_id: String,
+    pub directory_name: String,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -34,6 +36,48 @@ pub struct StemRecord {
     pub instrument_name: String,
     pub storage_key: String,
     pub drum_map_json: Option<String>,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct UserRecord {
+    pub id: String,
+    pub username: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct UserSessionRecord {
+    pub id: String,
+    pub user_id: String,
+    pub session_token: String,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct EnsembleRecord {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct DirectoryRecord {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct UserEnsembleMembershipRecord {
+    pub user_id: String,
+    pub ensemble_id: String,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct DirectoryEnsemblePermissionRecord {
+    pub directory_id: String,
+    pub ensemble_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,6 +96,26 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateEnsembleRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateDirectoryRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExchangeLoginTokenRequest {
+    pub token: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     pub ok: bool,
@@ -60,6 +124,11 @@ pub struct LoginResponse {
 #[derive(Debug, Deserialize)]
 pub struct UpdateMusicRequest {
     pub public_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MoveMusicRequest {
+    pub directory_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +177,8 @@ pub struct AdminMusicResponse {
     pub quality_profile: String,
     pub created_at: String,
     pub stems_total_bytes: i64,
+    pub directory_id: String,
+    pub directory_name: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -126,4 +197,71 @@ pub struct PublicMusicResponse {
     pub stems_error: Option<String>,
     pub download_url: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserResponse {
+    pub id: String,
+    pub username: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminEnsembleResponse {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub member_user_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminDirectoryResponse {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub permitted_ensemble_ids: Vec<String>,
+    pub score_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoginLinkResponse {
+    pub connection_url: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthSessionResponse {
+    pub session_token: String,
+    pub session_expires_at: String,
+    pub user: UserResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CurrentUserResponse {
+    pub session_expires_at: String,
+    pub user: UserResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserLibraryScoreResponse {
+    pub id: String,
+    pub title: String,
+    pub filename: String,
+    pub public_url: String,
+    pub public_id_url: Option<String>,
+    pub created_at: String,
+    pub directory_id: String,
+    pub directory_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserLibraryDirectoryResponse {
+    pub id: String,
+    pub name: String,
+    pub scores: Vec<UserLibraryScoreResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserLibraryResponse {
+    pub directories: Vec<UserLibraryDirectoryResponse>,
 }

@@ -38,6 +38,7 @@ Optional settings:
 
 ```powershell
 $env:APP_BASE_URL="http://localhost:5173"
+$env:CORS_ALLOWED_ORIGINS="http://localhost:5173,http://127.0.0.1:5173"
 $env:BIND_ADDRESS="127.0.0.1:3000"
 $env:DATABASE_URL="postgres://postgres:password@127.0.0.1:6432/musescore_reader"
 $env:DATABASE_URL_ADMIN="postgres://postgres:password@127.0.0.1:5432/musescore_reader"
@@ -105,10 +106,13 @@ Start the frontend dev server:
 
 ```powershell
 cd frontend
+$env:VITE_API_BASE_URL="http://127.0.0.1:3000/api"
 npm.cmd run dev
 ```
 
-The Vite dev server proxies `/api` to `http://127.0.0.1:3000`.
+The frontend reads `VITE_API_BASE_URL` in development and talks to the backend directly.
+When the frontend runs on a different origin, set `CORS_ALLOWED_ORIGINS` on the backend to a
+comma-separated list of allowed browser origins.
 
 ## Production build
 
@@ -134,6 +138,9 @@ Build the frontend image from the repository root:
 ```bash
 docker build -f Dockerfile.frontend -t fumen-frontend .
 ```
+
+At runtime, the frontend container reads `API_BASE_URL` and writes it into `/config.js` for the
+browser app.
 
 Build the backend image from the repository root:
 
@@ -162,8 +169,8 @@ For Kubernetes, the intended setup is:
 - run `fumen-backend` as the API service
 - mount the contents of `fumen-soundfonts` into the backend pod at `/opt/soundfonts`
 
-The frontend image serves only static files. Route `/api` to the backend with Ingress or another
-cluster-level proxy.
+The frontend image serves only static files and expects `API_BASE_URL` to point at the public API
+root, for example `https://fumen-api.mydomain.com/api`.
 
 `Dockerfile.backend` includes `ffmpeg`, `fluidsynth`, `sfizz_render`, and MuseScore 4. The image
 sets `FLUIDSYNTH_BIN`, `SFIZZ_BIN`, and `MUSESCORE_BIN` automatically.
@@ -254,3 +261,8 @@ With the current defaults, the public hosts are:
 
 - frontend: `fumen.mydomain.com`
 - backend: `fumen-api.mydomain.com`
+
+By default, the chart injects `API_BASE_URL=https://<backend-domain>/api` into the frontend
+Deployment. Override `frontend.apiBaseUrl` if the browser should call a different public API URL.
+It also injects `CORS_ALLOWED_ORIGINS` into the backend for the frontend domain and `www` host.
+Override `backend.corsAllowedOrigins` if you need a different list.

@@ -102,6 +102,23 @@ impl Storage {
         }
     }
 
+    pub async fn delete_key(&self, key: &str) -> Result<()> {
+        match &self.backend {
+            StorageBackend::Local { root } => {
+                let path = path_for_key(root, key);
+                match fs::remove_file(path).await {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(error) => Err(error.into()),
+                }
+            }
+            StorageBackend::S3 { bucket, client, .. } => {
+                client.delete_object().bucket(bucket).key(key).send().await?;
+                Ok(())
+            }
+        }
+    }
+
     pub fn is_s3(&self) -> bool {
         matches!(self.backend, StorageBackend::S3 { .. })
     }

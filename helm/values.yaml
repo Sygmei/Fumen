@@ -1,6 +1,7 @@
 backend:
   version: "0.2.6"
   replicas: 1
+  corsAllowedOrigins: ""
   ingress:
     domain: "fumen-api.lehang.art"
   soundfonts:
@@ -9,5 +10,6 @@ backend:
 
 frontend:
   version: "0.2.6"
+  apiBaseUrl: ""
   ingress:
     domain: "fumen.lehang.art"

@@ -33,6 +33,9 @@ spec:
         - name: frontend
           image: ghcr.io/sygmei/fumen-frontend:{{ .Values.frontend.version }}
           imagePullPolicy: IfNotPresent
+          env:
+            - name: API_BASE_URL
+              value: {{ include "fumen.frontend.apiBaseUrl" . | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

@@ -42,3 +42,19 @@ fumen
 {{- define "fumen.adminSecretName" -}}
 {{- printf "%s-admin" (include "fumen.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
+
+{{- define "fumen.frontend.apiBaseUrl" -}}
+{{- if .Values.frontend.apiBaseUrl -}}
+{{- .Values.frontend.apiBaseUrl -}}
+{{- else -}}
+{{- printf "https://%s/api" .Values.backend.ingress.domain -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "fumen.backend.corsAllowedOrigins" -}}
+{{- if .Values.backend.corsAllowedOrigins -}}
+{{- .Values.backend.corsAllowedOrigins -}}
+{{- else -}}
+{{- printf "https://%s,https://www.%s" .Values.frontend.ingress.domain .Values.frontend.ingress.domain -}}
+{{- end -}}
+{{- end -}}
