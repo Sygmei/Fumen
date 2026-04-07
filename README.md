@@ -4,7 +4,8 @@ Svelte frontend plus Rust backend for uploading MuseScore `.mscz` files, storing
 
 ## Included in this MVP
 
-- Hard-coded admin password flow for a private upload screen
+- Session-based user access with a seeded `superadmin` account and ensemble-scoped admins
+- Scores assigned directly to ensembles instead of directory-based access control
 - Rust `axum` backend with PostgreSQL metadata storage
 - Storage backend that uses S3 when configured and falls back to local filesystem storage otherwise
 - Random public link for each upload
@@ -19,12 +20,6 @@ Svelte frontend plus Rust backend for uploading MuseScore `.mscz` files, storing
 - `backend/`: Rust API server
 
 ## Environment
-
-Set these before running the backend:
-
-```powershell
-$env:ADMIN_PASSWORD="change-me"
-```
 
 If you want S3 storage, set all three of these:
 
@@ -43,6 +38,7 @@ $env:BIND_ADDRESS="127.0.0.1:3000"
 $env:DATABASE_URL="postgres://postgres:password@127.0.0.1:6432/musescore_reader"
 $env:DATABASE_URL_ADMIN="postgres://postgres:password@127.0.0.1:5432/musescore_reader"
 $env:DATABASE_URL_READ_ONLY="postgres://postgres:password@127.0.0.1:6433/musescore_reader"
+$env:SUPERADMIN_USERNAME="superadmin"
 $env:LOCAL_STORAGE_PATH="./data/storage"
 $env:S3_REGION="eu-west-3"
 $env:S3_ENDPOINT="http://127.0.0.1:9000"
@@ -100,6 +96,14 @@ Start the backend:
 ```powershell
 cd backend
 cargo run
+```
+
+On startup, the backend ensures exactly one `superadmin` user exists. To open the admin UI on a
+device, generate a one-time connection link and QR code for that user:
+
+```powershell
+cd backend
+cargo run --bin login-link -- superadmin
 ```
 
 Start the frontend dev server:
@@ -233,11 +237,11 @@ The chart maps those secret keys to:
 - `S3_REGION` from `region-name`
 - `S3_ENDPOINT` from `endpoint-url`
 
-### Admin password
+### Superadmin bootstrap
 
-The backend still reads `ADMIN_PASSWORD`, but the Helm chart does not inject it yet. If you do not
-patch the Deployment, the backend falls back to the default password `fumen-admin`, which is
-not safe for production.
+The backend seeds a `superadmin` user on startup if one does not exist yet. The Helm chart exposes
+`backend.superadminUsername`, which defaults to `superadmin`. Use the dedicated `login-link`
+binary in the running container or pod when you need a fresh one-time admin sign-in link.
 
 ### Install
 

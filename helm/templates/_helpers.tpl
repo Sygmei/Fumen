@@ -39,10 +39,6 @@ fumen
 {{- printf "%s-cert-issuer-account-key" (include "fumen.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "fumen.adminSecretName" -}}
-{{- printf "%s-admin" (include "fumen.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-
 {{- define "fumen.frontend.apiBaseUrl" -}}
 {{- if .Values.frontend.apiBaseUrl -}}
 {{- .Values.frontend.apiBaseUrl -}}

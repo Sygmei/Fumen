@@ -2,6 +2,7 @@ backend:
   version: "0.2.6"
   replicas: 1
   corsAllowedOrigins: ""
+  superadminUsername: "superadmin"
   ingress:
     domain: "fumen-api.lehang.art"
   soundfonts:

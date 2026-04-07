@@ -4,12 +4,12 @@ use std::{env, path::PathBuf};
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub bind_address: String,
-    pub admin_password: String,
     pub app_base_url: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
     pub database_url_admin: String,
     pub database_url_read_only: String,
+    pub superadmin_username: String,
     pub storage: StorageConfig,
     pub musescore_bin: Option<String>,
     pub musescore_docker_image: Option<String>,
@@ -39,8 +39,6 @@ pub struct S3Config {
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
         let bind_address = env::var("BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1:3000".to_owned());
-        let admin_password =
-            env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "fumen-admin".to_owned());
         let app_base_url =
             env::var("APP_BASE_URL").unwrap_or_else(|_| "http://localhost:5173".to_owned());
         let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS")
@@ -60,6 +58,8 @@ impl AppConfig {
             env::var("DATABASE_URL_ADMIN").unwrap_or_else(|_| database_url.clone());
         let database_url_read_only =
             env::var("DATABASE_URL_READ_ONLY").unwrap_or_else(|_| database_url.clone());
+        let superadmin_username =
+            env::var("SUPERADMIN_USERNAME").unwrap_or_else(|_| "superadmin".to_owned());
         let local_storage_path = PathBuf::from(
             env::var("LOCAL_STORAGE_PATH").unwrap_or_else(|_| "./data/storage".to_owned()),
         );
@@ -132,12 +132,12 @@ impl AppConfig {
 
         Ok(Self {
             bind_address,
-            admin_password,
             app_base_url,
             cors_allowed_origins,
             database_url,
             database_url_admin,
             database_url_read_only,
+            superadmin_username,
             storage,
             musescore_bin,
             musescore_docker_image,

@@ -1,8 +1,8 @@
-//! normalize_mapping - generate a `gains.json` file from `mapping.json`.
+//! normalize-mapping - generate a `gains.json` file from `mapping.json`.
 //!
 //! Usage (run from the workspace root or the backend directory):
 //!
-//!   cargo run --bin normalize_mapping [--auto] [path/to/mapping.json] [output/samples/dir]
+//!   cargo run --bin normalize-mapping [--auto] [path/to/mapping.json] [output/samples/dir]
 //!
 //! If no mapping path is given it tries `../soundfonts/mapping.json`.
 //!
@@ -155,7 +155,7 @@ fn parse_args() -> anyhow::Result<CliOptions> {
 }
 
 fn usage_text() -> &'static str {
-    "Usage: cargo run --bin normalize_mapping [--auto] [path/to/mapping.json] [output/samples/dir]"
+    "Usage: cargo run --bin normalize-mapping [--auto] [path/to/mapping.json] [output/samples/dir]"
 }
 
 fn print_usage() {

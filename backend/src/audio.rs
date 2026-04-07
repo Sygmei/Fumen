@@ -84,7 +84,7 @@ struct SfzMapping {
     percussion: Option<String>,
     fallback: Option<String>,
     programs: HashMap<String, ProgramEntry>,
-    /// Per-soundfont gain corrections (dB) produced by the `normalize_mapping`
+    /// Per-soundfont gain corrections (dB) produced by the `normalize-mapping`
     /// CLI tool.  Key = relative SFZ path (forward-slash, e.g.
     /// "VSCO-2-CE-1.1.0/CelloEnsSusVib.sfz").  Absent keys → 0 dB.
     /// Gain corrections loaded from `gains.json`.
@@ -103,7 +103,7 @@ async fn load_sfz_mapping(sfz_dir: &Path) -> Result<SfzMapping> {
     let mut mapping: SfzMapping =
         serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     // Load gain corrections from the separate gains.json (written by
-    // normalize_mapping).  Missing file is non-fatal — all gains default to 0.
+    // normalize-mapping). Missing file is non-fatal; all gains default to 0.
     let gains_path = sfz_dir.join("gains.json");
     if gains_path.exists() {
         match tokio::fs::read_to_string(&gains_path).await {
@@ -3219,11 +3219,12 @@ mod tests {
     fn test_config() -> AppConfig {
         AppConfig {
             bind_address: "127.0.0.1:3000".to_owned(),
-            admin_password: "test".to_owned(),
             app_base_url: "http://localhost:5173".to_owned(),
+            cors_allowed_origins: vec!["http://localhost:5173".to_owned()],
             database_url: "postgres://localhost/test".to_owned(),
             database_url_admin: "postgres://localhost/test".to_owned(),
             database_url_read_only: "postgres://localhost/test".to_owned(),
+            superadmin_username: "superadmin".to_owned(),
             storage: StorageConfig::Local {
                 root: fixture_path("data/storage"),
             },

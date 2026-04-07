@@ -4,8 +4,8 @@
   import QrScanner from 'qr-scanner'
   import qrWorkerUrl from 'qr-scanner/qr-scanner-worker.min?url'
   import {
+    addMusicToEnsemble,
     addUserToEnsemble,
-    createDirectory,
     createEnsemble,
     createAdminUserLoginLink,
     createMyLoginLink,
@@ -16,27 +16,23 @@
     fetchPublicMusic,
     fetchStems,
     fetchUserLibrary,
-    grantDirectoryToEnsemble,
-    listDirectories,
     listEnsembles,
     listMusics,
     listUsers,
-    login,
     moveMusic,
+    removeMusicFromEnsemble,
     removeUserFromEnsemble,
-    revokeDirectoryFromEnsemble,
     retryRender,
     STEM_QUALITY_PROFILES,
     updatePublicId,
     uploadMusic,
     type AdminMusic,
     type AppUser,
-    type Directory,
     type Ensemble,
     type LoginLinkResponse,
     type PublicMusic,
     type StemQualityProfile,
-    type UserLibraryDirectory,
+    type UserLibraryEnsemble,
   } from './lib/api'
   import { MidiMixerPlayer, type MixerTrack } from './lib/midi-player'
   import { StemMixerPlayer, type StemTrack } from './lib/stem-mixer'
@@ -51,7 +47,7 @@
     | { kind: 'public'; accessKey: string }
     | { kind: 'connect'; token: string }
 
-  type AdminSection = 'users' | 'ensembles' | 'directories' | 'scores'
+  type AdminSection = 'users' | 'ensembles' | 'scores'
 
   const adminSectionItems: Array<{
     id: AdminSection
@@ -60,19 +56,14 @@
   }> = [
     { id: 'users', label: 'Users', eyebrow: 'Accounts' },
     { id: 'ensembles', label: 'Ensembles', eyebrow: 'Groups' },
-    { id: 'directories', label: 'Directories', eyebrow: 'Permissions' },
     { id: 'scores', label: 'Scores', eyebrow: 'Library' },
   ]
 
-  const storedAdminPassword =
-    typeof window !== 'undefined' ? window.localStorage.getItem('admin-password') ?? '' : ''
   const storedUserSessionToken =
     typeof window !== 'undefined' ? window.localStorage.getItem('user-session-token') ?? '' : ''
 
   let route = $state(resolveRoute(typeof window !== 'undefined' ? window.location.pathname : '/'))
 
-  let adminPassword = $state(storedAdminPassword)
-  let adminLoggedIn = $state(false)
   let adminSection = $state<AdminSection>('users')
   let adminLoading = $state(false)
   let adminError = $state('')
@@ -85,16 +76,13 @@
   let musics = $state<AdminMusic[]>([])
   let adminUsers = $state<AppUser[]>([])
   let ensembles = $state<Ensemble[]>([])
-  let directories = $state<Directory[]>([])
   let newUsername = $state('')
   let creatingUser = $state(false)
   let newEnsembleName = $state('')
   let creatingEnsemble = $state(false)
-  let newDirectoryName = $state('')
-  let creatingDirectory = $state(false)
-  let uploadDirectoryId = $state('')
+  let uploadEnsembleId = $state('')
   let editPublicIds = $state<Record<string, string>>({})
-  let editDirectoryIds = $state<Record<string, string>>({})
+  let editEnsembleIds = $state<Record<string, string>>({})
   let savingIdFor = $state('')
   let movingMusicFor = $state('')
   let retryingFor = $state('')
@@ -106,7 +94,7 @@
   let userLoading = $state(false)
   let userError = $state('')
   let userSuccess = $state('')
-  let userLibrary = $state<UserLibraryDirectory[]>([])
+  let userLibrary = $state<UserLibraryEnsemble[]>([])
   let manualConnectionLink = $state('')
   let connectionBusy = $state(false)
 
@@ -149,6 +137,14 @@
 
   function currentAdminSectionItem() {
     return adminSectionItems.find((section) => section.id === adminSection) ?? adminSectionItems[0]
+  }
+
+  function canAccessAdmin(user = currentUser) {
+    return user?.role === 'admin' || user?.role === 'superadmin'
+  }
+
+  function isSuperadmin(user = currentUser) {
+    return user?.role === 'superadmin'
   }
 
   onMount(() => {
@@ -214,10 +210,15 @@
     }
 
     if (route.kind === 'admin') {
-      if (adminPassword) {
-        await tryAdminSession(adminPassword)
+      if (userSessionToken) {
+        await loadCurrentUser(userSessionToken)
+        if (canAccessAdmin()) {
+          await refreshAdminData()
+        }
       } else {
-        adminLoggedIn = false
+        musics = []
+        adminUsers = []
+        ensembles = []
       }
       return
     }
@@ -227,46 +228,35 @@
     }
   }
 
-  async function tryAdminSession(password: string) {
+  async function refreshAdminData(authToken = userSessionToken) {
+    if (!authToken) {
+      adminError = 'Sign in first.'
+      return
+    }
+
     adminLoading = true
     adminError = ''
 
     try {
-      await login(password)
-      adminLoggedIn = true
-      window.localStorage.setItem('admin-password', password)
-      await refreshAdminData(password)
+      const [musicItems, userItems, ensembleItems] = await Promise.all([
+        listMusics(authToken),
+        listUsers(authToken),
+        listEnsembles(authToken),
+      ])
+      musics = musicItems
+      adminUsers = userItems
+      ensembles = ensembleItems
+      editPublicIds = Object.fromEntries(musicItems.map((music) => [music.id, music.public_id ?? '']))
+      editEnsembleIds = Object.fromEntries(
+        musicItems.map((music) => [music.id, music.ensemble_ids[0] ?? ensembleItems[0]?.id ?? '']),
+      )
+      if (!uploadEnsembleId || !ensembleItems.some((ensemble) => ensemble.id === uploadEnsembleId)) {
+        uploadEnsembleId = ensembleItems[0]?.id ?? ''
+      }
     } catch (error) {
-      adminLoggedIn = false
-      adminError = error instanceof Error ? error.message : 'Unable to log in'
-      window.localStorage.removeItem('admin-password')
+      adminError = error instanceof Error ? error.message : 'Unable to load admin data'
     } finally {
       adminLoading = false
-    }
-  }
-
-  async function handleLogin() {
-    adminSuccess = ''
-    await tryAdminSession(adminPassword)
-  }
-
-  async function refreshAdminData(password = adminPassword) {
-    const [musicItems, userItems, ensembleItems, directoryItems] = await Promise.all([
-      listMusics(password),
-      listUsers(password),
-      listEnsembles(password),
-      listDirectories(password),
-    ])
-    musics = musicItems
-    adminUsers = userItems
-    ensembles = ensembleItems
-    directories = directoryItems
-    editPublicIds = Object.fromEntries(musicItems.map((music) => [music.id, music.public_id ?? '']))
-    editDirectoryIds = Object.fromEntries(
-      musicItems.map((music) => [music.id, music.directory_id ?? directoryItems[0]?.id ?? '']),
-    )
-    if (!uploadDirectoryId || !directoryItems.some((directory) => directory.id === uploadDirectoryId)) {
-      uploadDirectoryId = directoryItems[0]?.id ?? ''
     }
   }
 
@@ -282,7 +272,7 @@
     adminSuccess = ''
 
     try {
-      const user = await createUser(adminPassword, trimmed)
+      const user = await createUser(userSessionToken, trimmed)
       adminUsers = [...adminUsers, user].sort((left, right) =>
         left.username.localeCompare(right.username),
       )
@@ -307,7 +297,7 @@
     adminSuccess = ''
 
     try {
-      const ensemble = await createEnsemble(adminPassword, trimmed)
+      const ensemble = await createEnsemble(userSessionToken, trimmed)
       ensembles = [...ensembles, ensemble].sort((left, right) => left.name.localeCompare(right.name))
       newEnsembleName = ''
       adminSuccess = `Ensemble ${ensemble.name} created.`
@@ -318,63 +308,53 @@
     }
   }
 
-  async function handleCreateDirectory() {
-    const trimmed = newDirectoryName.trim()
-    if (!trimmed) {
-      adminError = 'Choose a directory name first.'
-      return
-    }
+  function ensembleMemberRole(ensemble: Ensemble, userId: string): 'none' | 'user' | 'admin' {
+    return ensemble.members.find((member) => member.user_id === userId)?.role ?? 'none'
+  }
 
-    creatingDirectory = true
+  async function updateUserEnsembleRole(
+    ensembleId: string,
+    userId: string,
+    role: 'none' | 'user' | 'admin',
+  ) {
     adminError = ''
     adminSuccess = ''
 
     try {
-      const directory = await createDirectory(adminPassword, trimmed)
-      directories = [...directories, directory].sort((left, right) => left.name.localeCompare(right.name))
-      newDirectoryName = ''
-      if (!uploadDirectoryId) {
-        uploadDirectoryId = directory.id
+      if (role === 'none') {
+        await removeUserFromEnsemble(userSessionToken, ensembleId, userId)
+      } else {
+        await addUserToEnsemble(userSessionToken, ensembleId, userId, role)
       }
-      adminSuccess = `Directory ${directory.name} created.`
+      await refreshAdminData()
+      adminSuccess = 'Ensemble role updated.'
     } catch (error) {
-      adminError = error instanceof Error ? error.message : 'Unable to create directory'
-    } finally {
-      creatingDirectory = false
+      adminError = error instanceof Error ? error.message : 'Unable to update ensemble role'
     }
   }
 
-  async function toggleUserEnsembleMembership(ensembleId: string, userId: string, shouldAdd: boolean) {
+  function musicHasEnsemble(music: AdminMusic, ensembleId: string) {
+    return music.ensemble_ids.includes(ensembleId)
+  }
+
+  async function toggleMusicEnsembleAssignment(
+    musicId: string,
+    ensembleId: string,
+    shouldAdd: boolean,
+  ) {
     adminError = ''
     adminSuccess = ''
 
     try {
       if (shouldAdd) {
-        await addUserToEnsemble(adminPassword, ensembleId, userId)
+        await addMusicToEnsemble(userSessionToken, musicId, ensembleId)
       } else {
-        await removeUserFromEnsemble(adminPassword, ensembleId, userId)
+        await removeMusicFromEnsemble(userSessionToken, musicId, ensembleId)
       }
       await refreshAdminData()
-      adminSuccess = 'Membership updated.'
+      adminSuccess = 'Score ensembles updated.'
     } catch (error) {
-      adminError = error instanceof Error ? error.message : 'Unable to update membership'
-    }
-  }
-
-  async function toggleDirectoryGrant(directoryId: string, ensembleId: string, shouldGrant: boolean) {
-    adminError = ''
-    adminSuccess = ''
-
-    try {
-      if (shouldGrant) {
-        await grantDirectoryToEnsemble(adminPassword, directoryId, ensembleId)
-      } else {
-        await revokeDirectoryFromEnsemble(adminPassword, directoryId, ensembleId)
-      }
-      await refreshAdminData()
-      adminSuccess = 'Directory permissions updated.'
-    } catch (error) {
-      adminError = error instanceof Error ? error.message : 'Unable to update directory permission'
+      adminError = error instanceof Error ? error.message : 'Unable to update score ensembles'
     }
   }
 
@@ -383,8 +363,8 @@
       adminError = 'Choose an .mscz file first.'
       return
     }
-    if (!uploadDirectoryId) {
-      adminError = 'Choose a directory first.'
+    if (!uploadEnsembleId) {
+      adminError = 'Choose an ensemble first.'
       return
     }
 
@@ -393,12 +373,12 @@
     adminSuccess = ''
 
     try {
-      await uploadMusic(adminPassword, {
+      await uploadMusic(userSessionToken, {
         file: selectedFile,
         title: uploadTitle,
         publicId: uploadPublicId,
         qualityProfile: uploadQualityProfile,
-        directoryId: uploadDirectoryId,
+        ensembleId: uploadEnsembleId,
       })
 
       uploadTitle = ''
@@ -424,7 +404,7 @@
     adminSuccess = ''
 
     try {
-      const updated = await updatePublicId(adminPassword, musicId, editPublicIds[musicId] ?? '')
+      const updated = await updatePublicId(userSessionToken, musicId, editPublicIds[musicId] ?? '')
       musics = musics.map((music) => (music.id === musicId ? updated : music))
       editPublicIds = { ...editPublicIds, [musicId]: updated.public_id ?? '' }
       adminSuccess = 'Public id updated.'
@@ -436,9 +416,9 @@
   }
 
   async function handleMoveMusic(musicId: string) {
-    const directoryId = editDirectoryIds[musicId] ?? ''
-    if (!directoryId) {
-      adminError = 'Choose a directory first.'
+    const ensembleId = editEnsembleIds[musicId] ?? ''
+    if (!ensembleId) {
+      adminError = 'Choose an ensemble first.'
       return
     }
 
@@ -447,13 +427,13 @@
     adminSuccess = ''
 
     try {
-      const updated = await moveMusic(adminPassword, musicId, directoryId)
+      const updated = await moveMusic(userSessionToken, musicId, ensembleId)
       musics = musics.map((music) => (music.id === musicId ? updated : music))
-      editDirectoryIds = { ...editDirectoryIds, [musicId]: updated.directory_id }
+      editEnsembleIds = { ...editEnsembleIds, [musicId]: updated.ensemble_ids[0] ?? '' }
       await refreshAdminData()
-      adminSuccess = 'Score moved.'
+      adminSuccess = 'Score ensemble updated.'
     } catch (error) {
-      adminError = error instanceof Error ? error.message : 'Unable to move score'
+      adminError = error instanceof Error ? error.message : 'Unable to update score ensemble'
     } finally {
       movingMusicFor = ''
     }
@@ -469,10 +449,10 @@
     adminSuccess = ''
 
     try {
-      await deleteMusic(adminPassword, musicId)
+      await deleteMusic(userSessionToken, musicId)
       musics = musics.filter((music) => music.id !== musicId)
       delete editPublicIds[musicId]
-      delete editDirectoryIds[musicId]
+      delete editEnsembleIds[musicId]
       await refreshAdminData()
       adminSuccess = 'Score deleted.'
     } catch (error) {
@@ -488,7 +468,7 @@
     adminSuccess = ''
 
     try {
-      const updated = await retryRender(adminPassword, musicId)
+      const updated = await retryRender(userSessionToken, musicId)
       musics = musics.map((music) => (music.id === musicId ? updated : music))
       adminSuccess = 'Render retried successfully.'
     } catch (error) {
@@ -529,7 +509,7 @@
     adminSuccess = ''
 
     try {
-      const response = await createAdminUserLoginLink(adminPassword, user.id)
+      const response = await createAdminUserLoginLink(userSessionToken, user.id)
       await showCredentialModal(`QR code for ${user.username}`, response)
       adminSuccess = `QR code ready for ${user.username}.`
     } catch (error) {
@@ -542,7 +522,7 @@
     adminSuccess = ''
 
     try {
-      const response = await createAdminUserLoginLink(adminPassword, user.id)
+      const response = await createAdminUserLoginLink(userSessionToken, user.id)
       await copyText(response.connection_url, 'admin', `Connection link copied for ${user.username}.`)
     } catch (error) {
       adminError = error instanceof Error ? error.message : 'Unable to create connection link'
@@ -563,7 +543,7 @@
       userSessionToken = authToken
       currentUser = response.user
       userSessionExpiresAt = response.session_expires_at
-      userLibrary = library.directories
+      userLibrary = library.ensembles
       userError = ''
     } catch (error) {
       clearUserSession()
@@ -694,18 +674,15 @@
   }
 
   function logoutAdmin() {
-      adminLoggedIn = false
-      adminSection = 'users'
-      adminPassword = ''
+    adminSection = 'users'
     musics = []
     adminUsers = []
     ensembles = []
-    directories = []
     editPublicIds = {}
-    editDirectoryIds = {}
+    editEnsembleIds = {}
     adminSuccess = ''
     adminError = ''
-    window.localStorage.removeItem('admin-password')
+    logoutUser()
   }
 
   function navigate(pathname: string, replace = false) {
@@ -1026,10 +1003,6 @@
     trackLevels = {}
   }
 
-  function handleAdminPasswordKeydown(event: KeyboardEvent) {
-    if (event.key === 'Enter') void handleLogin()
-  }
-
   function handleFileSelection(event: Event) {
     const target = event.currentTarget as HTMLInputElement
     selectedFile = target.files?.[0] ?? null
@@ -1125,17 +1098,40 @@
   </main>
 {:else if route.kind === 'admin'}
   <main class="page admin-shell">
-    {#if !adminLoggedIn}
+    {#if userLoading || adminLoading}
       <section class="admin-login-shell">
         <div class="music-card auth-card admin-auth-card">
           <div>
             <p class="eyebrow">Fumen • Admin</p>
             <h1>Control room</h1>
-            <p class="lede">Open the full-screen admin shell to manage users, ensembles, directories, and score permissions.</p>
+            <p class="lede">Loading your admin workspace.</p>
           </div>
-          <label class="field"><span>Admin password</span><input bind:value={adminPassword} type="password" placeholder="Hard-coded backend password" onkeydown={handleAdminPasswordKeydown} /></label>
+        </div>
+      </section>
+    {:else if !currentUser}
+      <section class="admin-login-shell">
+        <div class="music-card auth-card admin-auth-card">
+          <div>
+            <p class="eyebrow">Fumen • Admin</p>
+            <h1>Control room</h1>
+            <p class="lede">Sign in as the seeded superadmin or another admin-enabled user to open the full-screen control room.</p>
+          </div>
           <div class="actions">
-            <button class="button" disabled={adminLoading} onclick={() => void handleLogin()}>{adminLoading ? 'Checking...' : 'Open admin shell'}</button>
+            <a class="button ghost" href="/">User homepage</a>
+          </div>
+          <p class="hint">Use the backend CLI to generate a temporary connection link for the superadmin account, then open it here.</p>
+          {#if userError}<p class="status error">{userError}</p>{/if}
+        </div>
+      </section>
+    {:else if !canAccessAdmin()}
+      <section class="admin-login-shell">
+        <div class="music-card auth-card admin-auth-card">
+          <div>
+            <p class="eyebrow">Fumen • Admin</p>
+            <h1>Control room</h1>
+            <p class="lede">{currentUser.username} is signed in, but this account does not have admin access.</p>
+          </div>
+          <div class="actions">
             <a class="button ghost" href="/">User homepage</a>
           </div>
           {#if adminError}<p class="status error">{adminError}</p>{/if}
@@ -1156,11 +1152,9 @@
                 {#if adminSection === 'users'}
                   Create accounts and issue temporary device access.
                 {:else if adminSection === 'ensembles'}
-                  Assign users to rehearsal groups.
-                {:else if adminSection === 'directories'}
-                  Grant directory access to ensembles.
+                  Assign users and admin roles to rehearsal groups.
                 {:else}
-                  Upload, organize, and retire scores.
+                  Upload scores directly into ensembles and manage where they appear.
                 {/if}
               </p>
             </div>
@@ -1169,11 +1163,11 @@
             <div class="admin-topbar-stats">
               <span>{adminUsers.length} users</span>
               <span>{ensembles.length} ensembles</span>
-              <span>{directories.length} directories</span>
               <span>{musics.length} scores</span>
             </div>
+            <span class="status-pill">{currentUser.role}</span>
             <a class="button ghost" href="/">User homepage</a>
-            <button class="button ghost" onclick={logoutAdmin}>Log out</button>
+            <button class="button ghost" onclick={logoutAdmin}>Sign out</button>
           </div>
         </header>
 
@@ -1192,8 +1186,6 @@
                     <small>{adminUsers.length} total</small>
                   {:else if section.id === 'ensembles'}
                     <small>{ensembles.length} groups</small>
-                  {:else if section.id === 'directories'}
-                    <small>{directories.length} folders</small>
                   {:else if section.id === 'scores'}
                     <small>{musics.length} scores</small>
                   {:else}
@@ -1225,7 +1217,7 @@
                     <div class="music-list">
                       {#each adminUsers as user}
                         <article class="music-card">
-                          <div class="music-topline"><div><h3>{user.username}</h3><p class="subtle">Created {prettyDate(user.created_at)}</p></div><p class="status-pill">user</p></div>
+                          <div class="music-topline"><div><h3>{user.username}</h3><p class="subtle">Created {prettyDate(user.created_at)}</p></div><p class="status-pill">{user.role}</p></div>
                           <div class="actions">
                             <button class="button secondary" onclick={() => void handleAdminShowUserQr(user)}>Show QR code</button>
                             <button class="button ghost" onclick={() => void handleAdminCopyUserLink(user)}>Copy connection link</button>
@@ -1238,14 +1230,16 @@
               </section>
             {:else if adminSection === 'ensembles'}
               <section class="list-section admin-stage">
-                <p class="section-blurb admin-stage-intro">Use ensembles as the membership layer that unlocks directories for groups of users.</p>
+                <p class="section-blurb admin-stage-intro">Use ensembles as the core unit for membership, admin scope, and score access.</p>
 
                 <div class="admin-panel-stack">
-                  <div class="music-card admin-utility-card">
-                    <div class="card-header"><div><p class="meta-label">Create</p><h3>New ensemble</h3></div></div>
-                    <label class="field"><span>Ensemble name</span><input bind:value={newEnsembleName} placeholder="example: strings" /></label>
-                    <button class="button" disabled={creatingEnsemble} onclick={() => void handleCreateEnsemble()}>{creatingEnsemble ? 'Creating...' : 'Create ensemble'}</button>
-                  </div>
+                  {#if isSuperadmin()}
+                    <div class="music-card admin-utility-card">
+                      <div class="card-header"><div><p class="meta-label">Create</p><h3>New ensemble</h3></div></div>
+                      <label class="field"><span>Ensemble name</span><input bind:value={newEnsembleName} placeholder="example: strings" /></label>
+                      <button class="button" disabled={creatingEnsemble} onclick={() => void handleCreateEnsemble()}>{creatingEnsemble ? 'Creating...' : 'Create ensemble'}</button>
+                    </div>
+                  {/if}
 
                   {#if ensembles.length === 0}
                     <div class="music-card"><p class="hint">No ensembles yet.</p></div>
@@ -1253,62 +1247,27 @@
                     <div class="music-list">
                       {#each ensembles as ensemble}
                         <article class="music-card">
-                          <div class="music-topline"><div><h3>{ensemble.name}</h3><p class="subtle">Created {prettyDate(ensemble.created_at)}</p></div><p class="status-pill">{ensemble.member_user_ids.length} members</p></div>
+                          <div class="music-topline"><div><h3>{ensemble.name}</h3><p class="subtle">Created {prettyDate(ensemble.created_at)}</p></div><p class="status-pill">{ensemble.score_count} scores</p></div>
                           <div class="toggle-grid">
                             {#each adminUsers as user}
                               <label class="toggle-row">
                                 <span>{user.username}</span>
-                                <input
-                                  type="checkbox"
-                                  checked={ensemble.member_user_ids.includes(user.id)}
+                                <select
+                                  value={ensembleMemberRole(ensemble, user.id)}
                                   onchange={(event) =>
-                                    void toggleUserEnsembleMembership(
+                                    void updateUserEnsembleRole(
                                       ensemble.id,
                                       user.id,
-                                      (event.currentTarget as HTMLInputElement).checked,
+                                      (event.currentTarget as HTMLSelectElement).value as
+                                        | 'none'
+                                        | 'user'
+                                        | 'admin',
                                     )}
-                                />
-                              </label>
-                            {/each}
-                          </div>
-                        </article>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              </section>
-            {:else if adminSection === 'directories'}
-              <section class="list-section admin-stage">
-                <p class="section-blurb admin-stage-intro">Directories are the shelves scores live on. Grant each shelf to the right ensembles.</p>
-
-                <div class="admin-panel-stack">
-                  <div class="music-card admin-utility-card">
-                    <div class="card-header"><div><p class="meta-label">Create</p><h3>New directory</h3></div></div>
-                    <label class="field"><span>Directory name</span><input bind:value={newDirectoryName} placeholder="example: rehearsals" /></label>
-                    <button class="button" disabled={creatingDirectory} onclick={() => void handleCreateDirectory()}>{creatingDirectory ? 'Creating...' : 'Create directory'}</button>
-                  </div>
-
-                  {#if directories.length === 0}
-                    <div class="music-card"><p class="hint">No directories yet.</p></div>
-                  {:else}
-                    <div class="music-list">
-                      {#each directories as directory}
-                        <article class="music-card">
-                          <div class="music-topline"><div><h3>{directory.name}</h3><p class="subtle">Created {prettyDate(directory.created_at)}</p></div><p class="status-pill">{directory.score_count} scores</p></div>
-                          <div class="toggle-grid">
-                            {#each ensembles as ensemble}
-                              <label class="toggle-row">
-                                <span>{ensemble.name}</span>
-                                <input
-                                  type="checkbox"
-                                  checked={directory.permitted_ensemble_ids.includes(ensemble.id)}
-                                  onchange={(event) =>
-                                    void toggleDirectoryGrant(
-                                      directory.id,
-                                      ensemble.id,
-                                      (event.currentTarget as HTMLInputElement).checked,
-                                    )}
-                                />
+                                >
+                                  <option value="none">No access</option>
+                                  <option value="user">User</option>
+                                  <option value="admin">Admin</option>
+                                </select>
                               </label>
                             {/each}
                           </div>
@@ -1320,7 +1279,7 @@
               </section>
             {:else if adminSection === 'scores'}
               <section class="list-section admin-stage">
-                <p class="section-blurb admin-stage-intro">Upload new pieces, assign them to directories, tidy public ids, and remove old scores.</p>
+                <p class="section-blurb admin-stage-intro">Upload new pieces into ensembles, tidy public ids, and retire old scores.</p>
 
                 <div class="admin-panel-stack">
                   <div class="music-card upload-card admin-utility-card">
@@ -1328,7 +1287,7 @@
                     <div class="upload-grid">
                       <label class="field"><span>Title</span><input bind:value={uploadTitle} placeholder="Optional display title" /></label>
                       <label class="field"><span>Public id</span><input bind:value={uploadPublicId} placeholder="Optional friendly id" /></label>
-                      <label class="field"><span>Directory</span><select bind:value={uploadDirectoryId}>{#each directories as directory}<option value={directory.id}>{directory.name}</option>{/each}</select></label>
+                      <label class="field"><span>Ensemble</span><select bind:value={uploadEnsembleId}>{#each ensembles as ensemble}<option value={ensemble.id}>{ensemble.name}</option>{/each}</select></label>
                       <label class="field"><span>Stem quality</span><select bind:value={uploadQualityProfile}>{#each STEM_QUALITY_PROFILES as option}<option value={option.value}>{option.label} ({option.value === 'standard' ? '32k' : option.value === 'compact' ? '24k' : '48k'})</option>{/each}</select><small class="subtle">{STEM_QUALITY_PROFILES.find((option) => option.value === uploadQualityProfile)?.description}</small></label>
                       <label class="field file-field"><span>MSCZ file</span><input id="mscz-input" type="file" accept=".mscz" onchange={handleFileSelection} /></label>
                     </div>
@@ -1343,7 +1302,7 @@
                         <article class="music-card">
                           <div class="music-topline"><div><h3>{music.title}</h3><p class="subtle">{music.filename}</p></div><p class="status-pill">{music.midi_status} midi</p></div>
                           <div class="meta-grid">
-                            <div><p class="meta-label">Directory</p><p>{music.directory_name}</p></div>
+                            <div><p class="meta-label">Ensembles</p><p>{music.ensemble_names.join(', ') || 'None'}</p></div>
                             <div><p class="meta-label">Random link</p><a href={music.public_url} target="_blank" rel="noreferrer">{music.public_url}</a></div>
                             <div><p class="meta-label">Uploaded</p><p>{prettyDate(music.created_at)}</p></div>
                             <div><p class="meta-label">Audio export</p><p>{music.audio_status}</p></div>
@@ -1358,8 +1317,25 @@
                             <button class="button secondary" disabled={savingIdFor === music.id} onclick={() => void handleSavePublicId(music.id)}>{savingIdFor === music.id ? 'Saving...' : 'Save id'}</button>
                           </div>
                           <div class="id-row">
-                            <label class="field"><span>Directory</span><select bind:value={editDirectoryIds[music.id]}>{#each directories as directory}<option value={directory.id}>{directory.name}</option>{/each}</select></label>
-                            <button class="button secondary" disabled={movingMusicFor === music.id} onclick={() => void handleMoveMusic(music.id)}>{movingMusicFor === music.id ? 'Moving...' : 'Move score'}</button>
+                            <label class="field"><span>Primary ensemble</span><select bind:value={editEnsembleIds[music.id]}>{#each ensembles as ensemble}<option value={ensemble.id}>{ensemble.name}</option>{/each}</select></label>
+                            <button class="button secondary" disabled={movingMusicFor === music.id} onclick={() => void handleMoveMusic(music.id)}>{movingMusicFor === music.id ? 'Saving...' : 'Set primary ensemble'}</button>
+                          </div>
+                          <div class="toggle-grid">
+                            {#each ensembles as ensemble}
+                              <label class="toggle-row">
+                                <span>{ensemble.name}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={musicHasEnsemble(music, ensemble.id)}
+                                  onchange={(event) =>
+                                    void toggleMusicEnsembleAssignment(
+                                      music.id,
+                                      ensemble.id,
+                                      (event.currentTarget as HTMLInputElement).checked,
+                                    )}
+                                />
+                              </label>
+                            {/each}
                           </div>
                           <div class="actions">
                             <button class="button ghost" onclick={() => void copyText(music.public_url, 'admin', 'Random link copied.')}>Copy random link</button>
@@ -1395,6 +1371,9 @@
           {#if currentUser}
             <button class="button secondary" onclick={() => void handleShowMyQr()}>Show QR code</button>
             <button class="button ghost" onclick={() => void handleCopyMyLink()}>Copy connection link</button>
+            {#if canAccessAdmin()}
+              <a class="button ghost" href="/admin">Admin panel</a>
+            {/if}
             <button class="button ghost" onclick={logoutUser}>Log out</button>
           {:else}
             <button class="button" onclick={() => void openScanner()}>Scan QR code</button>
@@ -1412,23 +1391,23 @@
           <div class="meta-grid">
             <div><p class="meta-label">Username</p><p>{currentUser.username}</p></div>
             <div><p class="meta-label">Session until</p><p>{prettyDate(userSessionExpiresAt)}</p></div>
-            <div><p class="meta-label">Accessible directories</p><p>{userLibrary.length}</p></div>
+            <div><p class="meta-label">Accessible ensembles</p><p>{userLibrary.length}</p></div>
           </div>
           <p class="hint">Every QR code and connection link is single-use and valid for 5 minutes.</p>
           {#if userError}<p class="status error">{userError}</p>{/if}
           {#if userSuccess}<p class="status success">{userSuccess}</p>{/if}
         </div>
         <div class="music-card">
-          <div class="card-header"><div><p class="meta-label">Library</p><h2>Your directories</h2></div></div>
+          <div class="card-header"><div><p class="meta-label">Library</p><h2>Your ensembles</h2></div></div>
           {#if userLibrary.length === 0}
-            <p class="hint">No directories are available for your ensembles yet.</p>
+            <p class="hint">No scores are available for your ensembles yet.</p>
           {:else}
             <div class="directory-stack">
-              {#each userLibrary as directory}
+              {#each userLibrary as ensemble}
                 <section class="directory-panel">
-                  <div class="music-topline"><div><h3>{directory.name}</h3><p class="subtle">{directory.scores.length} scores</p></div></div>
+                  <div class="music-topline"><div><h3>{ensemble.name}</h3><p class="subtle">{ensemble.scores.length} scores</p></div></div>
                   <div class="score-link-list">
-                    {#each directory.scores as score}
+                    {#each ensemble.scores as score}
                       <a class="score-link-row" href={score.public_url}>
                         <span>{score.title}</span>
                         <small>{score.filename}</small>
@@ -1495,4 +1474,3 @@
     </div>
   </div>
 {/if}
-

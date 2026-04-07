@@ -17,19 +17,21 @@ use chrono::{Duration, SecondsFormat, Utc};
 use config::{AppConfig, StorageConfig};
 use flate2::{Compression, write::GzEncoder};
 use models::{
-    AdminDirectoryResponse, AdminEnsembleResponse, AdminMusicResponse, AuthSessionResponse,
-    CreateDirectoryRequest, CreateEnsembleRequest, CreateUserRequest, CurrentUserResponse,
-    DirectoryEnsemblePermissionRecord, DirectoryRecord, EnsembleRecord, ExchangeLoginTokenRequest,
-    ExportMixerGainsRequest, LoginLinkResponse, LoginRequest, LoginResponse, MoveMusicRequest,
-    MusicRecord, PublicMusicResponse, StemInfo, StemRecord, UpdateMusicRequest, UserLibraryResponse,
-    UserLibraryDirectoryResponse, UserLibraryScoreResponse, UserEnsembleMembershipRecord,
-    UserRecord, UserResponse, UserSessionRecord,
+    AdminEnsembleResponse, AdminMusicResponse, AuthSessionResponse, CreateEnsembleRequest,
+    CreateUserRequest, CurrentUserResponse, EnsembleMemberResponse, EnsembleRecord,
+    EnsembleSummaryRecord, ExchangeLoginTokenRequest, ExportMixerGainsRequest,
+    LoginLinkResponse, MoveMusicRequest, MusicEnsembleLinkRecord, MusicRecord,
+    PublicMusicResponse, StemInfo, StemRecord, UpdateEnsembleMemberRequest,
+    UpdateMusicRequest, UserLibraryEnsembleResponse, UserLibraryResponse,
+    UserLibraryScoreResponse, UserEnsembleMembershipRecord, UserRecord, UserResponse,
+    UserSessionRecord,
 };
 use rand::{Rng, distr::Alphanumeric};
 use sqlx::{
     PgPool,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::str::FromStr;
 use std::{net::SocketAddr, path::PathBuf};
@@ -47,8 +49,47 @@ use uuid::Uuid;
 
 const LOGIN_LINK_TTL_MINUTES: i64 = 5;
 const USER_SESSION_TTL_DAYS: i64 = 30;
-const DEFAULT_DIRECTORY_ID: &str = "general";
-const DEFAULT_DIRECTORY_NAME: &str = "General";
+const DEFAULT_ENSEMBLE_ID: &str = "general";
+const DEFAULT_ENSEMBLE_NAME: &str = "General";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AppRole {
+    Superadmin,
+    Admin,
+    User,
+}
+
+impl AppRole {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Superadmin => "superadmin",
+            Self::Admin => "admin",
+            Self::User => "user",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AuthContext {
+    user: UserRecord,
+    session: UserSessionRecord,
+    role: AppRole,
+    managed_ensemble_ids: HashSet<String>,
+}
+
+impl AuthContext {
+    fn is_superadmin(&self) -> bool {
+        self.role == AppRole::Superadmin
+    }
+
+    fn is_admin(&self) -> bool {
+        self.role != AppRole::User
+    }
+
+    fn can_manage_ensemble(&self, ensemble_id: &str) -> bool {
+        self.is_superadmin() || self.managed_ensemble_ids.contains(ensemble_id)
+    }
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -133,7 +174,6 @@ async fn main() -> Result<()> {
         .init();
 
     let config = AppConfig::from_env()?;
-    let cors_layer = build_cors_layer(&config)?;
     match &config.storage {
         StorageConfig::Local { root } => {
             info!("using local storage at {}", root.display());
@@ -145,9 +185,11 @@ async fn main() -> Result<()> {
 
     let db_admin = open_database_pool(&config.database_url_admin, 1, "admin").await?;
     ensure_schema(&db_admin).await?;
+    let superadmin = ensure_superadmin_user(&db_admin, &config).await?;
     let db_rw = open_database_pool(&config.database_url, 5, "read-write").await?;
     let db_ro = open_database_pool(&config.database_url_read_only, 5, "read-only").await?;
     let storage = Storage::new(&config).await?;
+    let cors_layer = build_cors_layer(&config)?;
 
     let state = AppState {
         config,
@@ -157,7 +199,6 @@ async fn main() -> Result<()> {
     };
     let api_routes = Router::new()
         .route("/health", get(health))
-        .route("/admin/login", post(admin_login))
         .route("/admin/users", get(admin_list_users).post(admin_create_user))
         .route(
             "/admin/users/{id}/login-link",
@@ -172,19 +213,15 @@ async fn main() -> Result<()> {
             post(admin_add_user_to_ensemble).delete(admin_remove_user_from_ensemble),
         )
         .route(
-            "/admin/directories",
-            get(admin_list_directories).post(admin_create_directory),
-        )
-        .route(
-            "/admin/directories/{id}/ensembles/{ensemble_id}",
-            post(admin_grant_directory_to_ensemble).delete(admin_revoke_directory_from_ensemble),
-        )
-        .route(
             "/admin/musics",
             get(admin_list_musics).post(admin_upload_music),
         )
         .route("/admin/musics/{id}", patch(admin_update_music))
         .route("/admin/musics/{id}/move", post(admin_move_music))
+        .route(
+            "/admin/musics/{id}/ensembles/{ensemble_id}",
+            post(admin_add_music_to_ensemble).delete(admin_remove_music_from_ensemble),
+        )
         .route("/admin/musics/{id}/delete", post(admin_delete_music))
         .route("/admin/musics/{id}/gains", get(admin_export_score_gains))
         .route(
@@ -231,6 +268,10 @@ async fn main() -> Result<()> {
         .with_context(|| format!("invalid BIND_ADDRESS '{}'", state.config.bind_address))?;
 
     info!("listening on http://{}", address);
+    info!(
+        "superadmin account ready: {} ({})",
+        superadmin.username, superadmin.id
+    );
     let listener = tokio::net::TcpListener::bind(address).await?;
     axum::serve(listener, app).await?;
 
@@ -326,7 +367,8 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            is_superadmin BOOLEAN NOT NULL DEFAULT FALSE
         )
         "#,
     )
@@ -350,6 +392,7 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
         CREATE TABLE IF NOT EXISTS user_ensemble_memberships (
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             ensemble_id TEXT NOT NULL REFERENCES ensembles(id) ON DELETE CASCADE,
+            role TEXT NOT NULL DEFAULT 'user',
             PRIMARY KEY (user_id, ensemble_id)
         )
         "#,
@@ -363,6 +406,18 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
             directory_id TEXT NOT NULL REFERENCES directories(id) ON DELETE CASCADE,
             ensemble_id TEXT NOT NULL REFERENCES ensembles(id) ON DELETE CASCADE,
             PRIMARY KEY (directory_id, ensemble_id)
+        )
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS music_ensemble_links (
+            music_id TEXT NOT NULL REFERENCES musics(id) ON DELETE CASCADE,
+            ensemble_id TEXT NOT NULL REFERENCES ensembles(id) ON DELETE CASCADE,
+            PRIMARY KEY (music_id, ensemble_id)
         )
         "#,
     )
@@ -418,20 +473,33 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
         ),
     )
     .await?;
+    ensure_stems_column(db, "size_bytes", "BIGINT NOT NULL DEFAULT 0").await?;
+    ensure_stems_column(db, "drum_map_json", "TEXT").await?;
     ensure_music_column(
         db,
         "directory_id",
-        &format!("TEXT NOT NULL DEFAULT '{}'", DEFAULT_DIRECTORY_ID),
+        &format!("TEXT NOT NULL DEFAULT '{}'", DEFAULT_ENSEMBLE_ID),
     )
     .await?;
-    ensure_stems_column(db, "size_bytes", "BIGINT NOT NULL DEFAULT 0").await?;
-    ensure_stems_column(db, "drum_map_json", "TEXT").await?;
+    ensure_user_column(db, "is_superadmin", "BOOLEAN NOT NULL DEFAULT FALSE").await?;
+    ensure_user_ensemble_membership_column(db, "role", "TEXT NOT NULL DEFAULT 'user'").await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS users_single_superadmin_idx ON users (is_superadmin) WHERE is_superadmin = TRUE",
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "UPDATE user_ensemble_memberships SET role = 'user' WHERE role IS NULL OR role NOT IN ('user', 'admin')",
+    )
+    .execute(db)
+    .await?;
 
-    ensure_default_directory(db).await?;
+    ensure_default_ensemble(db).await?;
     sqlx::query("UPDATE musics SET directory_id = $1 WHERE directory_id IS NULL OR directory_id = ''")
-        .bind(DEFAULT_DIRECTORY_ID)
+        .bind(DEFAULT_ENSEMBLE_ID)
         .execute(db)
         .await?;
+    backfill_music_ensemble_links(db).await?;
 
     Ok(())
 }
@@ -442,26 +510,120 @@ async fn ensure_music_column(db: &PgPool, name: &str, definition: &str) -> Resul
     Ok(())
 }
 
+async fn ensure_user_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
+    let query = format!("ALTER TABLE users ADD COLUMN IF NOT EXISTS {name} {definition}");
+    sqlx::query(&query).execute(db).await?;
+    Ok(())
+}
+
+async fn ensure_user_ensemble_membership_column(
+    db: &PgPool,
+    name: &str,
+    definition: &str,
+) -> Result<()> {
+    let query =
+        format!("ALTER TABLE user_ensemble_memberships ADD COLUMN IF NOT EXISTS {name} {definition}");
+    sqlx::query(&query).execute(db).await?;
+    Ok(())
+}
+
 async fn ensure_stems_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
     let query = format!("ALTER TABLE stems ADD COLUMN IF NOT EXISTS {name} {definition}");
     sqlx::query(&query).execute(db).await?;
     Ok(())
 }
 
-async fn ensure_default_directory(db: &PgPool) -> Result<()> {
+async fn ensure_default_ensemble(db: &PgPool) -> Result<()> {
     sqlx::query(
         r#"
-        INSERT INTO directories (id, name, created_at)
+        INSERT INTO ensembles (id, name, created_at)
         VALUES ($1, $2, $3)
         ON CONFLICT (id) DO NOTHING
         "#,
     )
-    .bind(DEFAULT_DIRECTORY_ID)
-    .bind(DEFAULT_DIRECTORY_NAME)
+    .bind(DEFAULT_ENSEMBLE_ID)
+    .bind(DEFAULT_ENSEMBLE_NAME)
     .bind(utc_now_string())
     .execute(db)
     .await?;
     Ok(())
+}
+
+async fn backfill_music_ensemble_links(db: &PgPool) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO music_ensemble_links (music_id, ensemble_id)
+        SELECT m.id, dep.ensemble_id
+        FROM musics m
+        JOIN directory_ensemble_permissions dep ON dep.directory_id = m.directory_id
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO music_ensemble_links (music_id, ensemble_id)
+        SELECT m.id, $1
+        FROM musics m
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM music_ensemble_links mel
+            WHERE mel.music_id = m.id
+        )
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(DEFAULT_ENSEMBLE_ID)
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
+async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<UserRecord> {
+    if let Some(existing) = sqlx::query_as::<_, UserRecord>(
+        "SELECT id, username, created_at, is_superadmin FROM users WHERE is_superadmin = TRUE LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?
+    {
+        return Ok(existing);
+    }
+
+    let base_username = normalize_username(&config.superadmin_username)
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+    let mut username = base_username.clone();
+
+    while sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = $1")
+        .bind(&username)
+        .fetch_optional(db)
+        .await?
+        .is_some()
+    {
+        username = format!("{base_username}-{}", generate_auth_token(6).to_ascii_lowercase());
+    }
+
+    let record = UserRecord {
+        id: Uuid::new_v4().to_string(),
+        username,
+        created_at: utc_now_string(),
+        is_superadmin: true,
+    };
+
+    sqlx::query(
+        "INSERT INTO users (id, username, created_at, is_superadmin) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(&record.id)
+    .bind(&record.username)
+    .bind(&record.created_at)
+    .bind(record.is_superadmin)
+    .execute(db)
+    .await?;
+
+    info!("created superadmin user '{}'", record.username);
+    Ok(record)
 }
 
 async fn root_message() -> impl IntoResponse {
@@ -474,30 +636,24 @@ async fn health() -> impl IntoResponse {
     Json(serde_json::json!({ "ok": true }))
 }
 
-async fn admin_login(
-    State(state): State<AppState>,
-    Json(payload): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, AppError> {
-    if payload.password != state.config.admin_password {
-        return Err(AppError::unauthorized("Invalid admin password"));
-    }
-
-    Ok(Json(LoginResponse { ok: true }))
-}
-
 async fn admin_list_users(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<UserResponse>>, AppError> {
-    require_admin(&headers, &state.config)?;
+    require_admin_context(&state, &headers).await?;
 
     let rows = sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at FROM users ORDER BY username ASC",
+        "SELECT id, username, created_at, is_superadmin FROM users ORDER BY username ASC",
     )
     .fetch_all(&state.db_rw)
     .await?;
 
-    Ok(Json(rows.into_iter().map(user_record_to_response).collect()))
+    let mut users = Vec::with_capacity(rows.len());
+    for row in rows {
+        users.push(user_record_to_response(&state.db_rw, row).await?);
+    }
+
+    Ok(Json(users))
 }
 
 async fn admin_create_user(
@@ -505,7 +661,7 @@ async fn admin_create_user(
     headers: HeaderMap,
     Json(payload): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, AppError> {
-    require_admin(&headers, &state.config)?;
+    require_admin_context(&state, &headers).await?;
 
     let username = normalize_username(&payload.username)?;
     if find_user_by_username(&state.db_rw, &username).await?.is_some() {
@@ -516,16 +672,18 @@ async fn admin_create_user(
         id: Uuid::new_v4().to_string(),
         username,
         created_at: utc_now_string(),
+        is_superadmin: false,
     };
 
-    sqlx::query("INSERT INTO users (id, username, created_at) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO users (id, username, created_at, is_superadmin) VALUES ($1, $2, $3, $4)")
         .bind(&record.id)
         .bind(&record.username)
         .bind(&record.created_at)
+        .bind(record.is_superadmin)
         .execute(&state.db_rw)
         .await?;
 
-    Ok(Json(user_record_to_response(record)))
+    Ok(Json(user_record_to_response(&state.db_rw, record).await?))
 }
 
 async fn admin_create_user_login_link(
@@ -533,20 +691,20 @@ async fn admin_create_user_login_link(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<LoginLinkResponse>, AppError> {
-    require_admin(&headers, &state.config)?;
+    require_admin_context(&state, &headers).await?;
 
     let user = find_user_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("User not found"))?;
 
-    Ok(Json(create_login_link_response(&state, &user.id).await?))
+    Ok(Json(create_login_link(&state.db_rw, &state.config, &user.id).await?))
 }
 
 async fn admin_list_ensembles(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<AdminEnsembleResponse>>, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
 
     let ensembles = sqlx::query_as::<_, EnsembleRecord>(
         "SELECT id, name, created_at FROM ensembles ORDER BY name ASC",
@@ -554,22 +712,32 @@ async fn admin_list_ensembles(
     .fetch_all(&state.db_rw)
     .await?;
     let memberships = fetch_user_ensemble_memberships(&state.db_rw).await?;
-    let mut member_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let score_counts = fetch_ensemble_score_counts(&state.db_rw).await?;
+    let mut member_map: HashMap<String, Vec<EnsembleMemberResponse>> = HashMap::new();
     for membership in memberships {
+        if !auth.is_superadmin() && !auth.can_manage_ensemble(&membership.ensemble_id) {
+            continue;
+        }
         member_map
-            .entry(membership.ensemble_id)
+            .entry(membership.ensemble_id.clone())
             .or_default()
-            .push(membership.user_id);
+            .push(EnsembleMemberResponse {
+                user_id: membership.user_id,
+                role: membership.role,
+            });
     }
+    let mut score_count_map: HashMap<String, i64> = score_counts.into_iter().collect();
 
     Ok(Json(
         ensembles
             .into_iter()
+            .filter(|ensemble| auth.is_superadmin() || auth.can_manage_ensemble(&ensemble.id))
             .map(|ensemble| AdminEnsembleResponse {
                 id: ensemble.id.clone(),
                 name: ensemble.name,
                 created_at: ensemble.created_at,
-                member_user_ids: member_map.remove(&ensemble.id).unwrap_or_default(),
+                members: member_map.remove(&ensemble.id).unwrap_or_default(),
+                score_count: score_count_map.remove(&ensemble.id).unwrap_or(0),
             })
             .collect(),
     ))
@@ -580,7 +748,8 @@ async fn admin_create_ensemble(
     headers: HeaderMap,
     Json(payload): Json<CreateEnsembleRequest>,
 ) -> Result<Json<AdminEnsembleResponse>, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
+    require_superadmin(&auth)?;
 
     let name = normalize_name(&payload.name, "Ensemble names", 2, 64)?;
     if find_ensemble_by_name(&state.db_rw, &name).await?.is_some() {
@@ -604,7 +773,8 @@ async fn admin_create_ensemble(
         id: record.id,
         name: record.name,
         created_at: record.created_at,
-        member_user_ids: Vec::new(),
+        members: Vec::new(),
+        score_count: 0,
     }))
 }
 
@@ -612,15 +782,25 @@ async fn admin_add_user_to_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, user_id)): Path<(String, String)>,
+    Json(payload): Json<UpdateEnsembleMemberRequest>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
     ensure_membership_entities_exist(&state.db_rw, &id, &user_id).await?;
+    ensure_can_manage_ensemble(&auth, &id)?;
+
+    let role = payload.role.trim();
+    if role != "user" && role != "admin" {
+        return Err(AppError::bad_request(
+            "Membership role must be either 'user' or 'admin'",
+        ));
+    }
 
     sqlx::query(
-        "INSERT INTO user_ensemble_memberships (user_id, ensemble_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        "INSERT INTO user_ensemble_memberships (user_id, ensemble_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, ensemble_id) DO UPDATE SET role = EXCLUDED.role",
     )
     .bind(&user_id)
     .bind(&id)
+    .bind(role)
     .execute(&state.db_rw)
     .await?;
 
@@ -632,7 +812,8 @@ async fn admin_remove_user_from_ensemble(
     headers: HeaderMap,
     Path((id, user_id)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
+    ensure_can_manage_ensemble(&auth, &id)?;
 
     sqlx::query("DELETE FROM user_ensemble_memberships WHERE user_id = $1 AND ensemble_id = $2")
         .bind(&user_id)
@@ -643,97 +824,17 @@ async fn admin_remove_user_from_ensemble(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_list_directories(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Vec<AdminDirectoryResponse>>, AppError> {
-    require_admin(&headers, &state.config)?;
-
-    let directories = sqlx::query_as::<_, DirectoryRecord>(
-        "SELECT id, name, created_at FROM directories ORDER BY name ASC",
-    )
-    .fetch_all(&state.db_rw)
-    .await?;
-    let permissions = fetch_directory_permissions(&state.db_rw).await?;
-    let counts = sqlx::query_as::<_, DirectoryScoreCountRow>(
-        "SELECT directory_id, COUNT(*)::BIGINT AS score_count FROM musics GROUP BY directory_id",
-    )
-    .fetch_all(&state.db_rw)
-    .await?;
-
-    let mut permission_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-    for permission in permissions {
-        permission_map
-            .entry(permission.directory_id)
-            .or_default()
-            .push(permission.ensemble_id);
-    }
-    let mut count_map: std::collections::HashMap<String, i64> = counts
-        .into_iter()
-        .map(|count| (count.directory_id, count.score_count))
-        .collect();
-
-    Ok(Json(
-        directories
-            .into_iter()
-            .map(|directory| AdminDirectoryResponse {
-                id: directory.id.clone(),
-                name: directory.name,
-                created_at: directory.created_at,
-                permitted_ensemble_ids: permission_map.remove(&directory.id).unwrap_or_default(),
-                score_count: count_map.remove(&directory.id).unwrap_or(0),
-            })
-            .collect(),
-    ))
-}
-
-async fn admin_create_directory(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<CreateDirectoryRequest>,
-) -> Result<Json<AdminDirectoryResponse>, AppError> {
-    require_admin(&headers, &state.config)?;
-
-    let name = normalize_name(&payload.name, "Directory names", 2, 64)?;
-    if find_directory_by_name(&state.db_rw, &name).await?.is_some() {
-        return Err(AppError::conflict("That directory already exists"));
-    }
-
-    let record = DirectoryRecord {
-        id: slugify_name(&name),
-        name,
-        created_at: utc_now_string(),
-    };
-    if find_directory_by_id(&state.db_rw, &record.id).await?.is_some() {
-        return Err(AppError::conflict("A similar directory id already exists"));
-    }
-
-    sqlx::query("INSERT INTO directories (id, name, created_at) VALUES ($1, $2, $3)")
-        .bind(&record.id)
-        .bind(&record.name)
-        .bind(&record.created_at)
-        .execute(&state.db_rw)
-        .await?;
-
-    Ok(Json(AdminDirectoryResponse {
-        id: record.id,
-        name: record.name,
-        created_at: record.created_at,
-        permitted_ensemble_ids: Vec::new(),
-        score_count: 0,
-    }))
-}
-
-async fn admin_grant_directory_to_ensemble(
+async fn admin_add_music_to_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, ensemble_id)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&headers, &state.config)?;
-    ensure_directory_and_ensemble_exist(&state.db_rw, &id, &ensemble_id).await?;
+    let auth = require_admin_context(&state, &headers).await?;
+    ensure_music_and_ensemble_exist(&state.db_rw, &id, &ensemble_id).await?;
+    ensure_can_manage_music_and_target_ensemble(&state.db_rw, &auth, &id, &ensemble_id).await?;
 
     sqlx::query(
-        "INSERT INTO directory_ensemble_permissions (directory_id, ensemble_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        "INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(&id)
     .bind(&ensemble_id)
@@ -743,20 +844,26 @@ async fn admin_grant_directory_to_ensemble(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_revoke_directory_from_ensemble(
+async fn admin_remove_music_from_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, ensemble_id)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
+    ensure_can_manage_music_and_target_ensemble(&state.db_rw, &auth, &id, &ensemble_id).await?;
 
-    sqlx::query(
-        "DELETE FROM directory_ensemble_permissions WHERE directory_id = $1 AND ensemble_id = $2",
-    )
-    .bind(&id)
-    .bind(&ensemble_id)
-    .execute(&state.db_rw)
-    .await?;
+    let linked_ensemble_ids = fetch_music_ensemble_ids(&state.db_rw, &id).await?;
+    if linked_ensemble_ids.len() <= 1 && linked_ensemble_ids.iter().any(|value| value == &ensemble_id) {
+        return Err(AppError::bad_request(
+            "A score must belong to at least one ensemble",
+        ));
+    }
+
+    sqlx::query("DELETE FROM music_ensemble_links WHERE music_id = $1 AND ensemble_id = $2")
+        .bind(&id)
+        .bind(&ensemble_id)
+        .execute(&state.db_rw)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -768,8 +875,8 @@ struct StemsTotalRow {
 }
 
 #[derive(sqlx::FromRow)]
-struct DirectoryScoreCountRow {
-    directory_id: String,
+struct EnsembleScoreCountRow {
+    ensemble_id: String,
     score_count: i64,
 }
 
@@ -781,27 +888,6 @@ async fn fetch_stems_total(db: &PgPool, music_id: &str) -> i64 {
     .fetch_one(db)
     .await
     .unwrap_or(0)
-}
-
-async fn find_directory_by_id(db: &PgPool, id: &str) -> Result<Option<DirectoryRecord>, AppError> {
-    Ok(sqlx::query_as::<_, DirectoryRecord>(
-        "SELECT id, name, created_at FROM directories WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(db)
-    .await?)
-}
-
-async fn find_directory_by_name(
-    db: &PgPool,
-    name: &str,
-) -> Result<Option<DirectoryRecord>, AppError> {
-    Ok(sqlx::query_as::<_, DirectoryRecord>(
-        "SELECT id, name, created_at FROM directories WHERE name = $1",
-    )
-    .bind(name)
-    .fetch_optional(db)
-    .await?)
 }
 
 async fn find_ensemble_by_id(db: &PgPool, id: &str) -> Result<Option<EnsembleRecord>, AppError> {
@@ -826,25 +912,95 @@ async fn fetch_user_ensemble_memberships(
     db: &PgPool,
 ) -> Result<Vec<UserEnsembleMembershipRecord>, AppError> {
     Ok(sqlx::query_as::<_, UserEnsembleMembershipRecord>(
-        "SELECT user_id, ensemble_id FROM user_ensemble_memberships",
+        "SELECT user_id, ensemble_id, role FROM user_ensemble_memberships",
     )
     .fetch_all(db)
     .await?)
 }
 
-async fn fetch_directory_permissions(
+async fn fetch_music_ensemble_links(
     db: &PgPool,
-) -> Result<Vec<DirectoryEnsemblePermissionRecord>, AppError> {
-    Ok(sqlx::query_as::<_, DirectoryEnsemblePermissionRecord>(
-        "SELECT directory_id, ensemble_id FROM directory_ensemble_permissions",
+) -> Result<Vec<MusicEnsembleLinkRecord>, AppError> {
+    Ok(sqlx::query_as::<_, MusicEnsembleLinkRecord>(
+        "SELECT music_id, ensemble_id FROM music_ensemble_links",
     )
     .fetch_all(db)
     .await?)
+}
+
+async fn fetch_music_ensemble_ids(db: &PgPool, music_id: &str) -> Result<Vec<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT ensemble_id FROM music_ensemble_links WHERE music_id = $1 ORDER BY ensemble_id ASC",
+    )
+    .bind(music_id)
+    .fetch_all(db)
+    .await?)
+}
+
+async fn fetch_ensemble_summaries(db: &PgPool) -> Result<HashMap<String, String>, AppError> {
+    Ok(sqlx::query_as::<_, EnsembleSummaryRecord>("SELECT id, name FROM ensembles ORDER BY name ASC")
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .map(|ensemble| (ensemble.id, ensemble.name))
+        .collect())
+}
+
+async fn fetch_ensemble_score_counts(db: &PgPool) -> Result<Vec<(String, i64)>, AppError> {
+    Ok(sqlx::query_as::<_, EnsembleScoreCountRow>(
+        "SELECT ensemble_id, COUNT(DISTINCT music_id)::BIGINT AS score_count FROM music_ensemble_links GROUP BY ensemble_id",
+    )
+    .fetch_all(db)
+    .await?
+    .into_iter()
+    .map(|row| (row.ensemble_id, row.score_count))
+    .collect())
+}
+
+fn build_music_ensemble_maps(
+    links: Vec<MusicEnsembleLinkRecord>,
+    ensemble_names: &HashMap<String, String>,
+) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
+    let mut id_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut name_map: HashMap<String, Vec<String>> = HashMap::new();
+
+    for link in links {
+        id_map
+            .entry(link.music_id.clone())
+            .or_default()
+            .push(link.ensemble_id.clone());
+        if let Some(name) = ensemble_names.get(&link.ensemble_id) {
+            name_map.entry(link.music_id).or_default().push(name.clone());
+        }
+    }
+
+    for values in id_map.values_mut() {
+        values.sort();
+    }
+    for values in name_map.values_mut() {
+        values.sort();
+    }
+
+    (id_map, name_map)
+}
+
+async fn ensemble_metadata_for_music(
+    db: &PgPool,
+    music_id: &str,
+) -> Result<(Vec<String>, Vec<String>), AppError> {
+    let ensemble_ids = fetch_music_ensemble_ids(db, music_id).await?;
+    let ensemble_name_map = fetch_ensemble_summaries(db).await?;
+    let ensemble_names = ensemble_ids
+        .iter()
+        .filter_map(|ensemble_id| ensemble_name_map.get(ensemble_id).cloned())
+        .collect::<Vec<_>>();
+
+    Ok((ensemble_ids, ensemble_names))
 }
 
 async fn find_user_by_id(db: &PgPool, id: &str) -> Result<Option<UserRecord>, AppError> {
     Ok(sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at FROM users WHERE id = $1",
+        "SELECT id, username, created_at, is_superadmin FROM users WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(db)
@@ -856,9 +1012,24 @@ async fn find_user_by_username(
     username: &str,
 ) -> Result<Option<UserRecord>, AppError> {
     Ok(sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at FROM users WHERE username = $1",
+        "SELECT id, username, created_at, is_superadmin FROM users WHERE username = $1",
     )
     .bind(username)
+    .fetch_optional(db)
+    .await?)
+}
+
+async fn find_user_by_lookup(db: &PgPool, lookup: &str) -> Result<Option<UserRecord>, AppError> {
+    Ok(sqlx::query_as::<_, UserRecord>(
+        r#"
+        SELECT id, username, created_at, is_superadmin
+        FROM users
+        WHERE username = $1 OR id = $1
+        ORDER BY CASE WHEN username = $1 THEN 0 ELSE 1 END
+        LIMIT 1
+        "#,
+    )
+    .bind(lookup)
     .fetch_optional(db)
     .await?)
 }
@@ -907,8 +1078,166 @@ async fn require_user_session(
     Ok((user, session))
 }
 
-async fn create_login_link_response(
+async fn build_auth_context(
     state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AuthContext, AppError> {
+    let (user, session) = require_user_session(state, headers).await?;
+    let managed_ensemble_ids = fetch_managed_ensemble_ids(&state.db_rw, &user.id)
+        .await?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let role = if user.is_superadmin {
+        AppRole::Superadmin
+    } else if managed_ensemble_ids.is_empty() {
+        AppRole::User
+    } else {
+        AppRole::Admin
+    };
+
+    Ok(AuthContext {
+        user,
+        session,
+        role,
+        managed_ensemble_ids,
+    })
+}
+
+async fn require_admin_context(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AuthContext, AppError> {
+    let auth = build_auth_context(state, headers).await?;
+    if !auth.is_admin() {
+        return Err(AppError::unauthorized("Admin access is required"));
+    }
+    Ok(auth)
+}
+
+fn require_superadmin(auth: &AuthContext) -> Result<(), AppError> {
+    if auth.is_superadmin() {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized(
+            "Only the superadmin can perform this action",
+        ))
+    }
+}
+
+fn ensure_can_manage_ensemble(auth: &AuthContext, ensemble_id: &str) -> Result<(), AppError> {
+    if auth.can_manage_ensemble(ensemble_id) {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized(
+            "You can only manage ensembles where you are an admin",
+        ))
+    }
+}
+
+async fn fetch_managed_ensemble_ids(db: &PgPool, user_id: &str) -> Result<Vec<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT ensemble_id FROM user_ensemble_memberships WHERE user_id = $1 AND role = 'admin' ORDER BY ensemble_id ASC",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?)
+}
+
+async fn user_record_to_response(
+    db: &PgPool,
+    record: UserRecord,
+) -> Result<UserResponse, AppError> {
+    let managed_ensemble_ids = fetch_managed_ensemble_ids(db, &record.id).await?;
+    let role = if record.is_superadmin {
+        AppRole::Superadmin
+    } else if managed_ensemble_ids.is_empty() {
+        AppRole::User
+    } else {
+        AppRole::Admin
+    };
+
+    Ok(UserResponse {
+        id: record.id,
+        username: record.username,
+        created_at: record.created_at,
+        role: role.as_str().to_owned(),
+        managed_ensemble_ids,
+    })
+}
+
+fn auth_context_to_user_response(auth: &AuthContext) -> UserResponse {
+    let mut managed_ensemble_ids = auth
+        .managed_ensemble_ids
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    managed_ensemble_ids.sort();
+
+    UserResponse {
+        id: auth.user.id.clone(),
+        username: auth.user.username.clone(),
+        created_at: auth.user.created_at.clone(),
+        role: auth.role.as_str().to_owned(),
+        managed_ensemble_ids,
+    }
+}
+
+async fn can_manage_music(db: &PgPool, auth: &AuthContext, music_id: &str) -> Result<bool, AppError> {
+    if auth.is_superadmin() {
+        return Ok(true);
+    }
+
+    let ensemble_ids = fetch_music_ensemble_ids(db, music_id).await?;
+    if ensemble_ids.is_empty() {
+        return Ok(false);
+    }
+
+    Ok(ensemble_ids
+        .iter()
+        .all(|ensemble_id| auth.managed_ensemble_ids.contains(ensemble_id)))
+}
+
+async fn ensure_can_manage_music(
+    db: &PgPool,
+    auth: &AuthContext,
+    music_id: &str,
+) -> Result<(), AppError> {
+    if can_manage_music(db, auth, music_id).await? {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized(
+            "You can only manage scores for ensembles you administer",
+        ))
+    }
+}
+
+async fn ensure_music_and_ensemble_exist(
+    db: &PgPool,
+    music_id: &str,
+    ensemble_id: &str,
+) -> Result<(), AppError> {
+    if find_music_by_id(db, music_id).await?.is_none() {
+        return Err(AppError::not_found("Music not found"));
+    }
+    if find_ensemble_by_id(db, ensemble_id).await?.is_none() {
+        return Err(AppError::not_found("Ensemble not found"));
+    }
+    Ok(())
+}
+
+async fn ensure_can_manage_music_and_target_ensemble(
+    db: &PgPool,
+    auth: &AuthContext,
+    music_id: &str,
+    ensemble_id: &str,
+) -> Result<(), AppError> {
+    ensure_can_manage_ensemble(auth, ensemble_id)?;
+    ensure_can_manage_music(db, auth, music_id).await
+}
+
+async fn create_login_link(
+    db: &PgPool,
+    config: &AppConfig,
     user_id: &str,
 ) -> Result<LoginLinkResponse, AppError> {
     let now = Utc::now();
@@ -927,11 +1256,11 @@ async fn create_login_link_response(
     .bind(&token)
     .bind(&created_at)
     .bind(&expires_at)
-    .execute(&state.db_rw)
+    .execute(db)
     .await?;
 
     Ok(LoginLinkResponse {
-        connection_url: state.config.connection_url_for(&token),
+        connection_url: config.connection_url_for(&token),
         expires_at,
     })
 }
@@ -950,21 +1279,77 @@ async fn find_public_music_record(
 async fn find_accessible_music_for_user(
     db: &PgPool,
     user_id: &str,
-) -> Result<Vec<MusicRecord>, AppError> {
-    Ok(sqlx::query_as::<_, MusicRecord>(
+) -> Result<Vec<(MusicRecord, String, String)>, AppError> {
+    Ok(sqlx::query_as::<_, UserAccessibleMusicRow>(
         r#"
-        SELECT DISTINCT m.id, m.title, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, m.directory_id, COALESCE(d.name, 'General') AS directory_name
+        SELECT DISTINCT m.id, m.title, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, mel.ensemble_id, e.name AS ensemble_name
         FROM musics m
-        JOIN directories d ON d.id = m.directory_id
-        JOIN directory_ensemble_permissions dep ON dep.directory_id = d.id
-        JOIN user_ensemble_memberships uem ON uem.ensemble_id = dep.ensemble_id
+        JOIN music_ensemble_links mel ON mel.music_id = m.id
+        JOIN user_ensemble_memberships uem ON uem.ensemble_id = mel.ensemble_id
+        JOIN ensembles e ON e.id = mel.ensemble_id
         WHERE uem.user_id = $1
-        ORDER BY d.name ASC, m.title ASC
+        ORDER BY e.name ASC, m.title ASC
         "#,
     )
     .bind(user_id)
     .fetch_all(db)
-    .await?)
+    .await?
+    .into_iter()
+    .map(|row| {
+        (
+            MusicRecord {
+                id: row.id,
+                title: row.title,
+                filename: row.filename,
+                content_type: row.content_type,
+                object_key: row.object_key,
+                audio_object_key: row.audio_object_key,
+                audio_status: row.audio_status,
+                audio_error: row.audio_error,
+                midi_object_key: row.midi_object_key,
+                midi_status: row.midi_status,
+                midi_error: row.midi_error,
+                musicxml_object_key: row.musicxml_object_key,
+                musicxml_status: row.musicxml_status,
+                musicxml_error: row.musicxml_error,
+                stems_status: row.stems_status,
+                stems_error: row.stems_error,
+                public_token: row.public_token,
+                public_id: row.public_id,
+                quality_profile: row.quality_profile,
+                created_at: row.created_at,
+            },
+            row.ensemble_id,
+            row.ensemble_name,
+        )
+    })
+    .collect())
+}
+
+#[derive(sqlx::FromRow)]
+struct UserAccessibleMusicRow {
+    id: String,
+    title: String,
+    filename: String,
+    content_type: String,
+    object_key: String,
+    audio_object_key: Option<String>,
+    audio_status: String,
+    audio_error: Option<String>,
+    midi_object_key: Option<String>,
+    midi_status: String,
+    midi_error: Option<String>,
+    musicxml_object_key: Option<String>,
+    musicxml_status: String,
+    musicxml_error: Option<String>,
+    stems_status: String,
+    stems_error: Option<String>,
+    public_token: String,
+    public_id: Option<String>,
+    quality_profile: String,
+    created_at: String,
+    ensemble_id: String,
+    ensemble_name: String,
 }
 
 async fn find_public_stems(
@@ -1019,39 +1404,50 @@ async fn admin_list_musics(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<AdminMusicResponse>>, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
 
     let rows = sqlx::query_as::<_, MusicRecord>(
         r#"
-        SELECT m.id, m.title, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, m.directory_id, COALESCE(d.name, 'General') AS directory_name
-        FROM musics m
-        LEFT JOIN directories d ON d.id = m.directory_id
-        ORDER BY m.created_at DESC
+        SELECT id, title, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
+        FROM musics
+        ORDER BY created_at DESC
         "#,
     )
     .fetch_all(&state.db_rw)
     .await?;
 
-    // Fetch per-music stem totals in one query
     let total_rows = sqlx::query_as::<_, StemsTotalRow>(
         "SELECT music_id, COALESCE(SUM(size_bytes), 0)::BIGINT AS total_bytes FROM stems GROUP BY music_id",
     )
     .fetch_all(&state.db_rw)
     .await?;
-    let totals: std::collections::HashMap<String, i64> = total_rows
+    let totals: HashMap<String, i64> = total_rows
         .into_iter()
         .map(|r| (r.music_id, r.total_bytes))
         .collect();
+    let ensemble_names = fetch_ensemble_summaries(&state.db_rw).await?;
+    let links = fetch_music_ensemble_links(&state.db_rw).await?;
+    let (mut music_ensemble_ids, mut music_ensemble_names) =
+        build_music_ensemble_maps(links, &ensemble_names);
 
-    let items = rows
-        .into_iter()
-        .map(|record| {
+    let mut visible_items = Vec::new();
+    for record in rows {
+        if auth.is_superadmin() || can_manage_music(&state.db_rw, &auth, &record.id).await? {
             let total = totals.get(&record.id).copied().unwrap_or(0);
-            record_to_admin_response(&state.config, &state.storage, record, total)
-        })
-        .collect();
+            let ensemble_ids = music_ensemble_ids.remove(&record.id).unwrap_or_default();
+            let ensemble_names = music_ensemble_names.remove(&record.id).unwrap_or_default();
+            visible_items.push(record_to_admin_response(
+                &state.config,
+                &state.storage,
+                record,
+                total,
+                ensemble_ids,
+                ensemble_names,
+            ));
+        }
+    }
 
-    Ok(Json(items))
+    Ok(Json(visible_items))
 }
 
 async fn admin_upload_music(
@@ -1059,12 +1455,12 @@ async fn admin_upload_music(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<AdminMusicResponse>, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
 
     let mut title: Option<String> = None;
     let mut requested_public_id: Option<String> = None;
     let mut requested_quality_profile: Option<String> = None;
-    let mut requested_directory_id: Option<String> = None;
+    let mut requested_ensemble_id: Option<String> = None;
     let mut upload: Option<(String, String, Bytes)> = None;
 
     while let Some(field) = multipart.next_field().await? {
@@ -1078,8 +1474,8 @@ async fn admin_upload_music(
             Some("quality_profile") => {
                 requested_quality_profile = Some(field.text().await?.trim().to_owned());
             }
-            Some("directory_id") => {
-                requested_directory_id = Some(field.text().await?.trim().to_owned());
+            Some("ensemble_id") => {
+                requested_ensemble_id = Some(field.text().await?.trim().to_owned());
             }
             Some("file") => {
                 let filename = field.file_name().map(ToOwned::to_owned).ok_or_else(|| {
@@ -1105,13 +1501,16 @@ async fn admin_upload_music(
     let public_id = normalize_public_id(requested_public_id.as_deref())?;
     ensure_public_id_available(&state.db_rw, public_id.as_deref(), None).await?;
     let quality_profile = parse_quality_profile(requested_quality_profile.as_deref())?;
-    let directory_id = requested_directory_id
+    let ensemble_id = requested_ensemble_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::bad_request("Choose a directory for this score"))?
+        .ok_or_else(|| AppError::bad_request("Choose an ensemble for this score"))?
         .to_owned();
-    ensure_directory_exists(&state.db_rw, &directory_id).await?;
+    if find_ensemble_by_id(&state.db_rw, &ensemble_id).await?.is_none() {
+        return Err(AppError::not_found("Ensemble not found"));
+    }
+    ensure_can_manage_ensemble(&auth, &ensemble_id)?;
 
     let music_id = Uuid::new_v4().to_string();
     let public_token = generate_public_token();
@@ -1176,9 +1575,14 @@ async fn admin_upload_music(
     .bind(&public_id)
     .bind(quality_profile.as_str())
     .bind(&created_at)
-    .bind(&directory_id)
+    .bind(&ensemble_id)
     .execute(&state.db_rw)
     .await?;
+    sqlx::query("INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2)")
+        .bind(&music_id)
+        .bind(&ensemble_id)
+        .execute(&state.db_rw)
+        .await?;
 
     let (
         (midi_object_key, midi_status, midi_error),
@@ -1241,19 +1645,20 @@ async fn admin_upload_music(
         public_id,
         quality_profile: quality_profile.as_str().to_owned(),
         created_at,
-        directory_id: directory_id.clone(),
-        directory_name: find_directory_by_id(&state.db_rw, &directory_id)
-            .await?
-            .map(|directory| directory.name)
-            .unwrap_or_else(|| DEFAULT_DIRECTORY_NAME.to_owned()),
     };
 
     let stems_total = fetch_stems_total(&state.db_rw, &record.id).await;
+    let ensemble_name = find_ensemble_by_id(&state.db_rw, &ensemble_id)
+        .await?
+        .map(|ensemble| ensemble.name)
+        .unwrap_or_else(|| DEFAULT_ENSEMBLE_NAME.to_owned());
     Ok(Json(record_to_admin_response(
         &state.config,
         &state.storage,
         record,
         stems_total,
+        vec![ensemble_id],
+        vec![ensemble_name],
     )))
 }
 
@@ -1262,11 +1667,12 @@ async fn admin_retry_render(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<AdminMusicResponse>, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
 
     let record = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
+    ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
     let quality_profile =
         audio::StemQualityProfile::from_stored_or_default(&record.quality_profile);
 
@@ -1337,11 +1743,14 @@ async fn admin_retry_render(
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
     let stems_total = fetch_stems_total(&state.db_rw, &id).await;
+    let (ensemble_ids, ensemble_names) = ensemble_metadata_for_music(&state.db_rw, &id).await?;
     Ok(Json(record_to_admin_response(
         &state.config,
         &state.storage,
         updated,
         stems_total,
+        ensemble_ids,
+        ensemble_names,
     )))
 }
 
@@ -1533,7 +1942,12 @@ async fn admin_update_music(
     Path(id): Path<String>,
     Json(payload): Json<UpdateMusicRequest>,
 ) -> Result<Json<AdminMusicResponse>, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
+
+    let existing = find_music_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+    ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
 
     let public_id = normalize_public_id(payload.public_id.as_deref())?;
     ensure_public_id_available(&state.db_rw, public_id.as_deref(), Some(&id)).await?;
@@ -1553,11 +1967,14 @@ async fn admin_update_music(
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
     let stems_total = fetch_stems_total(&state.db_rw, &id).await;
+    let (ensemble_ids, ensemble_names) = ensemble_metadata_for_music(&state.db_rw, &id).await?;
     Ok(Json(record_to_admin_response(
         &state.config,
         &state.storage,
         record,
         stems_total,
+        ensemble_ids,
+        ensemble_names,
     )))
 }
 
@@ -1567,33 +1984,48 @@ async fn admin_move_music(
     Path(id): Path<String>,
     Json(payload): Json<MoveMusicRequest>,
 ) -> Result<Json<AdminMusicResponse>, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
 
-    let directory_id = payload.directory_id.trim();
-    if directory_id.is_empty() {
-        return Err(AppError::bad_request("Choose a target directory"));
+    let existing = find_music_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+    ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
+
+    let ensemble_id = payload.ensemble_id.trim();
+    if ensemble_id.is_empty() {
+        return Err(AppError::bad_request("Choose a target ensemble"));
     }
-    ensure_directory_exists(&state.db_rw, directory_id).await?;
-
-    let update_result = sqlx::query("UPDATE musics SET directory_id = $1 WHERE id = $2")
-        .bind(directory_id)
+    ensure_can_manage_ensemble(&auth, ensemble_id)?;
+    if find_ensemble_by_id(&state.db_rw, ensemble_id).await?.is_none() {
+        return Err(AppError::not_found("Ensemble not found"));
+    }
+    sqlx::query("DELETE FROM music_ensemble_links WHERE music_id = $1")
         .bind(&id)
         .execute(&state.db_rw)
         .await?;
-
-    if update_result.rows_affected() == 0 {
-        return Err(AppError::not_found("Music not found"));
-    }
+    sqlx::query("INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2)")
+        .bind(&id)
+        .bind(ensemble_id)
+        .execute(&state.db_rw)
+        .await?;
+    sqlx::query("UPDATE musics SET directory_id = $1 WHERE id = $2")
+        .bind(ensemble_id)
+        .bind(&id)
+        .execute(&state.db_rw)
+        .await?;
 
     let record = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     let stems_total = fetch_stems_total(&state.db_rw, &id).await;
+    let (ensemble_ids, ensemble_names) = ensemble_metadata_for_music(&state.db_rw, &id).await?;
     Ok(Json(record_to_admin_response(
         &state.config,
         &state.storage,
         record,
         stems_total,
+        ensemble_ids,
+        ensemble_names,
     )))
 }
 
@@ -1602,11 +2034,12 @@ async fn admin_delete_music(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
 
     let record = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
+    ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
     let stems = find_public_stems(&state.db_rw, &state.db_rw, &id).await?;
 
     sqlx::query("DELETE FROM stems WHERE music_id = $1")
@@ -1646,11 +2079,12 @@ async fn admin_export_score_gains(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
 
     let record = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
+    ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
 
     export_score_gains_response(&state, &record).await
 }
@@ -1660,11 +2094,12 @@ async fn admin_export_public_score_gains(
     headers: HeaderMap,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
 
     let record = find_public_music_record(&state, &access_key)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
+    ensure_can_manage_music(&state.db_rw, &auth, &record.id).await?;
 
     export_score_gains_response(&state, &record).await
 }
@@ -1675,11 +2110,12 @@ async fn admin_export_public_mixer_gains(
     Path(access_key): Path<String>,
     Json(payload): Json<ExportMixerGainsRequest>,
 ) -> Result<Response, AppError> {
-    require_admin(&headers, &state.config)?;
+    let auth = require_admin_context(&state, &headers).await?;
 
     let record = find_public_music_record(&state, &access_key)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
+    ensure_can_manage_music(&state.db_rw, &auth, &record.id).await?;
     let midi_key = record
         .midi_object_key
         .clone()
@@ -1872,10 +2308,6 @@ async fn exchange_login_token(
     .await?
     .ok_or_else(|| AppError::unauthorized("This connection link is invalid or expired"))?;
 
-    let user = find_user_by_id(&state.db_rw, &user_id)
-        .await?
-        .ok_or_else(|| AppError::unauthorized("User not found"))?;
-
     let session_token = generate_auth_token(64);
     let session_expires_at =
         format_timestamp(Utc::now() + Duration::days(USER_SESSION_TTL_DAYS));
@@ -1896,10 +2328,14 @@ async fn exchange_login_token(
 
     transaction.commit().await?;
 
+    let user = find_user_by_id(&state.db_rw, &user_id)
+        .await?
+        .ok_or_else(|| AppError::unauthorized("User not found"))?;
+
     Ok(Json(AuthSessionResponse {
         session_token,
         session_expires_at,
-        user: user_record_to_response(user),
+        user: user_record_to_response(&state.db_rw, user).await?,
     }))
 }
 
@@ -1907,10 +2343,10 @@ async fn current_user(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<CurrentUserResponse>, AppError> {
-    let (user, session) = require_user_session(&state, &headers).await?;
+    let auth = build_auth_context(&state, &headers).await?;
     Ok(Json(CurrentUserResponse {
-        session_expires_at: session.expires_at,
-        user: user_record_to_response(user),
+        session_expires_at: auth.session.expires_at.clone(),
+        user: auth_context_to_user_response(&auth),
     }))
 }
 
@@ -1918,11 +2354,55 @@ async fn current_user_library(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<UserLibraryResponse>, AppError> {
-    let (user, _) = require_user_session(&state, &headers).await?;
-    let musics = find_accessible_music_for_user(&state.db_rw, &user.id).await?;
+    let auth = build_auth_context(&state, &headers).await?;
+    let music_entries = if auth.is_superadmin() {
+        let rows = sqlx::query_as::<_, UserAccessibleMusicRow>(
+            r#"
+            SELECT m.id, m.title, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, mel.ensemble_id, e.name AS ensemble_name
+            FROM musics m
+            JOIN music_ensemble_links mel ON mel.music_id = m.id
+            JOIN ensembles e ON e.id = mel.ensemble_id
+            ORDER BY e.name ASC, m.title ASC
+            "#,
+        )
+        .fetch_all(&state.db_rw)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                (
+                    MusicRecord {
+                        id: row.id,
+                        title: row.title,
+                        filename: row.filename,
+                        content_type: row.content_type,
+                        object_key: row.object_key,
+                        audio_object_key: row.audio_object_key,
+                        audio_status: row.audio_status,
+                        audio_error: row.audio_error,
+                        midi_object_key: row.midi_object_key,
+                        midi_status: row.midi_status,
+                        midi_error: row.midi_error,
+                        musicxml_object_key: row.musicxml_object_key,
+                        musicxml_status: row.musicxml_status,
+                        musicxml_error: row.musicxml_error,
+                        stems_status: row.stems_status,
+                        stems_error: row.stems_error,
+                        public_token: row.public_token,
+                        public_id: row.public_id,
+                        quality_profile: row.quality_profile,
+                        created_at: row.created_at,
+                    },
+                    row.ensemble_id,
+                    row.ensemble_name,
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        find_accessible_music_for_user(&state.db_rw, &auth.user.id).await?
+    };
 
-    let mut directories: Vec<UserLibraryDirectoryResponse> = Vec::new();
-    for music in musics {
+    let mut ensembles: Vec<UserLibraryEnsembleResponse> = Vec::new();
+    for (music, ensemble_id, ensemble_name) in music_entries {
         let public_id_url = music
             .public_id
             .as_ref()
@@ -1934,25 +2414,23 @@ async fn current_user_library(
             public_url: state.config.public_url_for(&music.public_token),
             public_id_url,
             created_at: music.created_at,
-            directory_id: music.directory_id.clone(),
-            directory_name: music.directory_name.clone(),
         };
 
-        if let Some(directory) = directories
+        if let Some(ensemble) = ensembles
             .iter_mut()
-            .find(|directory| directory.id == music.directory_id)
+            .find(|ensemble| ensemble.id == ensemble_id)
         {
-            directory.scores.push(score);
+            ensemble.scores.push(score);
         } else {
-            directories.push(UserLibraryDirectoryResponse {
-                id: music.directory_id,
-                name: music.directory_name,
+            ensembles.push(UserLibraryEnsembleResponse {
+                id: ensemble_id,
+                name: ensemble_name,
                 scores: vec![score],
             });
         }
     }
 
-    Ok(Json(UserLibraryResponse { directories }))
+    Ok(Json(UserLibraryResponse { ensembles }))
 }
 
 async fn create_my_login_link(
@@ -1960,23 +2438,7 @@ async fn create_my_login_link(
     headers: HeaderMap,
 ) -> Result<Json<LoginLinkResponse>, AppError> {
     let (user, _) = require_user_session(&state, &headers).await?;
-    Ok(Json(create_login_link_response(&state, &user.id).await?))
-}
-
-fn require_admin(headers: &HeaderMap, config: &AppConfig) -> Result<(), AppError> {
-    let Some(header_value) = headers.get("x-admin-password") else {
-        return Err(AppError::unauthorized("Missing x-admin-password header"));
-    };
-
-    let password = header_value
-        .to_str()
-        .map_err(|_| AppError::unauthorized("Invalid x-admin-password header"))?;
-
-    if password != config.admin_password {
-        return Err(AppError::unauthorized("Invalid admin password"));
-    }
-
-    Ok(())
+    Ok(Json(create_login_link(&state.db_rw, &state.config, &user.id).await?))
 }
 
 async fn ensure_public_id_available(
@@ -2005,10 +2467,9 @@ async fn ensure_public_id_available(
 async fn find_music_by_id(db: &PgPool, id: &str) -> Result<Option<MusicRecord>> {
     Ok(sqlx::query_as::<_, MusicRecord>(
         r#"
-        SELECT m.id, m.title, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, m.directory_id, COALESCE(d.name, 'General') AS directory_name
-        FROM musics m
-        LEFT JOIN directories d ON d.id = m.directory_id
-        WHERE m.id = $1
+        SELECT id, title, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
+        FROM musics
+        WHERE id = $1
         "#,
     )
     .bind(id)
@@ -2019,10 +2480,9 @@ async fn find_music_by_id(db: &PgPool, id: &str) -> Result<Option<MusicRecord>> 
 async fn find_music_by_access_key(db: &PgPool, access_key: &str) -> Result<Option<MusicRecord>> {
     Ok(sqlx::query_as::<_, MusicRecord>(
         r#"
-        SELECT m.id, m.title, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, m.directory_id, COALESCE(d.name, 'General') AS directory_name
-        FROM musics m
-        LEFT JOIN directories d ON d.id = m.directory_id
-        WHERE m.public_token = $1 OR m.public_id = $2
+        SELECT id, title, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
+        FROM musics
+        WHERE public_token = $1 OR public_id = $2
         LIMIT 1
         "#,
     )
@@ -2037,6 +2497,8 @@ fn record_to_admin_response(
     storage: &Storage,
     record: MusicRecord,
     stems_total_bytes: i64,
+    ensemble_ids: Vec<String>,
+    ensemble_names: Vec<String>,
 ) -> AdminMusicResponse {
     let public_id_url = record
         .public_id
@@ -2073,8 +2535,8 @@ fn record_to_admin_response(
         quality_profile: record.quality_profile,
         created_at: record.created_at,
         stems_total_bytes,
-        directory_id: record.directory_id,
-        directory_name: record.directory_name,
+        ensemble_ids,
+        ensemble_names,
     }
 }
 
@@ -2111,14 +2573,6 @@ fn record_to_public_response(
         stems_status: record.stems_status,
         stems_error: record.stems_error,
         download_url,
-        created_at: record.created_at,
-    }
-}
-
-fn user_record_to_response(record: UserRecord) -> UserResponse {
-    UserResponse {
-        id: record.id,
-        username: record.username,
         created_at: record.created_at,
     }
 }
@@ -2237,13 +2691,6 @@ fn normalize_public_id(raw: Option<&str>) -> Result<Option<String>, AppError> {
     Ok(Some(value.to_ascii_lowercase()))
 }
 
-async fn ensure_directory_exists(db: &PgPool, directory_id: &str) -> Result<(), AppError> {
-    if find_directory_by_id(db, directory_id).await?.is_none() {
-        return Err(AppError::not_found("Directory not found"));
-    }
-    Ok(())
-}
-
 async fn ensure_membership_entities_exist(
     db: &PgPool,
     ensemble_id: &str,
@@ -2254,18 +2701,6 @@ async fn ensure_membership_entities_exist(
     }
     if find_user_by_id(db, user_id).await?.is_none() {
         return Err(AppError::not_found("User not found"));
-    }
-    Ok(())
-}
-
-async fn ensure_directory_and_ensemble_exist(
-    db: &PgPool,
-    directory_id: &str,
-    ensemble_id: &str,
-) -> Result<(), AppError> {
-    ensure_directory_exists(db, directory_id).await?;
-    if find_ensemble_by_id(db, ensemble_id).await?.is_none() {
-        return Err(AppError::not_found("Ensemble not found"));
     }
     Ok(())
 }

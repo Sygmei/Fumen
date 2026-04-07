@@ -23,8 +23,6 @@ pub struct MusicRecord {
     pub public_id: Option<String>,
     pub quality_profile: String,
     pub created_at: String,
-    pub directory_id: String,
-    pub directory_name: String,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -43,6 +41,7 @@ pub struct UserRecord {
     pub id: String,
     pub username: String,
     pub created_at: String,
+    pub is_superadmin: bool,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -62,22 +61,22 @@ pub struct EnsembleRecord {
 }
 
 #[derive(Clone, Debug, FromRow)]
-pub struct DirectoryRecord {
-    pub id: String,
-    pub name: String,
-    pub created_at: String,
-}
-
-#[derive(Clone, Debug, FromRow)]
 pub struct UserEnsembleMembershipRecord {
     pub user_id: String,
     pub ensemble_id: String,
+    pub role: String,
 }
 
 #[derive(Clone, Debug, FromRow)]
-pub struct DirectoryEnsemblePermissionRecord {
-    pub directory_id: String,
+pub struct MusicEnsembleLinkRecord {
+    pub music_id: String,
     pub ensemble_id: String,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct EnsembleSummaryRecord {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -92,11 +91,6 @@ pub struct DrumMapEntry {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LoginRequest {
-    pub password: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
     pub username: String,
 }
@@ -107,18 +101,13 @@ pub struct CreateEnsembleRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateDirectoryRequest {
-    pub name: String,
+pub struct UpdateEnsembleMemberRequest {
+    pub role: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ExchangeLoginTokenRequest {
     pub token: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct LoginResponse {
-    pub ok: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,7 +117,7 @@ pub struct UpdateMusicRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct MoveMusicRequest {
-    pub directory_id: String,
+    pub ensemble_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,8 +166,8 @@ pub struct AdminMusicResponse {
     pub quality_profile: String,
     pub created_at: String,
     pub stems_total_bytes: i64,
-    pub directory_id: String,
-    pub directory_name: String,
+    pub ensemble_ids: Vec<String>,
+    pub ensemble_names: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -204,6 +193,14 @@ pub struct UserResponse {
     pub id: String,
     pub username: String,
     pub created_at: String,
+    pub role: String,
+    pub managed_ensemble_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EnsembleMemberResponse {
+    pub user_id: String,
+    pub role: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -211,15 +208,7 @@ pub struct AdminEnsembleResponse {
     pub id: String,
     pub name: String,
     pub created_at: String,
-    pub member_user_ids: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AdminDirectoryResponse {
-    pub id: String,
-    pub name: String,
-    pub created_at: String,
-    pub permitted_ensemble_ids: Vec<String>,
+    pub members: Vec<EnsembleMemberResponse>,
     pub score_count: i64,
 }
 
@@ -250,12 +239,10 @@ pub struct UserLibraryScoreResponse {
     pub public_url: String,
     pub public_id_url: Option<String>,
     pub created_at: String,
-    pub directory_id: String,
-    pub directory_name: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct UserLibraryDirectoryResponse {
+pub struct UserLibraryEnsembleResponse {
     pub id: String,
     pub name: String,
     pub scores: Vec<UserLibraryScoreResponse>,
@@ -263,5 +250,5 @@ pub struct UserLibraryDirectoryResponse {
 
 #[derive(Debug, Serialize)]
 pub struct UserLibraryResponse {
-    pub directories: Vec<UserLibraryDirectoryResponse>,
+    pub ensembles: Vec<UserLibraryEnsembleResponse>,
 }

@@ -18,8 +18,8 @@ export type AdminMusic = {
   quality_profile: StemQualityProfile
   created_at: string
   stems_total_bytes: number
-  directory_id: string
-  directory_name: string
+  ensemble_ids: string[]
+  ensemble_names: string[]
 }
 
 export type StemQualityProfile = 'compact' | 'standard' | 'high'
@@ -28,20 +28,20 @@ export type AppUser = {
   id: string
   username: string
   created_at: string
+  role: 'superadmin' | 'admin' | 'user'
+  managed_ensemble_ids: string[]
+}
+
+export type EnsembleMember = {
+  user_id: string
+  role: 'admin' | 'user'
 }
 
 export type Ensemble = {
   id: string
   name: string
   created_at: string
-  member_user_ids: string[]
-}
-
-export type Directory = {
-  id: string
-  name: string
-  created_at: string
-  permitted_ensemble_ids: string[]
+  members: EnsembleMember[]
   score_count: number
 }
 
@@ -68,18 +68,16 @@ export type UserLibraryScore = {
   public_url: string
   public_id_url: string | null
   created_at: string
-  directory_id: string
-  directory_name: string
 }
 
-export type UserLibraryDirectory = {
+export type UserLibraryEnsemble = {
   id: string
   name: string
   scores: UserLibraryScore[]
 }
 
 export type UserLibraryResponse = {
-  directories: UserLibraryDirectory[]
+  ensembles: UserLibraryEnsemble[]
 }
 
 export const STEM_QUALITY_PROFILES: Array<{
@@ -138,10 +136,7 @@ export type Stem = {
   }> | null
 }
 
-type JsonOptions = RequestInit & {
-  password?: string
-  authToken?: string
-}
+type JsonOptions = RequestInit & { authToken?: string }
 
 type RuntimeConfig = {
   apiBaseUrl?: string
@@ -183,10 +178,6 @@ function apiUrl(path: string): string {
 async function requestJson<T>(path: string, options: JsonOptions = {}): Promise<T> {
   const headers = new Headers(options.headers)
 
-  if (options.password) {
-    headers.set('x-admin-password', options.password)
-  }
-
   if (options.authToken) {
     headers.set('authorization', `Bearer ${options.authToken}`)
   }
@@ -225,10 +216,6 @@ async function requestJson<T>(path: string, options: JsonOptions = {}): Promise<
 async function requestBlob(path: string, options: JsonOptions = {}): Promise<Blob> {
   const headers = new Headers(options.headers)
 
-  if (options.password) {
-    headers.set('x-admin-password', options.password)
-  }
-
   if (options.authToken) {
     headers.set('authorization', `Bearer ${options.authToken}`)
   }
@@ -260,123 +247,104 @@ async function requestBlob(path: string, options: JsonOptions = {}): Promise<Blo
   return response.blob()
 }
 
-export async function login(password: string): Promise<void> {
-  await requestJson('/admin/login', {
-    method: 'POST',
-    body: JSON.stringify({ password }),
-  })
-}
-
-export async function listMusics(password: string): Promise<AdminMusic[]> {
+export async function listMusics(authToken: string): Promise<AdminMusic[]> {
   return requestJson<AdminMusic[]>('/admin/musics', {
-    password,
+    authToken,
   })
 }
 
-export async function listUsers(password: string): Promise<AppUser[]> {
+export async function listUsers(authToken: string): Promise<AppUser[]> {
   return requestJson<AppUser[]>('/admin/users', {
-    password,
+    authToken,
   })
 }
 
-export async function createUser(password: string, username: string): Promise<AppUser> {
+export async function createUser(authToken: string, username: string): Promise<AppUser> {
   return requestJson<AppUser>('/admin/users', {
     method: 'POST',
-    password,
+    authToken,
     body: JSON.stringify({ username }),
   })
 }
 
 export async function createAdminUserLoginLink(
-  password: string,
+  authToken: string,
   userId: string,
 ): Promise<LoginLinkResponse> {
   return requestJson<LoginLinkResponse>(`/admin/users/${userId}/login-link`, {
     method: 'POST',
-    password,
+    authToken,
   })
 }
 
-export async function listEnsembles(password: string): Promise<Ensemble[]> {
+export async function listEnsembles(authToken: string): Promise<Ensemble[]> {
   return requestJson<Ensemble[]>('/admin/ensembles', {
-    password,
+    authToken,
   })
 }
 
-export async function createEnsemble(password: string, name: string): Promise<Ensemble> {
+export async function createEnsemble(authToken: string, name: string): Promise<Ensemble> {
   return requestJson<Ensemble>('/admin/ensembles', {
     method: 'POST',
-    password,
+    authToken,
     body: JSON.stringify({ name }),
   })
 }
 
 export async function addUserToEnsemble(
-  password: string,
+  authToken: string,
   ensembleId: string,
   userId: string,
+  role: 'admin' | 'user',
 ): Promise<void> {
   await requestJson(`/admin/ensembles/${ensembleId}/users/${userId}`, {
     method: 'POST',
-    password,
+    authToken,
+    body: JSON.stringify({ role }),
   })
 }
 
 export async function removeUserFromEnsemble(
-  password: string,
+  authToken: string,
   ensembleId: string,
   userId: string,
 ): Promise<void> {
   await requestJson(`/admin/ensembles/${ensembleId}/users/${userId}`, {
     method: 'DELETE',
-    password,
+    authToken,
   })
 }
 
-export async function listDirectories(password: string): Promise<Directory[]> {
-  return requestJson<Directory[]>('/admin/directories', {
-    password,
-  })
-}
-
-export async function createDirectory(password: string, name: string): Promise<Directory> {
-  return requestJson<Directory>('/admin/directories', {
-    method: 'POST',
-    password,
-    body: JSON.stringify({ name }),
-  })
-}
-
-export async function grantDirectoryToEnsemble(
-  password: string,
-  directoryId: string,
+export async function addMusicToEnsemble(
+  authToken: string,
+  musicId: string,
   ensembleId: string,
 ): Promise<void> {
-  await requestJson(`/admin/directories/${directoryId}/ensembles/${ensembleId}`, {
+  await requestJson(`/admin/musics/${musicId}/ensembles/${ensembleId}`, {
     method: 'POST',
-    password,
+    authToken,
   })
 }
 
-export async function revokeDirectoryFromEnsemble(
-  password: string,
-  directoryId: string,
+export async function removeMusicFromEnsemble(
+  authToken: string,
+  musicId: string,
   ensembleId: string,
 ): Promise<void> {
-  await requestJson(`/admin/directories/${directoryId}/ensembles/${ensembleId}`, {
+  await requestJson(`/admin/musics/${musicId}/ensembles/${ensembleId}`, {
     method: 'DELETE',
-    password,
+    authToken,
   })
 }
 
 export async function uploadMusic(
-  password: string,
+  authToken: string,
   payload: {
     file: File
     title: string
     publicId: string
     qualityProfile: StemQualityProfile
-    directoryId: string
+    ensembleId: string
   },
 ): Promise<AdminMusic> {
   const body = new FormData()
@@ -384,54 +352,54 @@ export async function uploadMusic(
   body.append('title', payload.title)
   body.append('public_id', payload.publicId)
   body.append('quality_profile', payload.qualityProfile)
-  body.append('directory_id', payload.directoryId)
+  body.append('ensemble_id', payload.ensembleId)
 
   return requestJson<AdminMusic>('/admin/musics', {
     method: 'POST',
-    password,
+    authToken,
     body,
   })
 }
 
-export async function retryRender(password: string, id: string): Promise<AdminMusic> {
+export async function retryRender(authToken: string, id: string): Promise<AdminMusic> {
   return requestJson<AdminMusic>(`/admin/musics/${id}/retry`, {
     method: 'POST',
-    password,
+    authToken,
   })
 }
 
-export async function downloadScoreGains(password: string, id: string): Promise<Blob> {
+export async function downloadScoreGains(authToken: string, id: string): Promise<Blob> {
   return requestBlob(`/admin/musics/${id}/gains`, {
-    password,
+    authToken,
   })
 }
 
-export async function downloadPublicScoreGains(password: string, accessKey: string): Promise<Blob> {
+export async function downloadPublicScoreGains(authToken: string, accessKey: string): Promise<Blob> {
   return requestBlob(`/admin/public/${encodeURIComponent(accessKey)}/gains`, {
-    password,
+    authToken,
   })
 }
 
 export async function exportPublicMixerGains(
-  password: string,
+  authToken: string,
   accessKey: string,
   tracks: Array<{ track_index: number; volume_multiplier: number; muted: boolean }>,
 ): Promise<Blob> {
   return requestBlob(`/admin/public/${encodeURIComponent(accessKey)}/gains`, {
     method: 'POST',
-    password,
+    authToken,
     body: JSON.stringify({ tracks }),
   })
 }
 
 export async function updatePublicId(
-  password: string,
+  authToken: string,
   id: string,
   publicId: string,
 ): Promise<AdminMusic> {
   return requestJson<AdminMusic>(`/admin/musics/${id}`, {
     method: 'PATCH',
-    password,
+    authToken,
     body: JSON.stringify({
       public_id: publicId.trim() ? publicId.trim() : null,
     }),
@@ -454,21 +422,21 @@ export async function exchangeLoginToken(token: string): Promise<AuthSessionResp
 }
 
 export async function moveMusic(
-  password: string,
+  authToken: string,
   id: string,
-  directoryId: string,
+  ensembleId: string,
 ): Promise<AdminMusic> {
   return requestJson<AdminMusic>(`/admin/musics/${id}/move`, {
     method: 'POST',
-    password,
-    body: JSON.stringify({ directory_id: directoryId }),
+    authToken,
+    body: JSON.stringify({ ensemble_id: ensembleId }),
   })
 }
 
-export async function deleteMusic(password: string, id: string): Promise<void> {
+export async function deleteMusic(authToken: string, id: string): Promise<void> {
   await requestJson(`/admin/musics/${id}/delete`, {
     method: 'POST',
-    password,
+    authToken,
   })
 }
 
