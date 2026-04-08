@@ -32,7 +32,7 @@ type InternalTrack = {
 
 export class StemMixerPlayer {
   private static readonly SEEK_TOLERANCE_SECONDS = 0.03
-  private static readonly RESYNC_THRESHOLD_SECONDS = 0.075
+  private static readonly STALL_THRESHOLD_SECONDS = 1.0
   private context: AudioContext | null = null
   private tracks = new Map<string, InternalTrack>()
   private _duration = 0
@@ -40,6 +40,10 @@ export class StemMixerPlayer {
   private _isPlaying = false
   private _playbackOffset = 0
   private _isReadyToPlay = false
+  // AudioContext time recorded when play() transitions to playing.
+  // Used as master clock so getCurrentTime() doesn't depend on any
+  // individual HTMLAudioElement.currentTime (which has ~100ms jitter).
+  private _contextTimeAtStart = 0
 
   async loadStems(stems: StemSource[]): Promise<LoadedStems> {
     await this.dispose()
@@ -102,11 +106,13 @@ export class StemMixerPlayer {
     }
 
     const seekTime = this._playbackOffset
+    console.log(`[StemMixer] play() offset=${seekTime.toFixed(3)} tracks=${this.tracks.size}`)
     await Promise.all(
       [...this.tracks.values()].map((track) =>
         this.prepareTrackForPlayback(track.element, seekTime, track.meta.fullStemUrl),
       ),
     )
+    console.log(`[StemMixer] play() all tracks prepared, starting...`)
 
     const starts = [...this.tracks.values()].map(async (track) => {
       try {
@@ -117,14 +123,16 @@ export class StemMixerPlayer {
     })
 
     await Promise.all(starts)
-    await waitForDelay(50)
-    this.synchronizePlayback()
+    // Latch the AudioContext clock so getCurrentTime() is driven by the
+    // high-precision Web Audio clock, not by HTMLAudioElement.currentTime.
+    this._contextTimeAtStart = this.context.currentTime
     this._isPlaying = true
   }
 
   pause(): void {
     if (!this._isPlaying) return
     this._playbackOffset = this.getCurrentTime()
+    this._contextTimeAtStart = 0
     this._isPlaying = false
     for (const track of this.tracks.values()) {
       track.element.pause()
@@ -134,6 +142,7 @@ export class StemMixerPlayer {
   stop(): void {
     this._isPlaying = false
     this._playbackOffset = 0
+    this._contextTimeAtStart = 0
     for (const track of this.tracks.values()) {
       track.element.pause()
       track.element.currentTime = 0
@@ -143,6 +152,7 @@ export class StemMixerPlayer {
   seek(seconds: number): void {
     const clamped = Math.max(0, Math.min(seconds, this._duration))
     this._playbackOffset = clamped
+    this._contextTimeAtStart = 0  // reset; play() will latch a new value
     for (const track of this.tracks.values()) {
       const cappedTime = Math.min(clamped, this.maxSeekTimeForTrack(track))
       if (Math.abs(track.element.currentTime - cappedTime) > StemMixerPlayer.SEEK_TOLERANCE_SECONDS) {
@@ -152,19 +162,11 @@ export class StemMixerPlayer {
   }
 
   getCurrentTime(): number {
-    if (this.tracks.size === 0) return this._playbackOffset
-    if (!this._isPlaying) return this._playbackOffset
-
-    // Some rendered stems are shorter than the full arrangement because the
-    // backend trims trailing silence. Using the first inserted track as the
-    // transport clock makes the UI snap backward as soon as that stem ends,
-    // even while longer stems are still playing.
-    let latestTime = this._playbackOffset
-    for (const track of this.tracks.values()) {
-      latestTime = Math.max(latestTime, track.element.currentTime || 0)
+    if (!this._isPlaying || !this.context || this._contextTimeAtStart === 0) {
+      return this._playbackOffset
     }
-
-    return Math.min(latestTime, this._duration)
+    const elapsed = this.context.currentTime - this._contextTimeAtStart
+    return Math.min(this._playbackOffset + elapsed, this._duration)
   }
 
   getDuration(): number {
@@ -180,30 +182,24 @@ export class StemMixerPlayer {
   }
 
   synchronizePlayback(): void {
-    if (!this._isPlaying || this.tracks.size <= 1) {
-      return
-    }
+    if (!this._isPlaying || !this.context) return
 
-    const referenceTime = this.referencePlaybackTime()
-    if (!Number.isFinite(referenceTime)) {
-      return
-    }
+    // Use the AudioContext clock as the authoritative position.
+    // Only nudge elements that have drifted by more than 1 second —
+    // i.e. a track that genuinely stalled (network hiccup, browser throttle).
+    // Sub-second jitter is normal scheduling variance and must NOT be
+    // corrected: writing currentTime on a playing element causes an audible
+    // click every time.
+    const expectedTime = this.getCurrentTime()
 
     for (const track of this.tracks.values()) {
-      if (track.element.paused || track.element.ended) {
-        continue
-      }
+      if (track.element.paused || track.element.ended || track.element.seeking) continue
+      if (track.element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) continue
 
-      if (track.element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-        continue
-      }
-
-      const targetTime = Math.min(referenceTime, this.maxSeekTimeForTrack(track))
-      if (
-        Math.abs(track.element.currentTime - targetTime) >
-        StemMixerPlayer.RESYNC_THRESHOLD_SECONDS
-      ) {
-        track.element.currentTime = targetTime
+      const cappedExpected = Math.min(expectedTime, this.maxSeekTimeForTrack(track))
+      const drift = Math.abs(track.element.currentTime - cappedExpected)
+      if (drift > StemMixerPlayer.STALL_THRESHOLD_SECONDS) {
+        track.element.currentTime = cappedExpected
       }
     }
   }
@@ -246,6 +242,7 @@ export class StemMixerPlayer {
     this._isPlaying = false
     this._playbackOffset = 0
     this._isReadyToPlay = false
+    this._contextTimeAtStart = 0
 
     for (const track of this.tracks.values()) {
       track.element.pause()
@@ -274,14 +271,36 @@ export class StemMixerPlayer {
     seekTime: number,
     stemUrl: string,
   ): Promise<void> {
-    await waitForLoadedMetadata(element, stemUrl)
+    const label = stemUrl.split('/').pop() ?? stemUrl
 
-    const cappedTime = Math.max(0, Math.min(seekTime, element.duration || seekTime))
-    if (Math.abs(element.currentTime - cappedTime) > StemMixerPlayer.SEEK_TOLERANCE_SECONDS) {
-      await seekMediaElement(element, cappedTime, stemUrl)
+    console.log(`[prep:${label}] start seekTime=${seekTime.toFixed(3)} readyState=${element.readyState} seeking=${element.seeking} currentTime=${element.currentTime.toFixed(3)}`)
+    await waitForLoadedMetadata(element, stemUrl)
+    const maxTime = Number.isFinite(element.duration) ? element.duration : Infinity
+    console.log(`[prep:${label}] metadata ok duration=${element.duration?.toFixed(3)} readyState=${element.readyState}`)
+
+    // Track ends before the seek target — no content to buffer here, skip entirely.
+    if (seekTime >= maxTime) {
+      console.log(`[prep:${label}] past track end, skipping`)
+      return
     }
 
-    await waitForCanPlay(element, stemUrl)
+    const cappedTime = Math.max(0, Math.min(seekTime, maxTime))
+    const needsSeek = element.seeking || Math.abs(element.currentTime - cappedTime) > StemMixerPlayer.SEEK_TOLERANCE_SECONDS
+    console.log(`[prep:${label}] needsSeek=${needsSeek} capped=${cappedTime.toFixed(3)}`)
+    if (needsSeek) {
+      console.log(`[prep:${label}] awaiting seeked...`)
+      await seekMediaElement(element, cappedTime, stemUrl)
+      console.log(`[prep:${label}] seeked done, readyState=${element.readyState} currentTime=${element.currentTime.toFixed(3)}`)
+      return
+    }
+
+    // No seek needed. Only wait for canPlay on initial load when there's no data yet.
+    // Tracks already positioned (readyState >= HAVE_CURRENT_DATA) are ready to play.
+    if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      console.log(`[prep:${label}] awaiting canPlay...`)
+      await waitForCanPlay(element, stemUrl)
+      console.log(`[prep:${label}] canPlay done, readyState=${element.readyState}`)
+    }
   }
 
   private maxSeekTimeForTrack(track: InternalTrack): number {
@@ -291,19 +310,7 @@ export class StemMixerPlayer {
     return duration
   }
 
-  private referencePlaybackTime(): number {
-    const activeTimes = [...this.tracks.values()]
-      .filter((track) => !track.element.paused && !track.element.ended)
-      .map((track) => track.element.currentTime)
-      .filter((time) => Number.isFinite(time))
-      .sort((left, right) => left - right)
 
-    if (activeTimes.length === 0) {
-      return this._playbackOffset
-    }
-
-    return activeTimes[Math.floor(activeTimes.length / 2)]
-  }
 }
 
 async function waitForLoadedMetadata(
@@ -318,14 +325,22 @@ async function waitForLoadedMetadata(
 }
 
 async function waitForCanPlay(element: HTMLAudioElement, stemUrl: string): Promise<void> {
-  if (element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+  if (element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA && !element.seeking) {
     return
   }
 
-  await Promise.race([
-    waitForMediaEvent(element, 'canplay', stemUrl),
-    waitForMediaEvent(element, 'canplaythrough', stemUrl),
-  ])
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      element.removeEventListener('canplay', handleReady)
+      element.removeEventListener('canplaythrough', handleReady)
+      element.removeEventListener('error', handleError)
+    }
+    const handleReady = () => { cleanup(); resolve() }
+    const handleError = () => { cleanup(); reject(new Error(`Unable to stream stem: ${stemUrl}`)) }
+    element.addEventListener('canplay', handleReady, { once: true })
+    element.addEventListener('canplaythrough', handleReady, { once: true })
+    element.addEventListener('error', handleError, { once: true })
+  })
 }
 
 async function seekMediaElement(
@@ -366,8 +381,4 @@ function waitForMediaEvent(
     element.addEventListener(eventName, handleReady, { once: true })
     element.addEventListener('error', handleError, { once: true })
   })
-}
-
-function waitForDelay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
