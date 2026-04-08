@@ -113,7 +113,12 @@ impl Storage {
                 }
             }
             StorageBackend::S3 { bucket, client, .. } => {
-                client.delete_object().bucket(bucket).key(key).send().await?;
+                client
+                    .delete_object()
+                    .bucket(bucket)
+                    .key(key)
+                    .send()
+                    .await?;
                 Ok(())
             }
         }

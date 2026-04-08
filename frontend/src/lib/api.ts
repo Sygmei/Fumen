@@ -170,9 +170,46 @@ function resolveApiBaseUrl(): string {
 }
 
 const API_BASE_URL = resolveApiBaseUrl()
+const API_BASE_ORIGIN = new URL(
+  API_BASE_URL,
+  globalThis.location?.origin ?? 'http://localhost',
+).origin
 
 function apiUrl(path: string): string {
   return `${API_BASE_URL}${path}`
+}
+
+function resolveBackendAssetUrl(url: string | null | undefined): string | null {
+  if (!url) {
+    return null
+  }
+
+  return new URL(url, API_BASE_ORIGIN).toString()
+}
+
+function normalizeAdminMusic(music: AdminMusic): AdminMusic {
+  return {
+    ...music,
+    download_url: resolveBackendAssetUrl(music.download_url) ?? music.download_url,
+    midi_download_url: resolveBackendAssetUrl(music.midi_download_url),
+  }
+}
+
+function normalizePublicMusic(music: PublicMusic): PublicMusic {
+  return {
+    ...music,
+    audio_stream_url: resolveBackendAssetUrl(music.audio_stream_url),
+    midi_download_url: resolveBackendAssetUrl(music.midi_download_url),
+    musicxml_url: resolveBackendAssetUrl(music.musicxml_url),
+    download_url: resolveBackendAssetUrl(music.download_url) ?? music.download_url,
+  }
+}
+
+function normalizeStem(stem: Stem): Stem {
+  return {
+    ...stem,
+    full_stem_url: resolveBackendAssetUrl(stem.full_stem_url) ?? stem.full_stem_url,
+  }
 }
 
 async function requestJson<T>(path: string, options: JsonOptions = {}): Promise<T> {
@@ -248,9 +285,11 @@ async function requestBlob(path: string, options: JsonOptions = {}): Promise<Blo
 }
 
 export async function listMusics(authToken: string): Promise<AdminMusic[]> {
-  return requestJson<AdminMusic[]>('/admin/musics', {
+  const musics = await requestJson<AdminMusic[]>('/admin/musics', {
     authToken,
   })
+
+  return musics.map(normalizeAdminMusic)
 }
 
 export async function listUsers(authToken: string): Promise<AppUser[]> {
@@ -354,18 +393,22 @@ export async function uploadMusic(
   body.append('quality_profile', payload.qualityProfile)
   body.append('ensemble_id', payload.ensembleId)
 
-  return requestJson<AdminMusic>('/admin/musics', {
+  const music = await requestJson<AdminMusic>('/admin/musics', {
     method: 'POST',
     authToken,
     body,
   })
+
+  return normalizeAdminMusic(music)
 }
 
 export async function retryRender(authToken: string, id: string): Promise<AdminMusic> {
-  return requestJson<AdminMusic>(`/admin/musics/${id}/retry`, {
+  const music = await requestJson<AdminMusic>(`/admin/musics/${id}/retry`, {
     method: 'POST',
     authToken,
   })
+
+  return normalizeAdminMusic(music)
 }
 
 export async function downloadScoreGains(authToken: string, id: string): Promise<Blob> {
@@ -397,21 +440,25 @@ export async function updatePublicId(
   id: string,
   publicId: string,
 ): Promise<AdminMusic> {
-  return requestJson<AdminMusic>(`/admin/musics/${id}`, {
+  const music = await requestJson<AdminMusic>(`/admin/musics/${id}`, {
     method: 'PATCH',
     authToken,
     body: JSON.stringify({
       public_id: publicId.trim() ? publicId.trim() : null,
     }),
   })
+
+  return normalizeAdminMusic(music)
 }
 
 export async function fetchPublicMusic(accessKey: string): Promise<PublicMusic> {
-  return requestJson<PublicMusic>(`/public/${encodeURIComponent(accessKey)}`)
+  const music = await requestJson<PublicMusic>(`/public/${encodeURIComponent(accessKey)}`)
+  return normalizePublicMusic(music)
 }
 
 export async function fetchStems(accessKey: string): Promise<Stem[]> {
-  return requestJson<Stem[]>(`/public/${encodeURIComponent(accessKey)}/stems`)
+  const stems = await requestJson<Stem[]>(`/public/${encodeURIComponent(accessKey)}/stems`)
+  return stems.map(normalizeStem)
 }
 
 export async function exchangeLoginToken(token: string): Promise<AuthSessionResponse> {
@@ -426,11 +473,13 @@ export async function moveMusic(
   id: string,
   ensembleId: string,
 ): Promise<AdminMusic> {
-  return requestJson<AdminMusic>(`/admin/musics/${id}/move`, {
+  const music = await requestJson<AdminMusic>(`/admin/musics/${id}/move`, {
     method: 'POST',
     authToken,
     body: JSON.stringify({ ensemble_id: ensembleId }),
   })
+
+  return normalizeAdminMusic(music)
 }
 
 export async function deleteMusic(authToken: string, id: string): Promise<void> {

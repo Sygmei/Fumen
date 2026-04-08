@@ -31,24 +31,29 @@ type InternalTrack = {
 }
 
 export class StemMixerPlayer {
+  private static readonly SEEK_TOLERANCE_SECONDS = 0.03
+  private static readonly RESYNC_THRESHOLD_SECONDS = 0.075
   private context: AudioContext | null = null
   private tracks = new Map<string, InternalTrack>()
   private _duration = 0
   private _levelMultiplier = 15
   private _isPlaying = false
   private _playbackOffset = 0
+  private _isReadyToPlay = false
 
   async loadStems(stems: StemSource[]): Promise<LoadedStems> {
     await this.dispose()
 
     this.context = new AudioContext()
     this._duration = stems.reduce((max, stem) => Math.max(max, stem.durationSeconds), 0)
+    this._isReadyToPlay = false
+    const readinessTasks: Array<Promise<void>> = []
 
     for (const stem of stems) {
       const element = new Audio()
-      element.src = stem.fullStemUrl
       element.preload = 'auto'
       element.crossOrigin = 'anonymous'
+      element.src = stem.fullStemUrl
 
       const source = this.context.createMediaElementSource(element)
       const gain = this.context.createGain()
@@ -71,7 +76,12 @@ export class StemMixerPlayer {
         volume: 1,
         muted: false,
       })
+
+      readinessTasks.push(this.prepareTrackForPlayback(element, 0, stem.fullStemUrl))
     }
+
+    await Promise.all(readinessTasks)
+    this._isReadyToPlay = true
 
     return {
       duration: this._duration,
@@ -92,11 +102,11 @@ export class StemMixerPlayer {
     }
 
     const seekTime = this._playbackOffset
-    for (const track of this.tracks.values()) {
-      if (Math.abs(track.element.currentTime - seekTime) > 0.03) {
-        track.element.currentTime = seekTime
-      }
-    }
+    await Promise.all(
+      [...this.tracks.values()].map((track) =>
+        this.prepareTrackForPlayback(track.element, seekTime, track.meta.fullStemUrl),
+      ),
+    )
 
     const starts = [...this.tracks.values()].map(async (track) => {
       try {
@@ -107,6 +117,8 @@ export class StemMixerPlayer {
     })
 
     await Promise.all(starts)
+    await waitForDelay(50)
+    this.synchronizePlayback()
     this._isPlaying = true
   }
 
@@ -132,7 +144,10 @@ export class StemMixerPlayer {
     const clamped = Math.max(0, Math.min(seconds, this._duration))
     this._playbackOffset = clamped
     for (const track of this.tracks.values()) {
-      track.element.currentTime = clamped
+      const cappedTime = Math.min(clamped, this.maxSeekTimeForTrack(track))
+      if (Math.abs(track.element.currentTime - cappedTime) > StemMixerPlayer.SEEK_TOLERANCE_SECONDS) {
+        track.element.currentTime = cappedTime
+      }
     }
   }
 
@@ -158,6 +173,39 @@ export class StemMixerPlayer {
 
   isPlaying(): boolean {
     return this._isPlaying
+  }
+
+  isReadyToPlay(): boolean {
+    return this._isReadyToPlay
+  }
+
+  synchronizePlayback(): void {
+    if (!this._isPlaying || this.tracks.size <= 1) {
+      return
+    }
+
+    const referenceTime = this.referencePlaybackTime()
+    if (!Number.isFinite(referenceTime)) {
+      return
+    }
+
+    for (const track of this.tracks.values()) {
+      if (track.element.paused || track.element.ended) {
+        continue
+      }
+
+      if (track.element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        continue
+      }
+
+      const targetTime = Math.min(referenceTime, this.maxSeekTimeForTrack(track))
+      if (
+        Math.abs(track.element.currentTime - targetTime) >
+        StemMixerPlayer.RESYNC_THRESHOLD_SECONDS
+      ) {
+        track.element.currentTime = targetTime
+      }
+    }
   }
 
   getLevel(trackId: string): number {
@@ -197,6 +245,7 @@ export class StemMixerPlayer {
   async dispose(): Promise<void> {
     this._isPlaying = false
     this._playbackOffset = 0
+    this._isReadyToPlay = false
 
     for (const track of this.tracks.values()) {
       track.element.pause()
@@ -219,4 +268,106 @@ export class StemMixerPlayer {
   private _applyTrackGain(track: InternalTrack): void {
     track.gain.gain.value = track.muted ? 0 : track.volume
   }
+
+  private async prepareTrackForPlayback(
+    element: HTMLAudioElement,
+    seekTime: number,
+    stemUrl: string,
+  ): Promise<void> {
+    await waitForLoadedMetadata(element, stemUrl)
+
+    const cappedTime = Math.max(0, Math.min(seekTime, element.duration || seekTime))
+    if (Math.abs(element.currentTime - cappedTime) > StemMixerPlayer.SEEK_TOLERANCE_SECONDS) {
+      await seekMediaElement(element, cappedTime, stemUrl)
+    }
+
+    await waitForCanPlay(element, stemUrl)
+  }
+
+  private maxSeekTimeForTrack(track: InternalTrack): number {
+    const measured = Number.isFinite(track.element.duration) ? track.element.duration : 0
+    const fallback = track.meta.durationSeconds
+    const duration = Math.max(measured, fallback, 0)
+    return duration
+  }
+
+  private referencePlaybackTime(): number {
+    const activeTimes = [...this.tracks.values()]
+      .filter((track) => !track.element.paused && !track.element.ended)
+      .map((track) => track.element.currentTime)
+      .filter((time) => Number.isFinite(time))
+      .sort((left, right) => left - right)
+
+    if (activeTimes.length === 0) {
+      return this._playbackOffset
+    }
+
+    return activeTimes[Math.floor(activeTimes.length / 2)]
+  }
+}
+
+async function waitForLoadedMetadata(
+  element: HTMLAudioElement,
+  stemUrl: string,
+): Promise<void> {
+  if (element.readyState >= HTMLMediaElement.HAVE_METADATA && Number.isFinite(element.duration)) {
+    return
+  }
+
+  await waitForMediaEvent(element, 'loadedmetadata', stemUrl)
+}
+
+async function waitForCanPlay(element: HTMLAudioElement, stemUrl: string): Promise<void> {
+  if (element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+    return
+  }
+
+  await Promise.race([
+    waitForMediaEvent(element, 'canplay', stemUrl),
+    waitForMediaEvent(element, 'canplaythrough', stemUrl),
+  ])
+}
+
+async function seekMediaElement(
+  element: HTMLAudioElement,
+  time: number,
+  stemUrl: string,
+): Promise<void> {
+  if (!Number.isFinite(time)) {
+    return
+  }
+
+  const seeked = waitForMediaEvent(element, 'seeked', stemUrl)
+  element.currentTime = time
+  await seeked
+}
+
+function waitForMediaEvent(
+  element: HTMLAudioElement,
+  eventName: keyof HTMLMediaElementEventMap,
+  stemUrl: string,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      element.removeEventListener(eventName, handleReady)
+      element.removeEventListener('error', handleError)
+    }
+
+    const handleReady = () => {
+      cleanup()
+      resolve()
+    }
+
+    const handleError = () => {
+      cleanup()
+      reject(new Error(`Unable to stream stem: ${stemUrl}`))
+    }
+
+    element.addEventListener(eventName, handleReady, { once: true })
+    element.addEventListener('error', handleError, { once: true })
+  })
+}
+
+function waitForDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }

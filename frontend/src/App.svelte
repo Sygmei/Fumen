@@ -123,6 +123,7 @@
 
   let midiPlayer = $state<MidiMixerPlayer | null>(null)
   let stemPlayer = $state<StemMixerPlayer | null>(null)
+  let stemPlaybackReady = $state(false)
   let mixerTracks = $state<(MixerTrack | StemTrack)[]>([])
   let playerMode = $state<'stems' | 'midi' | null>(null)
   let midiLoading = $state(false)
@@ -806,6 +807,7 @@
     globalVolume = 1.0
     mixerTracks = []
     playerMode = null
+    stemPlaybackReady = false
     midiLoading = false
     midiPlayerError = ''
 
@@ -830,6 +832,7 @@
   async function loadStemMixer(accessKey: string) {
     midiLoading = true
     midiPlayerError = ''
+    stemPlaybackReady = false
 
     try {
       const stems = await fetchStems(accessKey)
@@ -849,6 +852,7 @@
         })),
       )
       stemPlayer.setLevelMultiplier(15)
+      stemPlaybackReady = stemPlayer.isReadyToPlay()
       mixerTracks = loaded.tracks
       playbackDuration = loaded.duration
       playbackPosition = 0
@@ -864,6 +868,11 @@
   async function togglePlayback() {
     const player = stemPlayer ?? midiPlayer
     if (!player || playbackDuration <= 0) {
+      return
+    }
+
+    if (playerMode === 'stems' && !stemPlaybackReady) {
+      midiPlayerError = 'Stems are still buffering. Wait a moment before starting playback.'
       return
     }
 
@@ -976,6 +985,7 @@
       playbackPosition = player.getCurrentTime()
       scoreViewer?.seek(playbackPosition)
       if (stemPlayer && playerMode === 'stems') {
+        stemPlayer.synchronizePlayback()
         const levels: Record<string, number> = {}
         for (const track of mixerTracks) levels[track.id] = stemPlayer.getLevel(track.id)
         trackLevels = levels
@@ -1075,16 +1085,16 @@
               {/if}
             </div>
             <div class="playbar" class:is-playing={playbackState === 'playing'}>
-              <button class="playbar-btn playbar-play" onclick={() => void togglePlayback()} disabled={mixerTracks.length === 0} aria-label={playbackState === 'playing' ? 'Pause' : 'Play'}>
+              <button class="playbar-btn playbar-play" onclick={() => void togglePlayback()} disabled={mixerTracks.length === 0 || midiLoading || (playerMode === 'stems' && !stemPlaybackReady)} aria-label={playbackState === 'playing' ? 'Pause' : 'Play'}>
                 {#if playbackState === 'playing'}
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="4" height="16" rx="1.5" /><rect x="15" y="4" width="4" height="16" rx="1.5" /></svg>
                 {:else}
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5 L7 19.5 L20 12 Z" /></svg>
                 {/if}
               </button>
-              <button class="playbar-btn playbar-stop" onclick={stopPlayback} disabled={mixerTracks.length === 0} aria-label="Stop"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2" /></svg></button>
+              <button class="playbar-btn playbar-stop" onclick={stopPlayback} disabled={mixerTracks.length === 0 || midiLoading || (playerMode === 'stems' && !stemPlaybackReady)} aria-label="Stop"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2" /></svg></button>
               <div class="playbar-progress">
-                <input class="playbar-track" type="range" min="0" max={playbackDuration || 0} step="0.01" value={playbackPosition} oninput={handleSeek} disabled={mixerTracks.length === 0} style="--pct: {pct}%" aria-label="Playback position" />
+                <input class="playbar-track" type="range" min="0" max={playbackDuration || 0} step="0.01" value={playbackPosition} oninput={handleSeek} disabled={mixerTracks.length === 0 || midiLoading || (playerMode === 'stems' && !stemPlaybackReady)} style="--pct: {pct}%" aria-label="Playback position" />
               </div>
               <span class="playbar-time">{formatTime(playbackPosition)}<span class="playbar-sep"> / </span>{formatTime(playbackDuration)}</span>
             </div>

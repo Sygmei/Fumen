@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub musescore_bin: Option<String>,
     pub musescore_docker_image: Option<String>,
     pub musescore_qt_platform: Option<String>,
+    pub musescore_direct_ogg_stems: bool,
     pub docker_bin: String,
     pub soundfont_dir: Option<PathBuf>,
     pub sfizz_bin: Option<String>,
@@ -44,7 +45,8 @@ impl AppConfig {
         let cors_allowed_origins = env::var("CORS_ALLOWED_ORIGINS")
             .ok()
             .map(|value| {
-                value.split(',')
+                value
+                    .split(',')
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned)
@@ -112,6 +114,9 @@ impl AppConfig {
             .ok()
             .filter(|value| !value.trim().is_empty());
 
+        let musescore_direct_ogg_stems =
+            bool_env_var("MUSESCORE_DIRECT_OGG_STEMS")?.unwrap_or(false);
+
         let docker_bin = env::var("DOCKER_BIN")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -142,6 +147,7 @@ impl AppConfig {
             musescore_bin,
             musescore_docker_image,
             musescore_qt_platform,
+            musescore_direct_ogg_stems,
             docker_bin,
             soundfont_dir,
             sfizz_bin,
@@ -179,5 +185,24 @@ fn origin_for_url(value: &str) -> String {
             }
         }
         None => trimmed.to_owned(),
+    }
+}
+
+fn bool_env_var(name: &str) -> Result<Option<bool>> {
+    let Some(raw) = env::var(name).ok() else {
+        return Ok(None);
+    };
+
+    let value = raw.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(Some(true)),
+        "0" | "false" | "no" | "off" => Ok(Some(false)),
+        _ => Err(anyhow!(
+            "Invalid {name} value '{value}'. Use one of: 1, 0, true, false, yes, no, on, off."
+        )),
     }
 }

@@ -47,6 +47,7 @@ $env:MUSESCORE_BIN="C:\Program Files\MuseScore Studio 4\bin\MuseScoreStudio.exe"
 $env:MUSESCORE_DOCKER_IMAGE="your-musescore-cli-image"
 $env:DOCKER_BIN="docker"
 $env:MUSESCORE_QT_PLATFORM="offscreen"
+$env:MUSESCORE_DIRECT_OGG_STEMS="false"
 ```
 
 If `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` are all unset, the backend stores uploaded files under `LOCAL_STORAGE_PATH`.
@@ -72,6 +73,11 @@ On Linux, the backend defaults native MuseScore launches to `QT_QPA_PLATFORM=off
 headless export. On Windows and macOS it does not force a Qt platform plugin, which avoids the
 "no Qt platform plugin could be initialized" failure from native Windows installs. Set
 `MUSESCORE_QT_PLATFORM` only when you need to override that default explicitly.
+
+By default, per-instrument OGG stems are rendered through the SFZ/`sfizz` pipeline so the backend
+can use the configured external soundfonts. Set `MUSESCORE_DIRECT_OGG_STEMS=true` to skip that
+stack and render stems by feeding one-track MIDI files back into MuseScore instead, which uses
+MuseScore's own default instruments for each track.
 
 Derivative exports are optional. When MuseScore is available, the backend tries to export:
 

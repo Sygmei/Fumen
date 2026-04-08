@@ -725,14 +725,29 @@ pub async fn generate_stems(
     output_dir: &Path,
     quality_profile: StemQualityProfile,
 ) -> Result<(Vec<StemResult>, String, Option<String>)> {
-    // --- pre-flight checks ---------------------------------------------------
-
     tracing::info!(
         "stems: starting pipeline for '{}' with {} profile ({})",
         input_path.file_name().unwrap_or_default().to_string_lossy(),
         quality_profile.as_str(),
         quality_profile.opus_bitrate(),
     );
+
+    if config.musescore_direct_ogg_stems {
+        tracing::info!("stems: renderer = musescore-direct");
+        return generate_stems_with_musescore(config, input_path, output_dir).await;
+    }
+
+    tracing::info!("stems: renderer = sfz");
+    generate_stems_with_sfz(config, input_path, output_dir, quality_profile).await
+}
+
+async fn generate_stems_with_sfz(
+    config: &AppConfig,
+    input_path: &Path,
+    output_dir: &Path,
+    quality_profile: StemQualityProfile,
+) -> Result<(Vec<StemResult>, String, Option<String>)> {
+    // --- pre-flight checks ---------------------------------------------------
 
     let sfizz = match find_sfizz_binary(config).await {
         Some(bin) => bin,
@@ -781,28 +796,16 @@ pub async fn generate_stems(
 
     // --- obtain MIDI data ----------------------------------------------------
 
-    let midi_path = output_dir.join("preview.mid");
-    tracing::info!("stems: exporting MIDI from score");
-    let midi_bytes: Bytes = if midi_path.exists() {
-        tracing::info!("stems: reusing existing MIDI file");
-        tokio::fs::read(&midi_path)
-            .await
-            .context("reading existing MIDI file")?
-            .into()
-    } else {
-        match generate_midi(config, input_path, output_dir).await? {
-            ConversionOutcome::Ready { bytes, .. } => {
-                tracing::info!("stems: MIDI export complete");
-                bytes
-            }
+    let midi_bytes: Bytes =
+        match load_or_generate_preview_midi(config, input_path, output_dir).await? {
+            ConversionOutcome::Ready { bytes, .. } => bytes,
             ConversionOutcome::Unavailable { reason } => {
                 return Ok((Vec::new(), "unavailable".to_owned(), Some(reason)));
             }
             ConversionOutcome::Failed { reason } => {
                 return Ok((Vec::new(), "failed".to_owned(), Some(reason)));
             }
-        }
-    };
+        };
 
     let musicxml_path = output_dir.join("score.musicxml");
     let forced_program_sequences = if musicxml_path.exists() {
@@ -1674,6 +1677,162 @@ pub async fn generate_stems(
     }
 }
 
+async fn generate_stems_with_musescore(
+    config: &AppConfig,
+    input_path: &Path,
+    output_dir: &Path,
+) -> Result<(Vec<StemResult>, String, Option<String>)> {
+    if find_musescore_command(config).await.is_none() {
+        return Ok((
+            Vec::new(),
+            "unavailable".to_owned(),
+            Some(
+                "MuseScore CLI not configured. Set MUSESCORE_BIN to enable direct OGG stem rendering."
+                    .to_owned(),
+            ),
+        ));
+    }
+
+    let midi_bytes: Bytes =
+        match load_or_generate_preview_midi(config, input_path, output_dir).await? {
+            ConversionOutcome::Ready { bytes, .. } => bytes,
+            ConversionOutcome::Unavailable { reason } => {
+                return Ok((Vec::new(), "unavailable".to_owned(), Some(reason)));
+            }
+            ConversionOutcome::Failed { reason } => {
+                return Ok((Vec::new(), "failed".to_owned(), Some(reason)));
+            }
+        };
+
+    let drumset_mappings = match extract_musescore_drumset_mappings(input_path) {
+        Ok(mappings) => mappings,
+        Err(error) => {
+            tracing::warn!(
+                "stems: failed to extract MuseScore drumset mappings from '{}': {error}",
+                input_path.display()
+            );
+            HashMap::new()
+        }
+    };
+
+    let track_infos = parse_midi_tracks(&midi_bytes);
+    if track_infos.is_empty() {
+        return Ok((
+            Vec::new(),
+            "unavailable".to_owned(),
+            Some("No instrument tracks found in MIDI export".to_owned()),
+        ));
+    }
+
+    let chunks = extract_raw_midi_chunks(&midi_bytes);
+    if chunks.len() <= 1 {
+        return Ok((
+            Vec::new(),
+            "unavailable".to_owned(),
+            Some(
+                "MIDI export is single-track (Format 0); per-instrument stems require a multi-track Format 1 export"
+                    .to_owned(),
+            ),
+        ));
+    }
+
+    let clean_tempo_chunk = build_global_tempo_chunk(&midi_bytes);
+    let total = track_infos.len();
+    tracing::info!("stems: found {total} instrument tracks, starting direct MuseScore render");
+
+    let render_dir = output_dir.join("musescore-direct-stems");
+    tokio::fs::create_dir_all(&render_dir)
+        .await
+        .with_context(|| format!("creating {}", render_dir.display()))?;
+
+    let mut stems = Vec::new();
+    let mut first_failure = None;
+
+    for (stem_idx, track_info) in track_infos.iter().enumerate() {
+        let chunk_idx = track_info.midi_track_index;
+        let Some(chunk) = chunks.get(chunk_idx) else {
+            continue;
+        };
+
+        let stem_mid_path = render_dir.join(format!("stem_{stem_idx}.mid"));
+        let stem_ogg_path = render_dir.join(format!("stem_{stem_idx}.ogg"));
+        let stem_midi = build_stem_midi(&midi_bytes, &clean_tempo_chunk, chunk);
+
+        tokio::fs::write(&stem_mid_path, &stem_midi)
+            .await
+            .with_context(|| format!("writing {}", stem_mid_path.display()))?;
+
+        tracing::info!(
+            "stems: [{}/{}] '{}' ({}, GM prog {}) - rendering via MuseScore",
+            stem_idx + 1,
+            total,
+            track_info.track_name,
+            gm_instrument_name(track_info.program, track_info.is_percussion),
+            track_info.program,
+        );
+
+        match convert_with_musescore(
+            config,
+            &stem_mid_path,
+            &stem_ogg_path,
+            "audio/ogg",
+            "ogg",
+            "MuseScore CLI not configured. Set MUSESCORE_BIN to enable direct OGG stem rendering.",
+        )
+        .await?
+        {
+            ConversionOutcome::Ready { bytes, .. } => {
+                let drum_map = track_info.is_percussion.then(|| {
+                    drumset_mappings
+                        .get(&normalize_track_lookup_key(&track_info.track_name))
+                        .cloned()
+                        .unwrap_or_default()
+                });
+                stems.push(StemResult {
+                    track_index: stem_idx,
+                    track_name: track_info.track_name.clone(),
+                    instrument_name: gm_instrument_name(
+                        track_info.program,
+                        track_info.is_percussion,
+                    )
+                    .to_owned(),
+                    bytes,
+                    drum_map,
+                });
+            }
+            ConversionOutcome::Unavailable { reason } => {
+                return Ok((Vec::new(), "unavailable".to_owned(), Some(reason)));
+            }
+            ConversionOutcome::Failed { reason } => {
+                tracing::warn!(
+                    "stems: [{}/{}] '{}' - MuseScore direct render failed: {}",
+                    stem_idx + 1,
+                    total,
+                    track_info.track_name,
+                    reason
+                );
+                if first_failure.is_none() {
+                    first_failure = Some(reason);
+                }
+            }
+        }
+    }
+
+    stems.sort_by_key(|stem| stem.track_index);
+
+    if stems.is_empty() {
+        Ok((
+            Vec::new(),
+            "failed".to_owned(),
+            Some(first_failure.unwrap_or_else(|| {
+                "No stems could be rendered with MuseScore direct OGG rendering.".to_owned()
+            })),
+        ))
+    } else {
+        Ok((stems, "ready".to_owned(), None))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MIDI helpers
 // ---------------------------------------------------------------------------
@@ -1894,6 +2053,33 @@ fn build_stem_midi(original: &[u8], tempo_chunk: &[u8], instrument_chunk: &[u8])
     out.extend_from_slice(tempo_chunk);
     out.extend_from_slice(instrument_chunk);
     out
+}
+
+async fn load_or_generate_preview_midi(
+    config: &AppConfig,
+    input_path: &Path,
+    output_dir: &Path,
+) -> Result<ConversionOutcome> {
+    let midi_path = output_dir.join("preview.mid");
+    tracing::info!("stems: exporting MIDI from score");
+
+    if midi_path.exists() {
+        tracing::info!("stems: reusing existing MIDI file");
+        let bytes = tokio::fs::read(&midi_path)
+            .await
+            .context("reading existing MIDI file")?;
+        return Ok(ConversionOutcome::Ready {
+            bytes: bytes.into(),
+            content_type: "audio/midi",
+            extension: "mid",
+        });
+    }
+
+    let outcome = generate_midi(config, input_path, output_dir).await?;
+    if matches!(outcome, ConversionOutcome::Ready { .. }) {
+        tracing::info!("stems: MIDI export complete");
+    }
+    Ok(outcome)
 }
 
 // ---------------------------------------------------------------------------
@@ -3231,6 +3417,7 @@ mod tests {
             musescore_bin: None,
             musescore_docker_image: None,
             musescore_qt_platform: None,
+            musescore_direct_ogg_stems: false,
             docker_bin: "docker".to_owned(),
             soundfont_dir: Some(fixture_path("../soundfonts")),
             sfizz_bin: None,

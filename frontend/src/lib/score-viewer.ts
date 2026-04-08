@@ -52,6 +52,12 @@ export class ScoreViewer {
       throw new Error(`Failed to fetch MusicXML: HTTP ${response.status}`)
     }
     let xmlText = await response.text()
+    const trimmed = xmlText.trimStart().toLowerCase()
+    if (trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html')) {
+      throw new Error(
+        `MusicXML URL returned HTML instead of XML: ${response.url}. Check that frontend asset URLs point to the backend API origin.`,
+      )
+    }
     xmlText = stripUnsupportedElements(xmlText)
 
     const { OpenSheetMusicDisplay } = await import('opensheetmusicdisplay')

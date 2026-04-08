@@ -97,9 +97,11 @@ async fn ensure_cli_schema(db: &PgPool) -> Result<()> {
     .execute(db)
     .await?;
 
-    sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN NOT NULL DEFAULT FALSE")
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN NOT NULL DEFAULT FALSE",
+    )
+    .execute(db)
+    .await?;
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS users_single_superadmin_idx ON users (is_superadmin) WHERE is_superadmin = TRUE",
     )
@@ -128,7 +130,10 @@ async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<CliUs
         .await?
         .is_some()
     {
-        username = format!("{base_username}-{}", generate_auth_token(6).to_ascii_lowercase());
+        username = format!(
+            "{base_username}-{}",
+            generate_auth_token(6).to_ascii_lowercase()
+        );
     }
 
     let record = CliUserRecord {
@@ -195,10 +200,7 @@ async fn create_login_link(db: &PgPool, config: &AppConfig, user_id: &str) -> Re
 fn print_cli_login_link(link: &CliLoginLink) {
     let code =
         QrCode::new(link.connection_url.as_bytes()).expect("connection URL should be valid QR");
-    let rendered = code
-        .render::<unicode::Dense1x2>()
-        .quiet_zone(false)
-        .build();
+    let rendered = code.render::<unicode::Dense1x2>().quiet_zone(false).build();
 
     println!("{rendered}");
     println!();
