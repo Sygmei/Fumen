@@ -5,6 +5,7 @@ use sqlx::FromRow;
 pub struct MusicRecord {
     pub id: String,
     pub title: String,
+    pub icon: Option<String>,
     pub filename: String,
     pub content_type: String,
     pub object_key: String,
@@ -120,6 +121,7 @@ pub struct RefreshTokenRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateMusicRequest {
     pub public_id: Option<String>,
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +156,7 @@ pub struct StemInfo {
 pub struct AdminMusicResponse {
     pub id: String,
     pub title: String,
+    pub icon: Option<String>,
     pub filename: String,
     pub content_type: String,
     pub audio_status: String,
@@ -180,6 +183,7 @@ pub struct AdminMusicResponse {
 #[derive(Debug, Serialize)]
 pub struct PublicMusicResponse {
     pub title: String,
+    pub icon: Option<String>,
     pub filename: String,
     pub audio_status: String,
     pub audio_error: Option<String>,
@@ -249,6 +253,7 @@ pub struct CurrentUserResponse {
 pub struct UserLibraryScoreResponse {
     pub id: String,
     pub title: String,
+    pub icon: Option<String>,
     pub filename: String,
     pub public_url: String,
     pub public_id_url: Option<String>,

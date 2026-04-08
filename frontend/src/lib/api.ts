@@ -1,6 +1,7 @@
 export type AdminMusic = {
   id: string
   title: string
+  icon: string | null
   filename: string
   content_type: string
   audio_status: string
@@ -70,6 +71,7 @@ export type CurrentUserResponse = {
 export type UserLibraryScore = {
   id: string
   title: string
+  icon: string | null
   filename: string
   public_url: string
   public_id_url: string | null
@@ -476,6 +478,7 @@ export async function uploadMusic(
   payload: {
     file: File
     title: string
+    icon: string
     publicId: string
     qualityProfile: StemQualityProfile
     ensembleId: string
@@ -484,6 +487,7 @@ export async function uploadMusic(
   const body = new FormData()
   body.append('file', payload.file)
   body.append('title', payload.title)
+  body.append('icon', payload.icon)
   body.append('public_id', payload.publicId)
   body.append('quality_profile', payload.qualityProfile)
   body.append('ensemble_id', payload.ensembleId)
@@ -532,12 +536,14 @@ export async function exportPublicMixerGains(
 export async function updatePublicId(
   id: string,
   publicId: string,
+  icon?: string,
 ): Promise<AdminMusic> {
   const music = await requestJson<AdminMusic>(`/admin/musics/${id}`, {
     method: 'PATCH',
     authenticated: true,
     body: JSON.stringify({
       public_id: publicId.trim() ? publicId.trim() : null,
+      icon: icon !== undefined ? (icon.trim() ? icon.trim() : null) : null,
     }),
   })
 

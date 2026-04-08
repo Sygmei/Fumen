@@ -4,7 +4,7 @@
     import { MidiMixerPlayer, type MixerTrack } from "../lib/midi-player";
     import { StemMixerPlayer, type StemTrack } from "../lib/stem-mixer";
     import { ScoreViewer } from "../lib/score-viewer";
-    import { formatTime, prettyDate } from "../lib/utils";
+    import { formatTime } from "../lib/utils";
     import Mixer from "../components/Mixer.svelte";
 
     const { accessKey }: { accessKey: string } = $props();
@@ -342,103 +342,116 @@
 </script>
 
 <main class="page public-shell">
-    <section class="content-panel">
-        {#if publicLoading}
-            <p class="status">Loading score...</p>
-        {:else if publicError}
+    <section class="content-panel public-content-panel">
+        {#if publicError}
             <p class="status error">{publicError}</p>
-        {:else if publicMusic}
-            <div class="public-card">
+        {:else}
+            <div class="public-card public-workspace">
                 <div class="public-score-pane">
-                    <div class="score-scroll-area">
-                        <div class="score-title-row">
-                            <h2>{publicMusic.title}</h2>
-                            <div
-                                class="download-menu"
-                                class:open={downloadMenuOpen}
+                    <div class="score-title-row score-title-bar">
+                        <a class="listen-brand" href="/">Fumen</a>
+                        <span class="listen-title-separator" aria-hidden="true"
+                            >-</span
+                        >
+                        <h2>{publicMusic?.title ?? "Loading score"}</h2>
+                        <div class="download-menu" class:open={downloadMenuOpen}>
+                            <button
+                                class="download-menu-btn"
+                                onclick={() =>
+                                    publicMusic &&
+                                    (downloadMenuOpen = !downloadMenuOpen)}
+                                aria-haspopup="true"
+                                aria-expanded={downloadMenuOpen}
+                                disabled={!publicMusic}
                             >
-                                <button
-                                    class="download-menu-btn"
-                                    onclick={() =>
-                                        (downloadMenuOpen = !downloadMenuOpen)}
-                                    aria-haspopup="true"
-                                    aria-expanded={downloadMenuOpen}
+                                <svg
+                                    width="15"
+                                    height="15"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><path d="M12 3v12M7 11l5 5 5-5" /><path
+                                        d="M4 20h16"
+                                    /></svg
                                 >
-                                    <svg
-                                        width="15"
-                                        height="15"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2.2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        ><path d="M12 3v12M7 11l5 5 5-5" /><path
-                                            d="M4 20h16"
-                                        /></svg
-                                    >
-                                    Download
-                                    <svg
-                                        class="chevron"
-                                        width="12"
-                                        height="12"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2.5"
-                                        ><polyline
-                                            points="6 9 12 15 18 9"
-                                        /></svg
+                                Download
+                                <svg
+                                    class="chevron"
+                                    width="12"
+                                    height="12"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    ><polyline
+                                        points="6 9 12 15 18 9"
+                                    /></svg
                                     >
                                 </button>
-                                {#if downloadMenuOpen}
-                                    <div class="download-dropdown">
-                                        {#if publicMusic.midi_download_url}
-                                            <a
-                                                class="download-item"
-                                                href={publicMusic.midi_download_url}
-                                                download
-                                                onclick={() =>
-                                                    (downloadMenuOpen = false)}
-                                                >Download MIDI</a
-                                            >
-                                        {/if}
+                            {#if downloadMenuOpen && publicMusic}
+                                <div class="download-dropdown">
+                                    {#if publicMusic.audio_stream_url}
                                         <a
                                             class="download-item"
-                                            href={publicMusic.download_url}
+                                            href={publicMusic.audio_stream_url}
                                             download
                                             onclick={() =>
                                                 (downloadMenuOpen = false)}
-                                            >Download MuseScore</a
+                                            >Download Audio</a
                                         >
+                                    {/if}
+                                    {#if publicMusic.midi_download_url}
+                                        <a
+                                            class="download-item"
+                                            href={publicMusic.midi_download_url}
+                                            download
+                                            onclick={() =>
+                                                (downloadMenuOpen = false)}
+                                            >Download MIDI</a
+                                        >
+                                    {/if}
+                                    <a
+                                        class="download-item"
+                                        href={publicMusic.download_url}
+                                        download
+                                        onclick={() =>
+                                            (downloadMenuOpen = false)}
+                                        >Download MuseScore</a
+                                    >
+                                </div>
+                            {/if}
+                        </div>
+                    </div>
+                    <div
+                        class="score-scroll-area"
+                        class:score-scroll-area-loading={scoreLoading &&
+                            !scoreError}
+                    >
+                        <div class="score-scroll-inner">
+                            <div
+                                class="score-container"
+                                class:loaded={scoreLoaded}
+                                bind:this={scoreContainer}
+                            ></div>
+                            {#if scoreLoading}
+                                <div class="score-loading-state" aria-label="Loading score">
+                                    <div class="loading-eq" aria-hidden="true">
+                                        <span></span>
+                                        <span></span>
+                                        <span></span>
+                                        <span></span>
+                                        <span></span>
                                     </div>
-                                {/if}
-                            </div>
+                                    <p class="loading-eq-label">Fumen</p>
+                                    <p class="score-loading-copy">Loading score</p>
+                                </div>
+                            {:else if scoreError}
+                                <p class="status error">Score: {scoreError}</p>
+                            {/if}
                         </div>
-                        <div class="meta-grid">
-                            <div>
-                                <p class="meta-label">Filename</p>
-                                <p>{publicMusic.filename}</p>
-                            </div>
-                            <div>
-                                <p class="meta-label">Uploaded</p>
-                                <p>{prettyDate(publicMusic.created_at)}</p>
-                            </div>
-                            <div>
-                                <p class="meta-label">Instruments</p>
-                                <p>{mixerTracks.length || 0}</p>
-                            </div>
-                        </div>
-                        <div
-                            class="score-container"
-                            class:loaded={scoreLoaded}
-                            bind:this={scoreContainer}
-                        ></div>
-                        {#if scoreLoading}
-                            <p class="status">Loading score...</p>
-                        {:else if scoreError}
-                            <p class="status error">Score: {scoreError}</p>
-                        {/if}
                     </div>
                     <div
                         class="playbar"
@@ -539,7 +552,7 @@
                         {globalVolume}
                         {trackLevels}
                         {midiPlayerError}
-                        stemsError={publicMusic.stems_error}
+                        stemsError={publicMusic?.stems_error ?? null}
                         onGlobalVolumeChange={updateGlobalVolume}
                         onTrackVolumeChange={updateTrackVolume}
                         onTrackMuteToggle={toggleTrackMute}

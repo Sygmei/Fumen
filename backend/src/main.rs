@@ -330,6 +330,7 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
         CREATE TABLE IF NOT EXISTS musics (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
+            icon TEXT,
             filename TEXT NOT NULL,
             content_type TEXT NOT NULL,
             object_key TEXT NOT NULL,
@@ -465,6 +466,7 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
         .await?;
 
     ensure_music_column(db, "audio_object_key", "TEXT").await?;
+    ensure_music_column(db, "icon", "TEXT").await?;
     ensure_music_column(db, "audio_status", "TEXT NOT NULL DEFAULT 'unavailable'").await?;
     ensure_music_column(db, "audio_error", "TEXT").await?;
     ensure_music_column(db, "midi_object_key", "TEXT").await?;
@@ -1304,7 +1306,7 @@ async fn find_accessible_music_for_user(
 ) -> Result<Vec<(MusicRecord, String, String)>, AppError> {
     Ok(sqlx::query_as::<_, UserAccessibleMusicRow>(
         r#"
-        SELECT DISTINCT m.id, m.title, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, mel.ensemble_id, e.name AS ensemble_name
+        SELECT DISTINCT m.id, m.title, m.icon, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, mel.ensemble_id, e.name AS ensemble_name
         FROM musics m
         JOIN music_ensemble_links mel ON mel.music_id = m.id
         JOIN user_ensemble_memberships uem ON uem.ensemble_id = mel.ensemble_id
@@ -1322,6 +1324,7 @@ async fn find_accessible_music_for_user(
             MusicRecord {
                 id: row.id,
                 title: row.title,
+                icon: row.icon,
                 filename: row.filename,
                 content_type: row.content_type,
                 object_key: row.object_key,
@@ -1352,6 +1355,7 @@ async fn find_accessible_music_for_user(
 struct UserAccessibleMusicRow {
     id: String,
     title: String,
+    icon: Option<String>,
     filename: String,
     content_type: String,
     object_key: String,
@@ -1430,7 +1434,7 @@ async fn admin_list_musics(
 
     let rows = sqlx::query_as::<_, MusicRecord>(
         r#"
-        SELECT id, title, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
+        SELECT id, title, icon, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
         FROM musics
         ORDER BY created_at DESC
         "#,
@@ -1480,6 +1484,7 @@ async fn admin_upload_music(
     let auth = require_admin_context(&state, &headers).await?;
 
     let mut title: Option<String> = None;
+    let mut icon: Option<String> = None;
     let mut requested_public_id: Option<String> = None;
     let mut requested_quality_profile: Option<String> = None;
     let mut requested_ensemble_id: Option<String> = None;
@@ -1489,6 +1494,9 @@ async fn admin_upload_music(
         match field.name() {
             Some("title") => {
                 title = Some(field.text().await?.trim().to_owned());
+            }
+            Some("icon") => {
+                icon = Some(field.text().await?.trim().to_owned());
             }
             Some("public_id") => {
                 requested_public_id = Some(field.text().await?.trim().to_owned());
@@ -1521,6 +1529,7 @@ async fn admin_upload_music(
     }
 
     let public_id = normalize_public_id(requested_public_id.as_deref())?;
+    let icon = normalize_music_icon(icon.as_deref())?;
     ensure_public_id_available(&state.db_rw, public_id.as_deref(), None).await?;
     let quality_profile = parse_quality_profile(requested_quality_profile.as_deref())?;
     let ensemble_id = requested_ensemble_id
@@ -1561,7 +1570,12 @@ async fn admin_upload_music(
     //                      • upload MIDI
     //                      • upload MusicXML
     //                      • upload stem assets
-    let (midi_outcome, musicxml_outcome) = tokio::try_join!(
+    let (audio_outcome, midi_outcome, musicxml_outcome) = tokio::try_join!(
+        async {
+            audio::generate_audio(&state.config, &temp_input_path, temp_dir.path())
+                .await
+                .map_err(AppError::from)
+        },
         async {
             audio::generate_midi(&state.config, &temp_input_path, temp_dir.path())
                 .await
@@ -1587,12 +1601,13 @@ async fn admin_upload_music(
     let created_at = chrono::Utc::now().to_rfc3339();
     sqlx::query(
         r#"
-        INSERT INTO musics (id, title, filename, content_type, object_key, public_token, public_id, quality_profile, created_at, directory_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        INSERT INTO musics (id, title, icon, filename, content_type, object_key, public_token, public_id, quality_profile, created_at, directory_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         "#,
     )
     .bind(&music_id)
     .bind(&resolved_title)
+    .bind(&icon)
     .bind(&filename)
     .bind(&content_type)
     .bind(&object_key)
@@ -1610,18 +1625,16 @@ async fn admin_upload_music(
         .await?;
 
     let (
+        (audio_object_key, audio_status, audio_error),
         (midi_object_key, midi_status, midi_error),
         (musicxml_object_key, musicxml_status, musicxml_error),
         (stems_status, stems_error),
     ) = tokio::try_join!(
+        store_conversion(&state, &music_id, "audio", audio_outcome),
         store_conversion(&state, &music_id, "midi", midi_outcome),
         store_conversion(&state, &music_id, "musicxml", musicxml_outcome),
         store_stems(&state, &music_id, stem_results, stems_status, stems_error),
     )?;
-
-    let audio_object_key = None;
-    let audio_status = "disabled".to_owned();
-    let audio_error = None;
 
     // Update conversion results onto the row we just inserted.
     sqlx::query(
@@ -1652,6 +1665,7 @@ async fn admin_upload_music(
     let record = MusicRecord {
         id: music_id,
         title: resolved_title,
+        icon,
         filename,
         content_type,
         object_key,
@@ -1710,7 +1724,12 @@ async fn admin_retry_render(
     fs::write(&temp_input_path, &score_bytes).await?;
 
     // Re-run MIDI and MusicXML exports in parallel.
-    let (midi_outcome, musicxml_outcome) = tokio::try_join!(
+    let (audio_outcome, midi_outcome, musicxml_outcome) = tokio::try_join!(
+        async {
+            audio::generate_audio(&state.config, &temp_input_path, temp_dir.path())
+                .await
+                .map_err(AppError::from)
+        },
         async {
             audio::generate_midi(&state.config, &temp_input_path, temp_dir.path())
                 .await
@@ -1722,6 +1741,8 @@ async fn admin_retry_render(
                 .map_err(AppError::from)
         },
     )?;
+    let (audio_object_key, audio_status, audio_error) =
+        store_conversion(&state, &id, "audio", audio_outcome).await?;
     let (midi_object_key, midi_status, midi_error) =
         store_conversion(&state, &id, "midi", midi_outcome).await?;
     let (musicxml_object_key, musicxml_status, musicxml_error) =
@@ -1746,11 +1767,14 @@ async fn admin_retry_render(
 
     sqlx::query(
         "UPDATE musics SET \
-         audio_object_key = NULL, audio_status = 'disabled', audio_error = NULL, \
-         midi_object_key = $1, midi_status = $2, midi_error = $3, \
-         musicxml_object_key = $4, musicxml_status = $5, musicxml_error = $6, \
-         stems_status = $7, stems_error = $8 WHERE id = $9",
+         audio_object_key = $1, audio_status = $2, audio_error = $3, \
+         midi_object_key = $4, midi_status = $5, midi_error = $6, \
+         musicxml_object_key = $7, musicxml_status = $8, musicxml_error = $9, \
+         stems_status = $10, stems_error = $11 WHERE id = $12",
     )
+    .bind(&audio_object_key)
+    .bind(&audio_status)
+    .bind(&audio_error)
     .bind(&midi_object_key)
     .bind(&midi_status)
     .bind(&midi_error)
@@ -1975,10 +1999,12 @@ async fn admin_update_music(
     ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
 
     let public_id = normalize_public_id(payload.public_id.as_deref())?;
+    let icon = normalize_music_icon(payload.icon.as_deref())?;
     ensure_public_id_available(&state.db_rw, public_id.as_deref(), Some(&id)).await?;
 
-    let update_result = sqlx::query("UPDATE musics SET public_id = $1 WHERE id = $2")
+    let update_result = sqlx::query("UPDATE musics SET public_id = $1, icon = $2 WHERE id = $3")
         .bind(&public_id)
+        .bind(&icon)
         .bind(&id)
         .execute(&state.db_rw)
         .await?;
@@ -2389,7 +2415,7 @@ async fn current_user_library(
     let music_entries = if auth.is_superadmin() {
         let rows = sqlx::query_as::<_, UserAccessibleMusicRow>(
             r#"
-            SELECT m.id, m.title, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, mel.ensemble_id, e.name AS ensemble_name
+            SELECT m.id, m.title, m.icon, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, mel.ensemble_id, e.name AS ensemble_name
             FROM musics m
             JOIN music_ensemble_links mel ON mel.music_id = m.id
             JOIN ensembles e ON e.id = mel.ensemble_id
@@ -2404,6 +2430,7 @@ async fn current_user_library(
                     MusicRecord {
                         id: row.id,
                         title: row.title,
+                        icon: row.icon,
                         filename: row.filename,
                         content_type: row.content_type,
                         object_key: row.object_key,
@@ -2441,6 +2468,7 @@ async fn current_user_library(
         let score = UserLibraryScoreResponse {
             id: music.id.clone(),
             title: music.title,
+            icon: music.icon,
             filename: music.filename,
             public_url: state.config.public_url_for(&music.public_token),
             public_id_url,
@@ -2500,7 +2528,7 @@ async fn ensure_public_id_available(
 async fn find_music_by_id(db: &PgPool, id: &str) -> Result<Option<MusicRecord>> {
     Ok(sqlx::query_as::<_, MusicRecord>(
         r#"
-        SELECT id, title, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
+        SELECT id, title, icon, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
         FROM musics
         WHERE id = $1
         "#,
@@ -2513,7 +2541,7 @@ async fn find_music_by_id(db: &PgPool, id: &str) -> Result<Option<MusicRecord>> 
 async fn find_music_by_access_key(db: &PgPool, access_key: &str) -> Result<Option<MusicRecord>> {
     Ok(sqlx::query_as::<_, MusicRecord>(
         r#"
-        SELECT id, title, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
+        SELECT id, title, icon, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
         FROM musics
         WHERE public_token = $1 OR public_id = $2
         LIMIT 1
@@ -2549,6 +2577,7 @@ fn record_to_admin_response(
     AdminMusicResponse {
         id: record.id,
         title: record.title,
+        icon: record.icon.clone(),
         filename: record.filename,
         content_type: record.content_type,
         audio_status: record.audio_status,
@@ -2578,6 +2607,11 @@ fn record_to_public_response(
     record: MusicRecord,
     access_key: &str,
 ) -> PublicMusicResponse {
+    let audio_stream_url = record.audio_object_key.as_ref().map(|object_key| {
+        storage
+            .public_url(object_key)
+            .unwrap_or_else(|| format!("/api/public/{access_key}/audio"))
+    });
     let midi_download_url = record.midi_object_key.as_ref().map(|object_key| {
         storage
             .public_url(object_key)
@@ -2594,11 +2628,12 @@ fn record_to_public_response(
 
     PublicMusicResponse {
         title: record.title,
+        icon: record.icon,
         filename: record.filename,
-        audio_status: "disabled".to_owned(),
-        audio_error: None,
-        can_stream_audio: false,
-        audio_stream_url: None,
+        audio_status: record.audio_status,
+        audio_error: record.audio_error,
+        can_stream_audio: audio_stream_url.is_some(),
+        audio_stream_url,
         midi_status: record.midi_status,
         midi_error: record.midi_error,
         midi_download_url,
@@ -2620,6 +2655,24 @@ fn generate_auth_token(length: usize) -> String {
         .take(length)
         .map(char::from)
         .collect()
+}
+
+fn normalize_music_icon(value: Option<&str>) -> Result<Option<String>, AppError> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    if trimmed.chars().count() > 2 {
+        return Err(AppError::bad_request("Score icon must be 1 or 2 characters"));
+    }
+
+    let icon = trimmed.chars().take(2).collect::<String>();
+    Ok(Some(icon))
 }
 
 // ── JWT helpers ──────────────────────────────────────────────────────────────

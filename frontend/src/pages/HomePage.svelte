@@ -11,11 +11,9 @@
         userLibrary,
         connectionBusy,
         preloadedUsername,
-        manualConnectionLink = $bindable(),
         onLogout,
         onShowQr,
         onOpenScanner,
-        onManualConnect,
     }: {
         routeKind: string;
         currentUser: AppUser | null;
@@ -25,17 +23,38 @@
         userSuccess: string;
         userLibrary: UserLibraryEnsemble[];
         connectionBusy: boolean;
-        manualConnectionLink: string;
         onLogout: () => Promise<void>;
         onShowQr: () => Promise<void>;
         onOpenScanner: () => void;
-        onManualConnect: () => Promise<void>;
     } = $props();
 
     function canAccessAdmin() {
         return (
             currentUser?.role === "admin" || currentUser?.role === "superadmin"
         );
+    }
+
+    function ensembleAccent(name: string) {
+        let hash = 0;
+
+        for (let i = 0; i < name.length; i += 1) {
+            hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+        }
+
+        const hue = hash % 360;
+        const hueAlt = (hue + 32) % 360;
+
+        return [
+            `--ensemble-hue: ${hue}`,
+            `--ensemble-hue-alt: ${hueAlt}`,
+            `--ensemble-accent: hsl(${hue} 68% 46%)`,
+            `--ensemble-accent-soft: hsl(${hue} 76% 95%)`,
+            `--ensemble-accent-border: hsl(${hue} 52% 78%)`,
+        ].join("; ");
+    }
+
+    function scoreLabel(count: number) {
+        return `${count} score${count === 1 ? "" : "s"}`;
     }
 </script>
 
@@ -61,7 +80,11 @@
             onShowQr={() => void onShowQr()}
             onLogout={() => void onLogout()}
         />
-        <section class="content-panel home-grid">
+        <section
+            class="content-panel home-grid"
+            class:home-landing-stage={!currentUser && routeKind !== "connect"}
+            class:home-library-stage={!!currentUser}
+        >
             {#if routeKind === "connect"}
                 <div class="music-card connect-card">
                     <p class="meta-label">Connection</p>
@@ -76,11 +99,14 @@
                         </p>{/if}
                 </div>
             {:else if currentUser}
-                <div class="music-card">
-                    <div class="card-header">
-                        <div>
+                <div class="music-card library-card">
+                    <div class="card-header library-header">
+                        <div class="library-header-copy">
                             <p class="meta-label">Library</p>
                             <h2>Your ensembles</h2>
+                            <p class="lede">
+                                Jump between ensembles and open any score in one click.
+                            </p>
                         </div>
                     </div>
                     {#if userError}<p class="status error">{userError}</p>{/if}
@@ -92,80 +118,138 @@
                             No scores are available for your ensembles yet.
                         </p>
                     {:else}
-                        <div class="directory-stack">
-                            {#each userLibrary as ensemble}
-                                <section class="directory-panel">
-                                    <div class="music-topline">
-                                        <div>
-                                            <h3>{ensemble.name}</h3>
-                                            <p class="subtle">
-                                                {ensemble.scores.length} scores
-                                            </p>
+                        <div class="directory-stack library-accordion">
+                            {#each userLibrary as ensemble, index}
+                                <details
+                                    class="directory-panel ensemble-accordion"
+                                    open={index === 0}
+                                    style={ensembleAccent(ensemble.name)}
+                                >
+                                    <summary class="ensemble-summary">
+                                        <div class="ensemble-summary-main">
+                                            <span class="ensemble-pill">
+                                                {ensemble.name.slice(0, 1)}
+                                            </span>
+                                            <div class="ensemble-summary-copy">
+                                                <h3>{ensemble.name}</h3>
+                                                <p class="subtle">
+                                                    {scoreLabel(ensemble.scores.length)}
+                                                </p>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <div class="score-link-list">
+                                        <span class="ensemble-summary-icon" aria-hidden="true"
+                                            ></span
+                                        >
+                                    </summary>
+                                    <div class="score-link-list library-score-grid">
                                         {#each ensemble.scores as score}
                                             <a
                                                 class="score-link-row"
                                                 href={score.public_url}
                                             >
-                                                <span>{score.title}</span>
-                                                <small>{score.filename}</small>
+                                                <span class="score-link-title">
+                                                    <span
+                                                        class="score-link-icon"
+                                                        class:is-empty={!score.icon}
+                                                        aria-hidden="true"
+                                                        >{score.icon ?? ""}</span
+                                                    >
+                                                    <span>{score.title}</span>
+                                                </span>
                                             </a>
                                         {/each}
                                     </div>
-                                </section>
+                                </details>
                             {/each}
                         </div>
                     {/if}
                 </div>
             {:else}
-                <div class="music-card">
-                    <div class="card-header">
-                        <div>
-                            <p class="meta-label">Connect</p>
-                            <h2>Use a connection link</h2>
+                <div class="music-card landing-card">
+                    <div class="landing-card-copy">
+                        <p class="meta-label">Instant Access</p>
+                        <h1>Open-source score manager.</h1>
+                        <p class="landing-lede">
+                            Scan the QR code from your conductor or admin and
+                            jump straight into your library. If someone sends
+                            you a Fumen link, opening it here signs you in
+                            automatically.
+                        </p>
+                        <div class="landing-actions">
+                            <button
+                                class="button landing-cta"
+                                onclick={() => onOpenScanner()}
+                            >
+                                <svg
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 18 18"
+                                    fill="none"
+                                    aria-hidden="true"
+                                >
+                                    <rect
+                                        x="1"
+                                        y="1"
+                                        width="5"
+                                        height="5"
+                                        rx="0.75"
+                                        stroke="currentColor"
+                                        stroke-width="1.5"
+                                    />
+                                    <rect
+                                        x="12"
+                                        y="1"
+                                        width="5"
+                                        height="5"
+                                        rx="0.75"
+                                        stroke="currentColor"
+                                        stroke-width="1.5"
+                                    />
+                                    <rect
+                                        x="1"
+                                        y="12"
+                                        width="5"
+                                        height="5"
+                                        rx="0.75"
+                                        stroke="currentColor"
+                                        stroke-width="1.5"
+                                    />
+                                    <path
+                                        d="M12 12h2v2h-2zM14 14h2v2h-2zM16 12h1v1h-1zM12 14h1v3h-1zM14 16h3v1h-3z"
+                                        fill="currentColor"
+                                    />
+                                </svg>
+                                {connectionBusy ? "Opening camera..." : "Scan QR code"}
+                            </button>
+                            <p class="landing-note">
+                                Best on mobile. Camera access opens in a secure
+                                scanner window.
+                            </p>
                         </div>
-                        <button
-                            class="button secondary"
-                            onclick={() => onOpenScanner()}>Scan QR code</button
-                        >
                     </div>
-                    <label class="field"
-                        ><span>Connection link</span><input
-                            bind:value={manualConnectionLink}
-                            placeholder="Paste a link like https://.../connect/..."
-                        /></label
-                    >
-                    <div class="actions">
-                        <button
-                            class="button"
-                            onclick={() => void onManualConnect()}
-                            disabled={connectionBusy}
-                            >{connectionBusy
-                                ? "Connecting..."
-                                : "Connect this device"}</button
-                        ><a class="button ghost" href="/admin"
-                            >Open admin panel</a
-                        >
+                    <div class="landing-orbit" aria-hidden="true">
+                        <div class="landing-orbit-ring"></div>
+                        <div class="landing-orbit-ring landing-orbit-ring-alt"></div>
+                        <div class="landing-orbit-core">
+                            <span>Fumen</span>
+                            <strong>Scan to enter</strong>
+                        </div>
+                        <div class="landing-chip landing-chip-a">
+                            Orchestra
+                        </div>
+                        <div class="landing-chip landing-chip-b">
+                            Library
+                        </div>
+                        <div class="landing-chip landing-chip-c">
+                            Live score
+                        </div>
                     </div>
-                    {#if userError}<p class="status error">{userError}</p>{/if}
-                    {#if userSuccess}<p class="status success">
+                    {#if userError}<p class="status error landing-status">
+                            {userError}
+                        </p>{/if}
+                    {#if userSuccess}<p class="status success landing-status">
                             {userSuccess}
                         </p>{/if}
-                </div>
-                <div class="music-card">
-                    <p class="meta-label">How it works</p>
-                    <h2>Username-only access</h2>
-                    <p class="lede">
-                        An admin creates your username once. After that, any
-                        signed-in device can generate a temporary QR code or
-                        link for another device.
-                    </p>
-                    <p class="hint">
-                        If your browser blocks camera access, paste the
-                        connection link here instead.
-                    </p>
                 </div>
             {/if}
         </section>

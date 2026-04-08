@@ -84,7 +84,6 @@
   let userError = $state("");
   let userSuccess = $state("");
   let userLibrary = $state<UserLibraryEnsemble[]>(cachedLibrary);
-  let manualConnectionLink = $state("");
   let connectionBusy = $state(false);
 
   let credentialModalOpen = $state(false);
@@ -251,9 +250,7 @@
         response.user,
         response.access_token_expires_at,
       );
-      manualConnectionLink = "";
       closeScanner();
-      userSuccess = `Connected as ${response.user.username}.`;
       if (fromRoute || route.kind !== "user") {
         navigate("/", true);
       }
@@ -267,17 +264,6 @@
       connectionBusy = false;
       userLoading = false;
     }
-  }
-
-  async function handleManualConnect() {
-    const token = extractConnectionToken(manualConnectionLink);
-    if (!token) {
-      userError = "Paste a valid connection link from Fumen.";
-      userSuccess = "";
-      return;
-    }
-
-    await completeConnectionFromToken(token);
   }
 
   function extractConnectionToken(value: string): string | null {
@@ -467,11 +453,9 @@
     {userSuccess}
     {userLibrary}
     {connectionBusy}
-    bind:manualConnectionLink
     onLogout={logoutUser}
     onShowQr={handleShowMyQr}
     onOpenScanner={openScanner}
-    onManualConnect={handleManualConnect}
   />
 {/if}
 

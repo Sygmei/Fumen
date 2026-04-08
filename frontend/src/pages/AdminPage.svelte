@@ -74,6 +74,7 @@
     let adminError = $state("");
     let adminSuccess = $state("");
     let uploadTitle = $state("");
+    let uploadIcon = $state("");
     let uploadPublicId = $state("");
     let uploadQualityProfile = $state<StemQualityProfile>("standard");
     let selectedFile = $state<File | null>(null);
@@ -88,6 +89,9 @@
     let uploadEnsembleId = $state(cachedEnsembles[0]?.id ?? "");
     let editPublicIds = $state<Record<string, string>>(
         Object.fromEntries(cachedMusics.map((m) => [m.id, m.public_id ?? ""])),
+    );
+    let editIcons = $state<Record<string, string>>(
+        Object.fromEntries(cachedMusics.map((m) => [m.id, m.icon ?? ""])),
     );
     let editEnsembleIds = $state<Record<string, string>>(
         Object.fromEntries(
@@ -150,6 +154,9 @@
             );
             editPublicIds = Object.fromEntries(
                 musicItems.map((music) => [music.id, music.public_id ?? ""]),
+            );
+            editIcons = Object.fromEntries(
+                musicItems.map((music) => [music.id, music.icon ?? ""]),
             );
             editEnsembleIds = Object.fromEntries(
                 musicItems.map((music) => [
@@ -311,12 +318,14 @@
             await uploadMusic({
                 file: selectedFile,
                 title: uploadTitle,
+                icon: uploadIcon,
                 publicId: uploadPublicId,
                 qualityProfile: uploadQualityProfile,
                 ensembleId: uploadEnsembleId,
             });
 
             uploadTitle = "";
+            uploadIcon = "";
             uploadPublicId = "";
             uploadQualityProfile = "standard";
             selectedFile = null;
@@ -346,6 +355,7 @@
             const updated = await updatePublicId(
                 musicId,
                 editPublicIds[musicId] ?? "",
+                editIcons[musicId] ?? "",
             );
             musics = musics.map((music) =>
                 music.id === musicId ? updated : music,
@@ -354,12 +364,16 @@
                 ...editPublicIds,
                 [musicId]: updated.public_id ?? "",
             };
-            adminSuccess = "Public id updated.";
+            editIcons = {
+                ...editIcons,
+                [musicId]: updated.icon ?? "",
+            };
+            adminSuccess = "Score metadata updated.";
         } catch (error) {
             adminError =
                 error instanceof Error
                     ? error.message
-                    : "Unable to update public id";
+                    : "Unable to update score metadata";
         } finally {
             savingIdFor = "";
         }
@@ -410,6 +424,7 @@
             await deleteMusic(musicId);
             musics = musics.filter((music) => music.id !== musicId);
             delete editPublicIds[musicId];
+            delete editIcons[musicId];
             delete editEnsembleIds[musicId];
             await refreshAdminData();
             adminSuccess = "Score deleted.";
@@ -783,6 +798,13 @@
                                         /></label
                                     >
                                     <label class="field"
+                                        ><span>Icon</span><input
+                                            bind:value={uploadIcon}
+                                            maxlength="2"
+                                            placeholder="Optional emoji or 2-char mark"
+                                        /></label
+                                    >
+                                    <label class="field"
                                         ><span>Public id</span><input
                                             bind:value={uploadPublicId}
                                             placeholder="Optional friendly id"
@@ -847,7 +869,16 @@
                                         <article class="music-card">
                                             <div class="music-topline">
                                                 <div>
-                                                    <h3>{music.title}</h3>
+                                                    <h3 class="admin-score-title">
+                                                        {#if music.icon}
+                                                            <span
+                                                                class="admin-score-icon"
+                                                                aria-hidden="true"
+                                                                >{music.icon}</span
+                                                            >
+                                                        {/if}
+                                                        <span>{music.title}</span>
+                                                    </h3>
                                                     <p class="subtle">
                                                         {music.filename}
                                                     </p>
@@ -933,6 +964,15 @@
                                                 </p>{/if}
                                             <div class="id-row">
                                                 <label class="field"
+                                                    ><span>Score icon</span><input
+                                                        bind:value={editIcons[
+                                                            music.id
+                                                        ]}
+                                                        maxlength="2"
+                                                        placeholder="Optional emoji or 2-char mark"
+                                                    /></label
+                                                >
+                                                <label class="field"
                                                     ><span
                                                         >Friendly public id</span
                                                     ><input
@@ -954,7 +994,7 @@
                                                         )}
                                                     >{savingIdFor === music.id
                                                         ? "Saving..."
-                                                        : "Save id"}</button
+                                                        : "Save metadata"}</button
                                                 >
                                             </div>
                                             <div class="id-row">

@@ -712,6 +712,22 @@ pub async fn generate_musicxml(
     .await
 }
 
+pub async fn generate_audio(
+    config: &AppConfig,
+    input_path: &Path,
+    output_dir: &Path,
+) -> Result<ConversionOutcome> {
+    convert_with_musescore(
+        config,
+        input_path,
+        &output_dir.join("preview.mp3"),
+        "audio/mpeg",
+        "mp3",
+        "MuseScore CLI not configured. Set MUSESCORE_BIN to enable audio conversion.",
+    )
+    .await
+}
+
 /// Render per-instrument OGG stems using sfizz + VSCO-2-CE SFZ soundfonts.
 ///
 /// Reuses `output_dir/preview.mid` if it already exists from a prior
