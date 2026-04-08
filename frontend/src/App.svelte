@@ -6,6 +6,7 @@
   import {
     addMusicToEnsemble,
     addUserToEnsemble,
+    clearAuth,
     createEnsemble,
     createAdminUserLoginLink,
     createMyLoginLink,
@@ -16,13 +17,16 @@
     fetchPublicMusic,
     fetchStems,
     fetchUserLibrary,
+    initAuth,
     listEnsembles,
     listMusics,
     listUsers,
+    logout,
     moveMusic,
     removeMusicFromEnsemble,
     removeUserFromEnsemble,
     retryRender,
+    setOnSessionExpired,
     STEM_QUALITY_PROFILES,
     updatePublicId,
     uploadMusic,
@@ -59,8 +63,13 @@
     { id: 'scores', label: 'Scores', eyebrow: 'Library' },
   ]
 
-  const storedUserSessionToken =
-    typeof window !== 'undefined' ? window.localStorage.getItem('user-session-token') ?? '' : ''
+  const storedRefreshToken =
+    typeof window !== 'undefined' ? window.localStorage.getItem('refresh-token') ?? '' : ''
+
+  // Pre-load auth module so the first API call can auto-refresh the access token
+  if (storedRefreshToken) {
+    initAuth(storedRefreshToken, '')
+  }
 
   let route = $state(resolveRoute(typeof window !== 'undefined' ? window.location.pathname : '/'))
 
@@ -88,9 +97,9 @@
   let retryingFor = $state('')
   let deletingMusicFor = $state('')
 
-  let userSessionToken = $state(storedUserSessionToken)
+  let refreshToken = $state(storedRefreshToken)
   let currentUser = $state<AppUser | null>(null)
-  let userSessionExpiresAt = $state('')
+  let userSessionExpiresAt = $state<string | null>(null)
   let userLoading = $state(false)
   let userError = $state('')
   let userSuccess = $state('')
@@ -155,6 +164,12 @@
     }
 
     window.addEventListener('popstate', handlePopState)
+
+    setOnSessionExpired(() => {
+      clearUserSession()
+      userError = 'Your session has expired. Please sign in again.'
+    })
+
     void syncRoute()
 
     return () => {
@@ -211,8 +226,8 @@
     }
 
     if (route.kind === 'admin') {
-      if (userSessionToken) {
-        await loadCurrentUser(userSessionToken)
+      if (refreshToken) {
+        await loadCurrentUser()
         if (canAccessAdmin()) {
           await refreshAdminData()
         }
@@ -224,25 +239,20 @@
       return
     }
 
-    if (userSessionToken) {
-      await loadCurrentUser(userSessionToken)
+    if (refreshToken) {
+      await loadCurrentUser()
     }
   }
 
-  async function refreshAdminData(authToken = userSessionToken) {
-    if (!authToken) {
-      adminError = 'Sign in first.'
-      return
-    }
-
+  async function refreshAdminData() {
     adminLoading = true
     adminError = ''
 
     try {
       const [musicItems, userItems, ensembleItems] = await Promise.all([
-        listMusics(authToken),
-        listUsers(authToken),
-        listEnsembles(authToken),
+        listMusics(),
+        listUsers(),
+        listEnsembles(),
       ])
       musics = musicItems
       adminUsers = userItems
@@ -273,7 +283,7 @@
     adminSuccess = ''
 
     try {
-      const user = await createUser(userSessionToken, trimmed)
+      const user = await createUser(trimmed)
       adminUsers = [...adminUsers, user].sort((left, right) =>
         left.username.localeCompare(right.username),
       )
@@ -298,7 +308,7 @@
     adminSuccess = ''
 
     try {
-      const ensemble = await createEnsemble(userSessionToken, trimmed)
+      const ensemble = await createEnsemble(trimmed)
       ensembles = [...ensembles, ensemble].sort((left, right) => left.name.localeCompare(right.name))
       newEnsembleName = ''
       adminSuccess = `Ensemble ${ensemble.name} created.`
@@ -323,9 +333,9 @@
 
     try {
       if (role === 'none') {
-        await removeUserFromEnsemble(userSessionToken, ensembleId, userId)
+        await removeUserFromEnsemble(ensembleId, userId)
       } else {
-        await addUserToEnsemble(userSessionToken, ensembleId, userId, role)
+        await addUserToEnsemble(ensembleId, userId, role)
       }
       await refreshAdminData()
       adminSuccess = 'Ensemble role updated.'
@@ -348,9 +358,9 @@
 
     try {
       if (shouldAdd) {
-        await addMusicToEnsemble(userSessionToken, musicId, ensembleId)
+        await addMusicToEnsemble(musicId, ensembleId)
       } else {
-        await removeMusicFromEnsemble(userSessionToken, musicId, ensembleId)
+        await removeMusicFromEnsemble(musicId, ensembleId)
       }
       await refreshAdminData()
       adminSuccess = 'Score ensembles updated.'
@@ -374,7 +384,7 @@
     adminSuccess = ''
 
     try {
-      await uploadMusic(userSessionToken, {
+      await uploadMusic({
         file: selectedFile,
         title: uploadTitle,
         publicId: uploadPublicId,
@@ -405,7 +415,7 @@
     adminSuccess = ''
 
     try {
-      const updated = await updatePublicId(userSessionToken, musicId, editPublicIds[musicId] ?? '')
+      const updated = await updatePublicId(musicId, editPublicIds[musicId] ?? '')
       musics = musics.map((music) => (music.id === musicId ? updated : music))
       editPublicIds = { ...editPublicIds, [musicId]: updated.public_id ?? '' }
       adminSuccess = 'Public id updated.'
@@ -428,7 +438,7 @@
     adminSuccess = ''
 
     try {
-      const updated = await moveMusic(userSessionToken, musicId, ensembleId)
+      const updated = await moveMusic(musicId, ensembleId)
       musics = musics.map((music) => (music.id === musicId ? updated : music))
       editEnsembleIds = { ...editEnsembleIds, [musicId]: updated.ensemble_ids[0] ?? '' }
       await refreshAdminData()
@@ -450,7 +460,7 @@
     adminSuccess = ''
 
     try {
-      await deleteMusic(userSessionToken, musicId)
+      await deleteMusic(musicId)
       musics = musics.filter((music) => music.id !== musicId)
       delete editPublicIds[musicId]
       delete editEnsembleIds[musicId]
@@ -469,7 +479,7 @@
     adminSuccess = ''
 
     try {
-      const updated = await retryRender(userSessionToken, musicId)
+      const updated = await retryRender(musicId)
       musics = musics.map((music) => (music.id === musicId ? updated : music))
       adminSuccess = 'Render retried successfully.'
     } catch (error) {
@@ -510,7 +520,7 @@
     adminSuccess = ''
 
     try {
-      const response = await createAdminUserLoginLink(userSessionToken, user.id)
+      const response = await createAdminUserLoginLink(user.id)
       await showCredentialModal(`QR code for ${user.username}`, response)
       adminSuccess = `QR code ready for ${user.username}.`
     } catch (error) {
@@ -523,15 +533,15 @@
     adminSuccess = ''
 
     try {
-      const response = await createAdminUserLoginLink(userSessionToken, user.id)
+      const response = await createAdminUserLoginLink(user.id)
       await copyText(response.connection_url, 'admin', `Connection link copied for ${user.username}.`)
     } catch (error) {
       adminError = error instanceof Error ? error.message : 'Unable to create connection link'
     }
   }
 
-  async function loadCurrentUser(authToken = userSessionToken) {
-    if (!authToken) {
+  async function loadCurrentUser() {
+    if (!refreshToken) {
       clearUserSession()
       return
     }
@@ -539,9 +549,8 @@
     userLoading = true
 
     try {
-      const response = await fetchCurrentUser(authToken)
-      const library = await fetchUserLibrary(authToken)
-      userSessionToken = authToken
+      const response = await fetchCurrentUser()
+      const library = await fetchUserLibrary()
       currentUser = response.user
       userSessionExpiresAt = response.session_expires_at
       userLibrary = library.ensembles
@@ -555,19 +564,26 @@
   }
 
   function clearUserSession() {
-    userSessionToken = ''
+    refreshToken = ''
     currentUser = null
-    userSessionExpiresAt = ''
+    userSessionExpiresAt = null
     userLibrary = []
-    window.localStorage.removeItem('user-session-token')
+    clearAuth()
+    window.localStorage.removeItem('refresh-token')
   }
 
-  function persistUserSession(sessionToken: string, user: AppUser, expiresAt: string) {
-    userSessionToken = sessionToken
+  function persistUserSession(
+    newRefreshToken: string,
+    newAccessToken: string,
+    user: AppUser,
+    expiresAt: string | null,
+  ) {
+    initAuth(newRefreshToken, newAccessToken)
+    refreshToken = newRefreshToken
     currentUser = user
     userSessionExpiresAt = expiresAt
     userLoading = false
-    window.localStorage.setItem('user-session-token', sessionToken)
+    window.localStorage.setItem('refresh-token', newRefreshToken)
   }
 
   async function completeConnectionFromToken(token: string, fromRoute = false) {
@@ -578,7 +594,12 @@
 
     try {
       const response = await exchangeLoginToken(token)
-      persistUserSession(response.session_token, response.user, response.session_expires_at)
+      persistUserSession(
+        response.refresh_token,
+        response.access_token,
+        response.user,
+        response.access_token_expires_at,
+      )
       manualConnectionLink = ''
       closeScanner()
       userSuccess = `Connected as ${response.user.username}.`
@@ -634,7 +655,7 @@
   }
 
   async function handleShowMyQr() {
-    if (!userSessionToken || !currentUser) {
+    if (!refreshToken || !currentUser) {
       userError = 'Sign in first.'
       return
     }
@@ -643,7 +664,7 @@
     userSuccess = ''
 
     try {
-      const response = await createMyLoginLink(userSessionToken)
+      const response = await createMyLoginLink()
       await showCredentialModal(`QR code for ${currentUser.username}`, response)
       userSuccess = 'QR code ready.'
     } catch (error) {
@@ -652,7 +673,7 @@
   }
 
   async function handleCopyMyLink() {
-    if (!userSessionToken || !currentUser) {
+    if (!refreshToken || !currentUser) {
       userError = 'Sign in first.'
       return
     }
@@ -661,20 +682,25 @@
     userSuccess = ''
 
     try {
-      const response = await createMyLoginLink(userSessionToken)
+      const response = await createMyLoginLink()
       await copyText(response.connection_url, 'user', 'Connection link copied to clipboard.')
     } catch (error) {
       userError = error instanceof Error ? error.message : 'Unable to create connection link'
     }
   }
 
-  function logoutUser() {
+  async function logoutUser() {
+    try {
+      await logout()
+    } catch {
+      // best-effort: clear locally regardless
+    }
     clearUserSession()
     userSuccess = ''
     userError = ''
   }
 
-  function logoutAdmin() {
+  async function logoutAdmin() {
     adminSection = 'users'
     musics = []
     adminUsers = []
@@ -683,7 +709,7 @@
     editEnsembleIds = {}
     adminSuccess = ''
     adminError = ''
-    logoutUser()
+    await logoutUser()
   }
 
   function navigate(pathname: string, replace = false) {
@@ -1177,7 +1203,7 @@
             </div>
             <span class="status-pill">{currentUser.role}</span>
             <a class="button ghost" href="/">User homepage</a>
-            <button class="button ghost" onclick={logoutAdmin}>Sign out</button>
+            <button class="button ghost" onclick={() => void logoutAdmin()}>Sign out</button>
           </div>
         </header>
 
@@ -1384,7 +1410,7 @@
             {#if canAccessAdmin()}
               <a class="button ghost" href="/admin">Admin panel</a>
             {/if}
-            <button class="button ghost" onclick={logoutUser}>Log out</button>
+            <button class="button ghost" onclick={() => void logoutUser()}>Log out</button>
           {:else}
             <button class="button" onclick={() => void openScanner()}>Scan QR code</button>
             <a class="button ghost" href="/admin">Admin panel</a>
@@ -1400,7 +1426,7 @@
           <div class="card-header"><div><p class="meta-label">Session</p><h2>{currentUser.username}</h2></div><p class="status-pill">signed in</p></div>
           <div class="meta-grid">
             <div><p class="meta-label">Username</p><p>{currentUser.username}</p></div>
-            <div><p class="meta-label">Session until</p><p>{prettyDate(userSessionExpiresAt)}</p></div>
+            <div><p class="meta-label">Access token until</p><p>{userSessionExpiresAt ? prettyDate(userSessionExpiresAt) : '—'}</p></div>
             <div><p class="meta-label">Accessible ensembles</p><p>{userLibrary.length}</p></div>
           </div>
           <p class="hint">Every QR code and connection link is single-use and valid for 5 minutes.</p>

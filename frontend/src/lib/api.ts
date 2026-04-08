@@ -50,14 +50,20 @@ export type LoginLinkResponse = {
   expires_at: string
 }
 
-export type AuthSessionResponse = {
-  session_token: string
-  session_expires_at: string
+export type AuthTokenResponse = {
+  refresh_token: string
+  access_token: string
+  access_token_expires_at: string
   user: AppUser
 }
 
+export type AccessTokenRefreshResponse = {
+  access_token: string
+  access_token_expires_at: string
+}
+
 export type CurrentUserResponse = {
-  session_expires_at: string
+  session_expires_at: string | null
   user: AppUser
 }
 
@@ -136,7 +142,7 @@ export type Stem = {
   }> | null
 }
 
-type JsonOptions = RequestInit & { authToken?: string }
+type JsonOptions = RequestInit & { authenticated?: boolean }
 
 type RuntimeConfig = {
   apiBaseUrl?: string
@@ -174,6 +180,80 @@ const API_BASE_ORIGIN = new URL(
   API_BASE_URL,
   globalThis.location?.origin ?? 'http://localhost',
 ).origin
+
+// ── Module-level JWT auth state ───────────────────────────────────────────
+
+let _refreshToken: string | null = null
+let _accessToken: string | null = null
+let _accessTokenExp: number = 0
+let _refreshPromise: Promise<string> | null = null
+let _onSessionExpired: (() => void) | null = null
+
+export function setOnSessionExpired(cb: () => void): void {
+  _onSessionExpired = cb
+}
+
+export function initAuth(refreshToken: string, accessToken: string): void {
+  _refreshToken = refreshToken
+  _accessToken = accessToken
+  _accessTokenExp = parseJwtExp(accessToken)
+}
+
+export function clearAuth(): void {
+  _refreshToken = null
+  _accessToken = null
+  _accessTokenExp = 0
+  _refreshPromise = null
+}
+
+export function hasAuth(): boolean {
+  return _refreshToken !== null && _refreshToken !== ''
+}
+
+function parseJwtExp(token: string): number {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1])) as { exp?: number }
+    return payload.exp ?? 0
+  } catch {
+    return 0
+  }
+}
+
+async function getAccessToken(): Promise<string> {
+  if (!_refreshToken) throw new Error('Not authenticated')
+
+  // Token valid for more than 60 more seconds — return immediately
+  if (_accessToken && Date.now() / 1000 < _accessTokenExp - 60) {
+    return _accessToken
+  }
+
+  // Deduplicate concurrent refresh calls
+  if (_refreshPromise) return _refreshPromise
+
+  _refreshPromise = (async (): Promise<string> => {
+    try {
+      const resp = await _callRefreshEndpoint(_refreshToken!)
+      _accessToken = resp.access_token
+      _accessTokenExp = parseJwtExp(resp.access_token)
+      return _accessToken
+    } catch {
+      clearAuth()
+      _onSessionExpired?.()
+      throw new Error('Session expired. Please sign in again.')
+    } finally {
+      _refreshPromise = null
+    }
+  })()
+
+  return _refreshPromise
+}
+
+async function _callRefreshEndpoint(refreshToken: string): Promise<AccessTokenRefreshResponse> {
+  return requestJson<AccessTokenRefreshResponse>('/auth/refresh', {
+    method: 'POST',
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  })
+}
 
 function apiUrl(path: string): string {
   return `${API_BASE_URL}${path}`
@@ -215,8 +295,9 @@ function normalizeStem(stem: Stem): Stem {
 async function requestJson<T>(path: string, options: JsonOptions = {}): Promise<T> {
   const headers = new Headers(options.headers)
 
-  if (options.authToken) {
-    headers.set('authorization', `Bearer ${options.authToken}`)
+  if (options.authenticated) {
+    const token = await getAccessToken()
+    headers.set('authorization', `Bearer ${token}`)
   }
 
   if (!(options.body instanceof FormData) && !headers.has('content-type')) {
@@ -253,8 +334,9 @@ async function requestJson<T>(path: string, options: JsonOptions = {}): Promise<
 async function requestBlob(path: string, options: JsonOptions = {}): Promise<Blob> {
   const headers = new Headers(options.headers)
 
-  if (options.authToken) {
-    headers.set('authorization', `Bearer ${options.authToken}`)
+  if (options.authenticated) {
+    const token = await getAccessToken()
+    headers.set('authorization', `Bearer ${token}`)
   }
 
   if (!(options.body instanceof FormData) && options.body && !headers.has('content-type')) {
@@ -284,100 +366,94 @@ async function requestBlob(path: string, options: JsonOptions = {}): Promise<Blo
   return response.blob()
 }
 
-export async function listMusics(authToken: string): Promise<AdminMusic[]> {
+export async function listMusics(): Promise<AdminMusic[]> {
   const musics = await requestJson<AdminMusic[]>('/admin/musics', {
-    authToken,
+    authenticated: true,
   })
 
   return musics.map(normalizeAdminMusic)
 }
 
-export async function listUsers(authToken: string): Promise<AppUser[]> {
+export async function listUsers(): Promise<AppUser[]> {
   return requestJson<AppUser[]>('/admin/users', {
-    authToken,
+    authenticated: true,
   })
 }
 
-export async function createUser(authToken: string, username: string): Promise<AppUser> {
+export async function createUser(username: string): Promise<AppUser> {
   return requestJson<AppUser>('/admin/users', {
     method: 'POST',
-    authToken,
+    authenticated: true,
     body: JSON.stringify({ username }),
   })
 }
 
 export async function createAdminUserLoginLink(
-  authToken: string,
   userId: string,
 ): Promise<LoginLinkResponse> {
   return requestJson<LoginLinkResponse>(`/admin/users/${userId}/login-link`, {
     method: 'POST',
-    authToken,
+    authenticated: true,
   })
 }
 
-export async function listEnsembles(authToken: string): Promise<Ensemble[]> {
+export async function listEnsembles(): Promise<Ensemble[]> {
   return requestJson<Ensemble[]>('/admin/ensembles', {
-    authToken,
+    authenticated: true,
   })
 }
 
-export async function createEnsemble(authToken: string, name: string): Promise<Ensemble> {
+export async function createEnsemble(name: string): Promise<Ensemble> {
   return requestJson<Ensemble>('/admin/ensembles', {
     method: 'POST',
-    authToken,
+    authenticated: true,
     body: JSON.stringify({ name }),
   })
 }
 
 export async function addUserToEnsemble(
-  authToken: string,
   ensembleId: string,
   userId: string,
   role: 'admin' | 'user',
 ): Promise<void> {
   await requestJson(`/admin/ensembles/${ensembleId}/users/${userId}`, {
     method: 'POST',
-    authToken,
+    authenticated: true,
     body: JSON.stringify({ role }),
   })
 }
 
 export async function removeUserFromEnsemble(
-  authToken: string,
   ensembleId: string,
   userId: string,
 ): Promise<void> {
   await requestJson(`/admin/ensembles/${ensembleId}/users/${userId}`, {
     method: 'DELETE',
-    authToken,
+    authenticated: true,
   })
 }
 
 export async function addMusicToEnsemble(
-  authToken: string,
   musicId: string,
   ensembleId: string,
 ): Promise<void> {
   await requestJson(`/admin/musics/${musicId}/ensembles/${ensembleId}`, {
     method: 'POST',
-    authToken,
+    authenticated: true,
   })
 }
 
 export async function removeMusicFromEnsemble(
-  authToken: string,
   musicId: string,
   ensembleId: string,
 ): Promise<void> {
   await requestJson(`/admin/musics/${musicId}/ensembles/${ensembleId}`, {
     method: 'DELETE',
-    authToken,
+    authenticated: true,
   })
 }
 
 export async function uploadMusic(
-  authToken: string,
   payload: {
     file: File
     title: string
@@ -395,54 +471,52 @@ export async function uploadMusic(
 
   const music = await requestJson<AdminMusic>('/admin/musics', {
     method: 'POST',
-    authToken,
+    authenticated: true,
     body,
   })
 
   return normalizeAdminMusic(music)
 }
 
-export async function retryRender(authToken: string, id: string): Promise<AdminMusic> {
+export async function retryRender(id: string): Promise<AdminMusic> {
   const music = await requestJson<AdminMusic>(`/admin/musics/${id}/retry`, {
     method: 'POST',
-    authToken,
+    authenticated: true,
   })
 
   return normalizeAdminMusic(music)
 }
 
-export async function downloadScoreGains(authToken: string, id: string): Promise<Blob> {
+export async function downloadScoreGains(id: string): Promise<Blob> {
   return requestBlob(`/admin/musics/${id}/gains`, {
-    authToken,
+    authenticated: true,
   })
 }
 
-export async function downloadPublicScoreGains(authToken: string, accessKey: string): Promise<Blob> {
+export async function downloadPublicScoreGains(accessKey: string): Promise<Blob> {
   return requestBlob(`/admin/public/${encodeURIComponent(accessKey)}/gains`, {
-    authToken,
+    authenticated: true,
   })
 }
 
 export async function exportPublicMixerGains(
-  authToken: string,
   accessKey: string,
   tracks: Array<{ track_index: number; volume_multiplier: number; muted: boolean }>,
 ): Promise<Blob> {
   return requestBlob(`/admin/public/${encodeURIComponent(accessKey)}/gains`, {
     method: 'POST',
-    authToken,
+    authenticated: true,
     body: JSON.stringify({ tracks }),
   })
 }
 
 export async function updatePublicId(
-  authToken: string,
   id: string,
   publicId: string,
 ): Promise<AdminMusic> {
   const music = await requestJson<AdminMusic>(`/admin/musics/${id}`, {
     method: 'PATCH',
-    authToken,
+    authenticated: true,
     body: JSON.stringify({
       public_id: publicId.trim() ? publicId.trim() : null,
     }),
@@ -461,49 +535,55 @@ export async function fetchStems(accessKey: string): Promise<Stem[]> {
   return stems.map(normalizeStem)
 }
 
-export async function exchangeLoginToken(token: string): Promise<AuthSessionResponse> {
-  return requestJson<AuthSessionResponse>('/auth/exchange', {
+export async function exchangeLoginToken(token: string): Promise<AuthTokenResponse> {
+  return requestJson<AuthTokenResponse>('/auth/exchange', {
     method: 'POST',
     body: JSON.stringify({ token }),
   })
 }
 
 export async function moveMusic(
-  authToken: string,
   id: string,
   ensembleId: string,
 ): Promise<AdminMusic> {
   const music = await requestJson<AdminMusic>(`/admin/musics/${id}/move`, {
     method: 'POST',
-    authToken,
+    authenticated: true,
     body: JSON.stringify({ ensemble_id: ensembleId }),
   })
 
   return normalizeAdminMusic(music)
 }
 
-export async function deleteMusic(authToken: string, id: string): Promise<void> {
+export async function deleteMusic(id: string): Promise<void> {
   await requestJson(`/admin/musics/${id}/delete`, {
     method: 'POST',
-    authToken,
+    authenticated: true,
   })
 }
 
-export async function fetchCurrentUser(authToken: string): Promise<CurrentUserResponse> {
+export async function fetchCurrentUser(): Promise<CurrentUserResponse> {
   return requestJson<CurrentUserResponse>('/me', {
-    authToken,
+    authenticated: true,
   })
 }
 
-export async function fetchUserLibrary(authToken: string): Promise<UserLibraryResponse> {
+export async function fetchUserLibrary(): Promise<UserLibraryResponse> {
   return requestJson<UserLibraryResponse>('/me/library', {
-    authToken,
+    authenticated: true,
   })
 }
 
-export async function createMyLoginLink(authToken: string): Promise<LoginLinkResponse> {
+export async function createMyLoginLink(): Promise<LoginLinkResponse> {
   return requestJson<LoginLinkResponse>('/me/login-link', {
     method: 'POST',
-    authToken,
+    authenticated: true,
+  })
+}
+
+export async function logout(): Promise<void> {
+  await requestJson('/me/logout', {
+    method: 'POST',
+    authenticated: true,
   })
 }

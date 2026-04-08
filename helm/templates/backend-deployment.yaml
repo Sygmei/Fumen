@@ -100,6 +100,11 @@ spec:
                 secretKeyRef:
                   name: postgresql-credentials
                   key: connection-string-ro
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jwt-credentials
+                  key: secret
             - name: S3_BUCKET
               valueFrom:
                 secretKeyRef:
@@ -125,6 +130,8 @@ spec:
                 secretKeyRef:
                   name: s3-creds
                   key: endpoint-url
+            - name: MUSESCORE_DIRECT_OGG_STEMS
+              value: {{ .Values.backend.musescoreDirectOggStems | toString | quote }}
             - name: SOUNDFONT_DIR
               value: /opt/soundfonts
           ports:

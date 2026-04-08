@@ -17,13 +17,13 @@ use chrono::{Duration, SecondsFormat, Utc};
 use config::{AppConfig, StorageConfig};
 use flate2::{Compression, write::GzEncoder};
 use models::{
-    AdminEnsembleResponse, AdminMusicResponse, AuthSessionResponse, CreateEnsembleRequest,
-    CreateUserRequest, CurrentUserResponse, EnsembleMemberResponse, EnsembleRecord,
-    EnsembleSummaryRecord, ExchangeLoginTokenRequest, ExportMixerGainsRequest, LoginLinkResponse,
-    MoveMusicRequest, MusicEnsembleLinkRecord, MusicRecord, PublicMusicResponse, StemInfo,
-    StemRecord, UpdateEnsembleMemberRequest, UpdateMusicRequest, UserEnsembleMembershipRecord,
-    UserLibraryEnsembleResponse, UserLibraryResponse, UserLibraryScoreResponse, UserRecord,
-    UserResponse, UserSessionRecord,
+    AccessTokenRefreshResponse, AdminEnsembleResponse, AdminMusicResponse, AuthTokenResponse,
+    CreateEnsembleRequest, CreateUserRequest, CurrentUserResponse, EnsembleMemberResponse,
+    EnsembleRecord, EnsembleSummaryRecord, ExchangeLoginTokenRequest, ExportMixerGainsRequest,
+    LoginLinkResponse, MoveMusicRequest, MusicEnsembleLinkRecord, MusicRecord,
+    PublicMusicResponse, RefreshTokenRequest, StemInfo, StemRecord, UpdateEnsembleMemberRequest,
+    UpdateMusicRequest, UserEnsembleMembershipRecord, UserLibraryEnsembleResponse,
+    UserLibraryResponse, UserLibraryScoreResponse, UserRecord, UserResponse, UserSessionRecord,
 };
 use rand::{Rng, distr::Alphanumeric};
 use sqlx::{
@@ -47,7 +47,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 const LOGIN_LINK_TTL_MINUTES: i64 = 5;
-const USER_SESSION_TTL_DAYS: i64 = 30;
+const ACCESS_TOKEN_TTL_SECONDS: i64 = 86400; // 1 day
 const DEFAULT_ENSEMBLE_ID: &str = "general";
 const DEFAULT_ENSEMBLE_NAME: &str = "General";
 
@@ -74,6 +74,7 @@ struct AuthContext {
     session: UserSessionRecord,
     role: AppRole,
     managed_ensemble_ids: HashSet<String>,
+    access_token_exp: i64,
 }
 
 impl AuthContext {
@@ -242,9 +243,11 @@ async fn main() -> Result<()> {
         )
         .route("/public/{access_key}/download", get(public_music_download))
         .route("/auth/exchange", post(exchange_login_token))
+        .route("/auth/refresh", post(refresh_access_token))
         .route("/me", get(current_user))
         .route("/me/library", get(current_user_library))
         .route("/me/login-link", post(create_my_login_link))
+        .route("/me/logout", post(me_logout))
         .with_state(state.clone());
 
     let mut app = Router::new()
@@ -448,12 +451,16 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             session_token TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL
+            expires_at TEXT
         )
         "#,
     )
     .execute(db)
     .await?;
+
+    sqlx::query("ALTER TABLE user_sessions ALTER COLUMN expires_at DROP NOT NULL")
+        .execute(db)
+        .await?;
 
     ensure_music_column(db, "audio_object_key", "TEXT").await?;
     ensure_music_column(db, "audio_status", "TEXT NOT NULL DEFAULT 'unavailable'").await?;
@@ -1074,7 +1081,7 @@ async fn find_session_by_token(
 async fn require_user_session(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<(UserRecord, UserSessionRecord), AppError> {
+) -> Result<(UserRecord, UserSessionRecord, i64), AppError> {
     let Some(header_value) = headers.get(header::AUTHORIZATION) else {
         return Err(AppError::unauthorized("Missing Authorization header"));
     };
@@ -1082,32 +1089,30 @@ async fn require_user_session(
     let authorization = header_value
         .to_str()
         .map_err(|_| AppError::unauthorized("Invalid Authorization header"))?;
-    let session_token = authorization
+    let token = authorization
         .strip_prefix("Bearer ")
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::unauthorized("Expected a Bearer token"))?;
 
-    let session = find_session_by_token(&state.db_rw, session_token)
+    let claims = verify_access_token(token, &state.config.jwt_secret)?;
+
+    let session = find_session_by_token(&state.db_rw, &claims.sid)
         .await?
-        .ok_or_else(|| AppError::unauthorized("Unknown session"))?;
+        .ok_or_else(|| AppError::unauthorized("Session has been revoked"))?;
 
-    if session.expires_at <= utc_now_string() {
-        return Err(AppError::unauthorized("Session expired"));
-    }
-
-    let user = find_user_by_id(&state.db_rw, &session.user_id)
+    let user = find_user_by_id(&state.db_rw, &claims.sub)
         .await?
         .ok_or_else(|| AppError::unauthorized("User not found"))?;
 
-    Ok((user, session))
+    Ok((user, session, claims.exp))
 }
 
 async fn build_auth_context(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<AuthContext, AppError> {
-    let (user, session) = require_user_session(state, headers).await?;
+    let (user, session, access_token_exp) = require_user_session(state, headers).await?;
     let managed_ensemble_ids = fetch_managed_ensemble_ids(&state.db_rw, &user.id)
         .await?
         .into_iter()
@@ -1125,6 +1130,7 @@ async fn build_auth_context(
         session,
         role,
         managed_ensemble_ids,
+        access_token_exp,
     })
 }
 
@@ -2319,7 +2325,7 @@ async fn public_music_download(
 async fn exchange_login_token(
     State(state): State<AppState>,
     Json(payload): Json<ExchangeLoginTokenRequest>,
-) -> Result<Json<AuthSessionResponse>, AppError> {
+) -> Result<Json<AuthTokenResponse>, AppError> {
     let token = payload.token.trim();
     if token.is_empty() {
         return Err(AppError::bad_request("Missing login token"));
@@ -2343,8 +2349,7 @@ async fn exchange_login_token(
     .await?
     .ok_or_else(|| AppError::unauthorized("This connection link is invalid or expired"))?;
 
-    let session_token = generate_auth_token(64);
-    let session_expires_at = format_timestamp(Utc::now() + Duration::days(USER_SESSION_TTL_DAYS));
+    let session_id = generate_auth_token(64);
 
     sqlx::query(
         r#"
@@ -2354,21 +2359,26 @@ async fn exchange_login_token(
     )
     .bind(Uuid::new_v4().to_string())
     .bind(&user_id)
-    .bind(&session_token)
+    .bind(&session_id)
     .bind(&now)
-    .bind(&session_expires_at)
+    .bind(None::<String>)
     .execute(&mut *transaction)
     .await?;
 
     transaction.commit().await?;
 
+    let refresh_token = sign_refresh_token(&session_id, &state.config.jwt_secret)?;
+    let (access_token, access_token_exp) =
+        sign_access_token(&user_id, &session_id, &state.config.jwt_secret)?;
+
     let user = find_user_by_id(&state.db_rw, &user_id)
         .await?
         .ok_or_else(|| AppError::unauthorized("User not found"))?;
 
-    Ok(Json(AuthSessionResponse {
-        session_token,
-        session_expires_at,
+    Ok(Json(AuthTokenResponse {
+        refresh_token,
+        access_token,
+        access_token_expires_at: exp_to_timestamp(access_token_exp),
         user: user_record_to_response(&state.db_rw, user).await?,
     }))
 }
@@ -2379,7 +2389,7 @@ async fn current_user(
 ) -> Result<Json<CurrentUserResponse>, AppError> {
     let auth = build_auth_context(&state, &headers).await?;
     Ok(Json(CurrentUserResponse {
-        session_expires_at: auth.session.expires_at.clone(),
+        session_expires_at: Some(exp_to_timestamp(auth.access_token_exp)),
         user: auth_context_to_user_response(&auth),
     }))
 }
@@ -2623,6 +2633,134 @@ fn generate_auth_token(length: usize) -> String {
         .take(length)
         .map(char::from)
         .collect()
+}
+
+// ── JWT helpers ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct RefreshTokenClaims {
+    sub: String, // session identifier
+    iat: i64,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct AccessTokenClaims {
+    sub: String, // user_id
+    sid: String, // session identifier
+    exp: i64,
+    iat: i64,
+}
+
+fn sign_refresh_token(session_id: &str, secret: &str) -> Result<String, AppError> {
+    let claims = RefreshTokenClaims {
+        sub: session_id.to_owned(),
+        iat: Utc::now().timestamp(),
+    };
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to sign refresh token: {e}"),
+        )
+    })
+}
+
+fn sign_access_token(
+    user_id: &str,
+    session_id: &str,
+    secret: &str,
+) -> Result<(String, i64), AppError> {
+    let now = Utc::now().timestamp();
+    let exp = now + ACCESS_TOKEN_TTL_SECONDS;
+    let claims = AccessTokenClaims {
+        sub: user_id.to_owned(),
+        sid: session_id.to_owned(),
+        exp,
+        iat: now,
+    };
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| {
+        AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to sign access token: {e}"),
+        )
+    })?;
+    Ok((token, exp))
+}
+
+fn verify_refresh_token(token: &str, secret: &str) -> Result<RefreshTokenClaims, AppError> {
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+    validation.validate_exp = false;
+    validation.required_spec_claims = HashSet::new();
+    jsonwebtoken::decode::<RefreshTokenClaims>(
+        token,
+        &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .map(|data| data.claims)
+    .map_err(|e| AppError::unauthorized(format!("Invalid refresh token: {e}")))
+}
+
+fn verify_access_token(token: &str, secret: &str) -> Result<AccessTokenClaims, AppError> {
+    jsonwebtoken::decode::<AccessTokenClaims>(
+        token,
+        &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+        &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256),
+    )
+    .map(|data| data.claims)
+    .map_err(|e| AppError::unauthorized(format!("Invalid or expired access token: {e}")))
+}
+
+fn exp_to_timestamp(exp: i64) -> String {
+    chrono::DateTime::<Utc>::from_timestamp(exp, 0)
+        .unwrap_or_else(Utc::now)
+        .to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+// ── Auth endpoint handlers ───────────────────────────────────────────────────
+
+async fn refresh_access_token(
+    State(state): State<AppState>,
+    Json(payload): Json<RefreshTokenRequest>,
+) -> Result<Json<AccessTokenRefreshResponse>, AppError> {
+    let refresh_token = payload.refresh_token.trim();
+    if refresh_token.is_empty() {
+        return Err(AppError::bad_request("Missing refresh_token"));
+    }
+
+    let claims = verify_refresh_token(refresh_token, &state.config.jwt_secret)?;
+
+    let session = find_session_by_token(&state.db_rw, &claims.sub)
+        .await?
+        .ok_or_else(|| AppError::unauthorized("Session has been revoked"))?;
+
+    let (access_token, access_token_exp) =
+        sign_access_token(&session.user_id, &claims.sub, &state.config.jwt_secret)?;
+
+    Ok(Json(AccessTokenRefreshResponse {
+        access_token,
+        access_token_expires_at: exp_to_timestamp(access_token_exp),
+    }))
+}
+
+async fn me_logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, AppError> {
+    let auth = build_auth_context(&state, &headers).await?;
+    sqlx::query("DELETE FROM user_sessions WHERE session_token = $1")
+        .bind(&auth.session.session_token)
+        .execute(&state.db_rw)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn utc_now_string() -> String {

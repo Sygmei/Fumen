@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub database_url_admin: String,
     pub database_url_read_only: String,
     pub superadmin_username: String,
+    pub jwt_secret: String,
     pub storage: StorageConfig,
     pub musescore_bin: Option<String>,
     pub musescore_docker_image: Option<String>,
@@ -62,6 +63,9 @@ impl AppConfig {
             env::var("DATABASE_URL_READ_ONLY").unwrap_or_else(|_| database_url.clone());
         let superadmin_username =
             env::var("SUPERADMIN_USERNAME").unwrap_or_else(|_| "superadmin".to_owned());
+
+        let jwt_secret = env::var("JWT_SECRET")
+            .map_err(|_| anyhow!("Set JWT_SECRET to a secure random string for signing JWTs."))?;
         let local_storage_path = PathBuf::from(
             env::var("LOCAL_STORAGE_PATH").unwrap_or_else(|_| "./data/storage".to_owned()),
         );
@@ -143,6 +147,7 @@ impl AppConfig {
             database_url_admin,
             database_url_read_only,
             superadmin_username,
+            jwt_secret,
             storage,
             musescore_bin,
             musescore_docker_image,

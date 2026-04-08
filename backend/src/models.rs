@@ -50,7 +50,7 @@ pub struct UserSessionRecord {
     pub user_id: String,
     pub session_token: String,
     pub created_at: String,
-    pub expires_at: String,
+    pub expires_at: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -108,6 +108,11 @@ pub struct UpdateEnsembleMemberRequest {
 #[derive(Debug, Deserialize)]
 pub struct ExchangeLoginTokenRequest {
     pub token: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RefreshTokenRequest {
+    pub refresh_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,15 +224,22 @@ pub struct LoginLinkResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct AuthSessionResponse {
-    pub session_token: String,
-    pub session_expires_at: String,
+pub struct AuthTokenResponse {
+    pub refresh_token: String,
+    pub access_token: String,
+    pub access_token_expires_at: String,
     pub user: UserResponse,
 }
 
 #[derive(Debug, Serialize)]
+pub struct AccessTokenRefreshResponse {
+    pub access_token: String,
+    pub access_token_expires_at: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CurrentUserResponse {
-    pub session_expires_at: String,
+    pub session_expires_at: Option<String>,
     pub user: UserResponse,
 }
 
