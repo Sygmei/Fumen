@@ -223,6 +223,13 @@ kubectl -n <namespace> create secret generic cloudflare-secret \
   --from-literal=token='<cloudflare-api-token>'
 ```
 
+`jwt-credentials` must contain a `secret` key with a secure random string used to sign JWT tokens:
+
+```bash
+kubectl -n <namespace> create secret generic jwt-credentials \
+  --from-literal=secret=$(openssl rand -base64 48)
+```
+
 `s3-creds` must contain the S3 or Spaces credentials used by the backend. With DigitalOcean Spaces,
 you can create it like this:
 
