@@ -284,19 +284,21 @@ async fn main() -> Result<()> {
 }
 
 fn build_cors_layer(config: &AppConfig) -> Result<CorsLayer> {
-    let origins = config
-        .cors_allowed_origins
-        .iter()
-        .map(|origin| {
-            HeaderValue::from_str(origin)
-                .with_context(|| format!("invalid CORS origin '{}'", origin))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let base = CorsLayer::new().allow_headers(Any).allow_methods(Any);
 
-    Ok(CorsLayer::new()
-        .allow_origin(AllowOrigin::list(origins))
-        .allow_headers(Any)
-        .allow_methods(Any))
+    match &config.cors_allowed_origins {
+        None => Ok(base.allow_origin(Any)),
+        Some(list) => {
+            let origins = list
+                .iter()
+                .map(|origin| {
+                    HeaderValue::from_str(origin)
+                        .with_context(|| format!("invalid CORS origin '{}'", origin))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(base.allow_origin(AllowOrigin::list(origins)))
+        }
+    }
 }
 
 async fn open_database_pool(url: &str, max_connections: u32, role: &str) -> Result<PgPool> {
@@ -1086,7 +1088,7 @@ async fn require_user_session(
         .await?
         .ok_or_else(|| AppError::unauthorized("Session has been revoked"))?;
 
-    let user = find_user_by_id(&state.db_rw, &claims.sub)
+    let user = find_user_by_username(&state.db_rw, &claims.sub)
         .await?
         .ok_or_else(|| AppError::unauthorized("User not found"))?;
 
@@ -2352,13 +2354,13 @@ async fn exchange_login_token(
 
     transaction.commit().await?;
 
-    let refresh_token = sign_refresh_token(&session_id, &state.config.jwt_secret)?;
-    let (access_token, access_token_exp) =
-        sign_access_token(&user_id, &session_id, &state.config.jwt_secret)?;
-
     let user = find_user_by_id(&state.db_rw, &user_id)
         .await?
         .ok_or_else(|| AppError::unauthorized("User not found"))?;
+
+    let refresh_token = sign_refresh_token(&session_id, &state.config.jwt_secret)?;
+    let (access_token, access_token_exp) =
+        sign_access_token(&user.username, &session_id, &state.config.jwt_secret)?;
 
     Ok(Json(AuthTokenResponse {
         refresh_token,
@@ -2630,7 +2632,7 @@ struct RefreshTokenClaims {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct AccessTokenClaims {
-    sub: String, // user_id
+    sub: String, // username
     sid: String, // session identifier
     exp: i64,
     iat: i64,
@@ -2655,14 +2657,14 @@ fn sign_refresh_token(session_id: &str, secret: &str) -> Result<String, AppError
 }
 
 fn sign_access_token(
-    user_id: &str,
+    username: &str,
     session_id: &str,
     secret: &str,
 ) -> Result<(String, i64), AppError> {
     let now = Utc::now().timestamp();
     let exp = now + ACCESS_TOKEN_TTL_SECONDS;
     let claims = AccessTokenClaims {
-        sub: user_id.to_owned(),
+        sub: username.to_owned(),
         sid: session_id.to_owned(),
         exp,
         iat: now,
@@ -2727,8 +2729,12 @@ async fn refresh_access_token(
         .await?
         .ok_or_else(|| AppError::unauthorized("Session has been revoked"))?;
 
+    let user = find_user_by_id(&state.db_rw, &session.user_id)
+        .await?
+        .ok_or_else(|| AppError::unauthorized("User not found"))?;
+
     let (access_token, access_token_exp) =
-        sign_access_token(&session.user_id, &claims.sub, &state.config.jwt_secret)?;
+        sign_access_token(&user.username, &claims.sub, &state.config.jwt_secret)?;
 
     Ok(Json(AccessTokenRefreshResponse {
         access_token,

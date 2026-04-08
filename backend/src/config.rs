@@ -6,7 +6,8 @@ use std::{env, path::PathBuf};
 pub struct AppConfig {
     pub bind_address: String,
     pub app_base_url: String,
-    pub cors_allowed_origins: Vec<String>,
+    /// `None` means "allow any origin" (no `CORS_ALLOWED_ORIGINS` env var was set).
+    pub cors_allowed_origins: Option<Vec<String>>,
     pub database_url: String,
     pub database_url_admin: String,
     pub database_url_read_only: String,
@@ -56,8 +57,7 @@ impl AppConfig {
                     .map(ToOwned::to_owned)
                     .collect::<Vec<_>>()
             })
-            .filter(|origins| !origins.is_empty())
-            .unwrap_or_else(|| vec![origin_for_url(&app_base_url)]);
+            .filter(|origins| !origins.is_empty());
         let database_url = env::var("DATABASE_URL")
             .map_err(|_| anyhow!("Set DATABASE_URL to a PostgreSQL connection string."))?;
         let database_url_admin =
@@ -178,22 +178,6 @@ impl AppConfig {
             self.app_base_url.trim_end_matches('/'),
             token
         )
-    }
-}
-
-fn origin_for_url(value: &str) -> String {
-    let trimmed = value.trim().trim_end_matches('/');
-    match trimmed.find("://") {
-        Some(scheme_index) => {
-            let path_index = trimmed[scheme_index + 3..]
-                .find('/')
-                .map(|index| scheme_index + 3 + index);
-            match path_index {
-                Some(index) => trimmed[..index].to_owned(),
-                None => trimmed.to_owned(),
-            }
-        }
-        None => trimmed.to_owned(),
     }
 }
 

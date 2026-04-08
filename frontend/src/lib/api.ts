@@ -91,22 +91,22 @@ export const STEM_QUALITY_PROFILES: Array<{
   label: string
   description: string
 }> = [
-  {
-    value: 'compact',
-    label: 'Compact',
-    description: 'Smaller stem files with more aggressive Opus compression at 24k.',
-  },
-  {
-    value: 'standard',
-    label: 'Standard',
-    description: 'Balanced stem quality and size at 32k.',
-  },
-  {
-    value: 'high',
-    label: 'High',
-    description: 'Higher stem quality with larger files at 48k.',
-  },
-]
+    {
+      value: 'compact',
+      label: 'Compact',
+      description: 'Smaller stem files with more aggressive Opus compression at 24k.',
+    },
+    {
+      value: 'standard',
+      label: 'Standard',
+      description: 'Balanced stem quality and size at 32k.',
+    },
+    {
+      value: 'high',
+      label: 'High',
+      description: 'Higher stem quality with larger files at 48k.',
+    },
+  ]
 
 export type PublicMusic = {
   title: string
@@ -188,9 +188,25 @@ let _accessToken: string | null = null
 let _accessTokenExp: number = 0
 let _refreshPromise: Promise<string> | null = null
 let _onSessionExpired: (() => void) | null = null
+let _onTokenRefreshed: ((accessToken: string) => void) | null = null
+let _isPageUnloading = false
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    _isPageUnloading = true
+  })
+}
+
+export function isPageUnloading(): boolean {
+  return _isPageUnloading
+}
 
 export function setOnSessionExpired(cb: () => void): void {
   _onSessionExpired = cb
+}
+
+export function setOnTokenRefreshed(cb: (accessToken: string) => void): void {
+  _onTokenRefreshed = cb
 }
 
 export function initAuth(refreshToken: string, accessToken: string): void {
@@ -235,8 +251,11 @@ async function getAccessToken(): Promise<string> {
       const resp = await _callRefreshEndpoint(_refreshToken!)
       _accessToken = resp.access_token
       _accessTokenExp = parseJwtExp(resp.access_token)
+      _onTokenRefreshed?.(_accessToken)
       return _accessToken
-    } catch {
+    } catch (err) {
+      // Don't clear auth if the request was aborted (e.g. page unload).
+      if (_isPageUnloading || (err instanceof Error && err.name === 'AbortError')) throw err
       clearAuth()
       _onSessionExpired?.()
       throw new Error('Session expired. Please sign in again.')
