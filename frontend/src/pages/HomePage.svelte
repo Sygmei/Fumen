@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { AppUser, UserLibraryEnsemble } from "../lib/api";
-    import { prettyDate } from "../lib/utils";
+    import TopBar from "../components/TopBar.svelte";
 
     let {
         routeKind,
@@ -9,13 +9,11 @@
         userError,
         userSuccess,
         userLibrary,
-        userSessionExpiresAt,
         connectionBusy,
         preloadedUsername,
         manualConnectionLink = $bindable(),
         onLogout,
         onShowQr,
-        onCopyLink,
         onOpenScanner,
         onManualConnect,
     }: {
@@ -26,12 +24,10 @@
         preloadedUsername: string;
         userSuccess: string;
         userLibrary: UserLibraryEnsemble[];
-        userSessionExpiresAt: string | null;
         connectionBusy: boolean;
         manualConnectionLink: string;
         onLogout: () => Promise<void>;
         onShowQr: () => Promise<void>;
-        onCopyLink: () => Promise<void>;
         onOpenScanner: () => void;
         onManualConnect: () => Promise<void>;
     } = $props();
@@ -53,54 +49,18 @@
                 <span></span>
                 <span></span>
             </div>
-            <p class="loading-eq-label">{preloadedUsername ? `Hello, ${preloadedUsername}` : 'Fumen'}</p>
+            <p class="loading-eq-label">
+                {preloadedUsername ? `Hello, ${preloadedUsername}` : "Fumen"}
+            </p>
         </div>
     {:else}
-        <section class="hero-panel">
-            <div class="hero-actions">
-                <div>
-                    <p class="eyebrow">Fumen • Users</p>
-                    <h1>
-                        {currentUser
-                            ? `Welcome, ${currentUser.username}`
-                            : "Connect a device"}
-                    </h1>
-                    <p class="lede">
-                        {#if currentUser}You are signed in on this device.
-                            Generate a QR code or a short-lived connection link
-                            to open your session somewhere else.{:else}Scan a QR
-                            code from the admin panel or another signed-in
-                            device, or paste a 5-minute connection link to log
-                            in.{/if}
-                    </p>
-                </div>
-                <div class="hero-actions-stack">
-                    {#if currentUser}
-                        <button
-                            class="button secondary"
-                            onclick={() => void onShowQr()}>Show QR code</button
-                        >
-                        <button
-                            class="button ghost"
-                            onclick={() => void onCopyLink()}
-                            >Copy connection link</button
-                        >
-                        {#if canAccessAdmin()}
-                            <a class="button ghost" href="/admin">Admin panel</a
-                            >
-                        {/if}
-                        <button
-                            class="button ghost"
-                            onclick={() => void onLogout()}>Log out</button
-                        >
-                    {:else}
-                        <button class="button" onclick={() => onOpenScanner()}
-                            >Scan QR code</button
-                        >
-                    {/if}
-                </div>
-            </div>
-        </section>
+        <TopBar
+            breadcrumbs={[{ label: "Fumen", href: "/" }]}
+            {currentUser}
+            adminHref={canAccessAdmin() ? "/admin" : undefined}
+            onShowQr={() => void onShowQr()}
+            onLogout={() => void onLogout()}
+        />
         <section class="content-panel home-grid">
             {#if routeKind === "connect"}
                 <div class="music-card connect-card">
@@ -119,45 +79,14 @@
                 <div class="music-card">
                     <div class="card-header">
                         <div>
-                            <p class="meta-label">Session</p>
-                            <h2>{currentUser.username}</h2>
-                        </div>
-                        <p class="status-pill">signed in</p>
-                    </div>
-                    <div class="meta-grid">
-                        <div>
-                            <p class="meta-label">Username</p>
-                            <p>{currentUser.username}</p>
-                        </div>
-                        <div>
-                            <p class="meta-label">Access token until</p>
-                            <p>
-                                {userSessionExpiresAt
-                                    ? prettyDate(userSessionExpiresAt)
-                                    : "—"}
-                            </p>
-                        </div>
-                        <div>
-                            <p class="meta-label">Accessible ensembles</p>
-                            <p>{userLibrary.length}</p>
-                        </div>
-                    </div>
-                    <p class="hint">
-                        Every QR code and connection link is single-use and
-                        valid for 5 minutes.
-                    </p>
-                    {#if userError}<p class="status error">{userError}</p>{/if}
-                    {#if userSuccess}<p class="status success">
-                            {userSuccess}
-                        </p>{/if}
-                </div>
-                <div class="music-card">
-                    <div class="card-header">
-                        <div>
                             <p class="meta-label">Library</p>
                             <h2>Your ensembles</h2>
                         </div>
                     </div>
+                    {#if userError}<p class="status error">{userError}</p>{/if}
+                    {#if userSuccess}<p class="status success">
+                            {userSuccess}
+                        </p>{/if}
                     {#if userLibrary.length === 0}
                         <p class="hint">
                             No scores are available for your ensembles yet.

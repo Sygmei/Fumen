@@ -23,6 +23,20 @@
         type StemQualityProfile,
     } from "../lib/api";
     import { formatBytes, prettyDate, qualityProfileLabel } from "../lib/utils";
+    import TopBar from "../components/TopBar.svelte";
+
+    function readAdminCache<T>(key: string): T[] {
+        try {
+            const raw = localStorage.getItem(key);
+            return raw ? (JSON.parse(raw) as T[]) : [];
+        } catch {
+            return [];
+        }
+    }
+
+    const cachedMusics = readAdminCache<AdminMusic>("cached-admin-musics");
+    const cachedAdminUsers = readAdminCache<AppUser>("cached-admin-users");
+    const cachedEnsembles = readAdminCache<Ensemble>("cached-admin-ensembles");
 
     const {
         currentUser,
@@ -64,16 +78,25 @@
     let uploadQualityProfile = $state<StemQualityProfile>("standard");
     let selectedFile = $state<File | null>(null);
     let uploadBusy = $state(false);
-    let musics = $state<AdminMusic[]>([]);
-    let adminUsers = $state<AppUser[]>([]);
-    let ensembles = $state<Ensemble[]>([]);
+    let musics = $state<AdminMusic[]>(cachedMusics);
+    let adminUsers = $state<AppUser[]>(cachedAdminUsers);
+    let ensembles = $state<Ensemble[]>(cachedEnsembles);
     let newUsername = $state("");
     let creatingUser = $state(false);
     let newEnsembleName = $state("");
     let creatingEnsemble = $state(false);
-    let uploadEnsembleId = $state("");
-    let editPublicIds = $state<Record<string, string>>({});
-    let editEnsembleIds = $state<Record<string, string>>({});
+    let uploadEnsembleId = $state(cachedEnsembles[0]?.id ?? "");
+    let editPublicIds = $state<Record<string, string>>(
+        Object.fromEntries(cachedMusics.map((m) => [m.id, m.public_id ?? ""])),
+    );
+    let editEnsembleIds = $state<Record<string, string>>(
+        Object.fromEntries(
+            cachedMusics.map((m) => [
+                m.id,
+                m.ensemble_ids[0] ?? cachedEnsembles[0]?.id ?? "",
+            ]),
+        ),
+    );
     let savingIdFor = $state("");
     let movingMusicFor = $state("");
     let retryingFor = $state("");
@@ -113,6 +136,18 @@
             musics = musicItems;
             adminUsers = userItems;
             ensembles = ensembleItems;
+            localStorage.setItem(
+                "cached-admin-musics",
+                JSON.stringify(musicItems),
+            );
+            localStorage.setItem(
+                "cached-admin-users",
+                JSON.stringify(userItems),
+            );
+            localStorage.setItem(
+                "cached-admin-ensembles",
+                JSON.stringify(ensembleItems),
+            );
             editPublicIds = Object.fromEntries(
                 musicItems.map((music) => [music.id, music.public_id ?? ""]),
             );
@@ -453,7 +488,7 @@
     }
 </script>
 
-{#if userLoading || adminLoading}
+{#if (userLoading && !currentUser) || (adminLoading && musics.length === 0 && adminUsers.length === 0 && ensembles.length === 0)}
     <div class="home-loading-overlay">
         <div class="loading-eq" aria-label="Loading">
             <span></span>
@@ -462,7 +497,9 @@
             <span></span>
             <span></span>
         </div>
-        <p class="loading-eq-label">{preloadedUsername ? `Hello, ${preloadedUsername}` : 'Fumen'}</p>
+        <p class="loading-eq-label">
+            {preloadedUsername ? `Hello, ${preloadedUsername}` : "Fumen"}
+        </p>
     </div>
 {:else if !currentUser}
     <section class="admin-login-shell">
@@ -504,27 +541,16 @@
     </section>
 {:else}
     <section class="admin-app-shell">
-        <header class="admin-topbar">
-            <div class="admin-topbar-title">
-                <div class="admin-breadcrumb" aria-label="Breadcrumb">
-                    <a class="admin-brand" href="/">Fumen</a>
-                    <span
-                        class="admin-breadcrumb-separator admin-breadcrumb-dash"
-                        >—</span
-                    >
-                    <span>Admin</span>
-                    <span class="admin-breadcrumb-separator">/</span>
-                    <strong>{currentAdminSectionItem().label}</strong>
-                </div>
-            </div>
-            <div class="admin-topbar-actions">
-                <span class="status-pill">{currentUser.role}</span>
-                <a class="button ghost" href="/">User homepage</a>
-                <button class="button ghost" onclick={() => void onLogout()}
-                    >Sign out</button
-                >
-            </div>
-        </header>
+        <TopBar
+            breadcrumbs={[
+                { label: "Fumen", href: "/" },
+                { label: "Admin" },
+                { label: currentAdminSectionItem().label },
+            ]}
+            {currentUser}
+            userHomeHref="/"
+            onLogout={() => void onLogout()}
+        />
 
         <div class="admin-shell-body">
             <aside class="admin-sidebar">

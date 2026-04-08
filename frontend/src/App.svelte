@@ -64,7 +64,8 @@
   }
 
   const cachedUser = typeof window !== "undefined" ? readCachedUser() : null;
-  const cachedLibrary = typeof window !== "undefined" ? readCachedLibrary() : [];
+  const cachedLibrary =
+    typeof window !== "undefined" ? readCachedLibrary() : [];
 
   if (storedRefreshToken) {
     initAuth(storedRefreshToken, storedAccessToken);
@@ -181,11 +182,14 @@
       userLibrary = library.ensembles;
       userError = "";
       window.localStorage.setItem("cached-user", JSON.stringify(response.user));
-      window.localStorage.setItem("cached-library", JSON.stringify(library.ensembles));
+      window.localStorage.setItem(
+        "cached-library",
+        JSON.stringify(library.ensembles),
+      );
     } catch (error) {
       // Ignore errors caused by the page unloading — never touch stored tokens.
       if (isPageUnloading()) return;
-      if (error instanceof Error && error.name === 'AbortError') return;
+      if (error instanceof Error && error.name === "AbortError") return;
       clearUserSession();
       userError =
         error instanceof Error
@@ -206,6 +210,9 @@
     window.localStorage.removeItem("access-token");
     window.localStorage.removeItem("cached-user");
     window.localStorage.removeItem("cached-library");
+    window.localStorage.removeItem("cached-admin-musics");
+    window.localStorage.removeItem("cached-admin-users");
+    window.localStorage.removeItem("cached-admin-ensembles");
   }
 
   function persistUserSession(
@@ -459,12 +466,10 @@
     {userError}
     {userSuccess}
     {userLibrary}
-    {userSessionExpiresAt}
     {connectionBusy}
     bind:manualConnectionLink
     onLogout={logoutUser}
     onShowQr={handleShowMyQr}
-    onCopyLink={handleCopyMyLink}
     onOpenScanner={openScanner}
     onManualConnect={handleManualConnect}
   />
