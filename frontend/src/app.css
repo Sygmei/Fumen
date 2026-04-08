@@ -415,7 +415,7 @@ h3 {
 
 @media (min-width: 1100px) {
   .public-workspace {
-    grid-template-columns: minmax(0, 1fr) clamp(360px, 30vw, 470px);
+    grid-template-columns: minmax(0, 1fr) clamp(378px, 31.5vw, 494px);
   }
 
   .score-title-bar {
@@ -1508,11 +1508,12 @@ h3 {
   display: flex;
   flex-direction: row;
   align-items: center;
-  padding: 8px 12px;
+  padding: 8px 12px 8px 0;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border-dark);
   gap: 10px;
+  overflow: hidden;
   transition: opacity 160ms ease, background 160ms ease;
 }
 
@@ -1530,16 +1531,25 @@ h3 {
   opacity: 0.3;
 }
 
+.channel-strip.solo-inactive {
+  opacity: 0.38;
+}
+
+.channel-strip.solo-inactive:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .channel-fader {
   order: 1;
   flex: 1;
+  max-width: 90%;
   height: auto;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   justify-content: center;
   gap: 0;
-  flex-shrink: 0;
+  flex-shrink: 1;
 }
 
 /* Thin horizontal level bar above the slider */
@@ -1689,26 +1699,55 @@ h3 {
   border-color: rgba(196, 43, 13, 0.24);
 }
 
-.mute-btn {
-  width: 26px;
-  height: 20px;
+.ms-btn-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  flex-shrink: 0;
+  align-self: stretch;
+  order: -1;
+  margin-top: -8px;
+  margin-bottom: -8px;
+}
+
+.mute-btn,
+.solo-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  width: 22px;
   font-family: 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 0.6rem;
+  font-size: 0.58rem;
   font-weight: 700;
   padding: 0;
-  border-radius: 4px;
-  background: var(--surface-dark-3);
-  border: 1px solid var(--border-dark-strong);
+  border-radius: 0;
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  border-right: 1px solid var(--border-dark-strong);
   color: var(--text-dim-dark);
   cursor: pointer;
   letter-spacing: 0.04em;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.mute-btn {
+  border-bottom: 1px solid var(--border-dark-strong);
+}
+
+.mute-btn:hover,
+.solo-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .mute-btn.active {
-  background: rgba(240, 64, 64, 0.18);
-  border-color: rgba(240, 64, 64, 0.42);
+  background: rgba(240, 64, 64, 0.22);
   color: #f06060;
+}
+
+.solo-btn.active {
+  background: rgba(240, 192, 32, 0.2);
+  color: #f0c820;
 }
 
 .channel-name {
@@ -1776,6 +1815,11 @@ h3 {
 }
 
 .mute-btn.mute-btn-skeleton {
+  color: rgba(255, 255, 255, 0.22);
+  cursor: default;
+}
+
+.solo-btn.solo-btn-skeleton {
   color: rgba(255, 255, 255, 0.22);
   cursor: default;
 }

@@ -11,14 +11,17 @@
     trackLevels: Record<string, number>
     midiPlayerError: string
     stemsError: string | null
+    soloedTrackIds?: Set<string>
     onGlobalVolumeChange?: (volume: number) => void
     onTrackVolumeChange?: (trackId: string, volume: number) => void
     onTrackMuteToggle?: (trackId: string) => void
+    onTrackSoloToggle?: (trackId: string) => void
   }
 
   const noopGlobalVolumeChange = (_volume: number) => {}
   const noopTrackVolumeChange = (_trackId: string, _volume: number) => {}
   const noopTrackMuteToggle = (_trackId: string) => {}
+  const noopTrackSoloToggle = (_trackId: string) => {}
 
   let {
     midiLoading,
@@ -28,10 +31,14 @@
     trackLevels,
     midiPlayerError,
     stemsError,
+    soloedTrackIds = new Set<string>(),
     onGlobalVolumeChange = noopGlobalVolumeChange,
     onTrackVolumeChange = noopTrackVolumeChange,
     onTrackMuteToggle = noopTrackMuteToggle,
+    onTrackSoloToggle = noopTrackSoloToggle,
   }: MixerProps = $props()
+
+  let anySoloed = $derived(soloedTrackIds.size > 0)
 
   const skeletonTrackNames = [
     { name: 'Violin I' },
@@ -101,9 +108,12 @@
           name={track.name}
           volume={track.volume}
           muted={track.muted}
+          soloed={soloedTrackIds.has(track.id)}
+          anySoloed={anySoloed}
           level={trackLevels[track.id] ?? 0}
           onVolumeChange={(volume) => onTrackVolumeChange(track.id, volume)}
           onMuteToggle={() => onTrackMuteToggle(track.id)}
+          onSoloToggle={() => onTrackSoloToggle(track.id)}
         />
       {/each}
     </div>

@@ -37,6 +37,7 @@
     let playbackFrame = $state<number | null>(null);
     let globalVolume = $state(1.0);
     let trackLevels = $state<Record<string, number>>({});
+    let soloedTrackIds = $state<Set<string>>(new Set());
 
     onMount(() => {
         void loadPublicMusic(accessKey);
@@ -121,6 +122,7 @@
         stemPlaybackReady = false;
         midiLoading = false;
         midiPlayerError = "";
+        soloedTrackIds = new Set();
 
         if (stemPlayer) {
             await stemPlayer.dispose();
@@ -291,13 +293,35 @@
             }
 
             const muted = !track.muted;
+            const anySoloed = soloedTrackIds.size > 0;
+            const effectiveMuted = muted || (anySoloed && !soloedTrackIds.has(trackId));
             if (stemPlayer && playerMode === "stems") {
-                stemPlayer.setTrackMuted(trackId, muted);
+                stemPlayer.setTrackMuted(trackId, effectiveMuted);
             } else if (midiPlayer && playerMode === "midi") {
-                midiPlayer.setTrackMuted(trackId, muted);
+                midiPlayer.setTrackMuted(trackId, effectiveMuted);
             }
             return { ...track, muted };
         });
+    }
+
+    function toggleTrackSolo(trackId: string) {
+        const newSoloedIds = new Set(soloedTrackIds);
+        if (newSoloedIds.has(trackId)) {
+            newSoloedIds.delete(trackId);
+        } else {
+            newSoloedIds.add(trackId);
+        }
+        soloedTrackIds = newSoloedIds;
+
+        const anySoloed = newSoloedIds.size > 0;
+        for (const track of mixerTracks) {
+            const effectiveMuted = track.muted || (anySoloed && !newSoloedIds.has(track.id));
+            if (stemPlayer && playerMode === "stems") {
+                stemPlayer.setTrackMuted(track.id, effectiveMuted);
+            } else if (midiPlayer && playerMode === "midi") {
+                midiPlayer.setTrackMuted(track.id, effectiveMuted);
+            }
+        }
     }
 
     function startPlaybackLoop() {
@@ -552,10 +576,12 @@
                         {globalVolume}
                         {trackLevels}
                         {midiPlayerError}
+                        {soloedTrackIds}
                         stemsError={publicMusic?.stems_error ?? null}
                         onGlobalVolumeChange={updateGlobalVolume}
                         onTrackVolumeChange={updateTrackVolume}
                         onTrackMuteToggle={toggleTrackMute}
+                        onTrackSoloToggle={toggleTrackSolo}
                     />
                 </div>
             </div>

@@ -3,6 +3,8 @@
     name: string
     volume: number
     muted: boolean
+    soloed?: boolean
+    anySoloed?: boolean
     level?: number
     opacity?: number
     disabled?: boolean
@@ -13,15 +15,19 @@
     highlight?: boolean
     onVolumeChange?: (volume: number) => void
     onMuteToggle?: () => void
+    onSoloToggle?: () => void
   }
 
   const noopVolumeChange = (_volume: number) => {}
   const noopMuteToggle = () => {}
+  const noopSoloToggle = () => {}
 
   let {
     name,
     volume,
     muted,
+    soloed = false,
+    anySoloed = false,
     level = 0,
     opacity = 1,
     disabled = false,
@@ -32,7 +38,10 @@
     highlight = false,
     onVolumeChange = noopVolumeChange,
     onMuteToggle = noopMuteToggle,
+    onSoloToggle = noopSoloToggle,
   }: InstrumentStripProps = $props()
+
+  let soloInactive = $derived(anySoloed && !soloed)
 
   let displayVolume = $derived(Math.round(volume * 100))
   let displayLevel = $derived(Math.round(level * 100))
@@ -47,6 +56,7 @@
 <div
   class="channel-strip"
   class:muted={!skeleton && muted}
+  class:solo-inactive={!skeleton && soloInactive}
   class:global-strip={highlight}
   class:skel-strip={skeleton}
   style:--skel-i={skeletonIndex}
@@ -79,7 +89,7 @@
           min="0"
           max="200"
           value={displayVolume}
-          disabled={disabled}
+          disabled={disabled || soloInactive}
           oninput={handleVolumeInput}
         />
       {/if}
@@ -93,6 +103,7 @@
     </div>
   </div>
   {#if showMuteButton}
+    <div class="ms-btn-stack">
     {#if skeleton}
       <button
         class="mute-btn mute-btn-skeleton"
@@ -101,6 +112,13 @@
         tabindex="-1"
         aria-hidden="true"
       >M</button>
+      <button
+        class="solo-btn solo-btn-skeleton"
+        type="button"
+        disabled
+        tabindex="-1"
+        aria-hidden="true"
+      >S</button>
     {:else}
       <button
         class="mute-btn"
@@ -109,7 +127,15 @@
         class:active={muted}
         onclick={onMuteToggle}
       >M</button>
+      <button
+        class="solo-btn"
+        type="button"
+        disabled={disabled}
+        class:active={soloed}
+        onclick={onSoloToggle}
+      >S</button>
     {/if}
+    </div>
   {/if}
   <p class="channel-name">
     {#if skeleton}
