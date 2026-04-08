@@ -1051,21 +1051,6 @@ async fn find_user_by_username(
     .await?)
 }
 
-async fn find_user_by_lookup(db: &PgPool, lookup: &str) -> Result<Option<UserRecord>, AppError> {
-    Ok(sqlx::query_as::<_, UserRecord>(
-        r#"
-        SELECT id, username, created_at, is_superadmin
-        FROM users
-        WHERE username = $1 OR id = $1
-        ORDER BY CASE WHEN username = $1 THEN 0 ELSE 1 END
-        LIMIT 1
-        "#,
-    )
-    .bind(lookup)
-    .fetch_optional(db)
-    .await?)
-}
-
 async fn find_session_by_token(
     db: &PgPool,
     session_token: &str,
@@ -1982,7 +1967,7 @@ async fn admin_update_music(
 ) -> Result<Json<AdminMusicResponse>, AppError> {
     let auth = require_admin_context(&state, &headers).await?;
 
-    let existing = find_music_by_id(&state.db_rw, &id)
+    let _existing = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
@@ -2024,7 +2009,7 @@ async fn admin_move_music(
 ) -> Result<Json<AdminMusicResponse>, AppError> {
     let auth = require_admin_context(&state, &headers).await?;
 
-    let existing = find_music_by_id(&state.db_rw, &id)
+    let _existing = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
@@ -2481,7 +2466,7 @@ async fn create_my_login_link(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<LoginLinkResponse>, AppError> {
-    let (user, _) = require_user_session(&state, &headers).await?;
+    let (user, _, _) = require_user_session(&state, &headers).await?;
     Ok(Json(
         create_login_link(&state.db_rw, &state.config, &user.id).await?,
     ))
@@ -2816,30 +2801,6 @@ fn normalize_name(
     }
 
     Ok(value.to_owned())
-}
-
-fn slugify_name(raw: &str) -> String {
-    let mut slug = raw
-        .trim()
-        .to_ascii_lowercase()
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    while slug.contains("--") {
-        slug = slug.replace("--", "-");
-    }
-    let trimmed = slug.trim_matches('-').to_owned();
-    if trimmed.is_empty() {
-        Uuid::new_v4().to_string()
-    } else {
-        trimmed
-    }
 }
 
 fn normalize_public_id(raw: Option<&str>) -> Result<Option<String>, AppError> {

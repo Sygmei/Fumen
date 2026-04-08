@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use std::{env, path::PathBuf};
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct AppConfig {
     pub bind_address: String,
     pub app_base_url: String,
@@ -23,12 +24,14 @@ pub struct AppConfig {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum StorageConfig {
     Local { root: PathBuf },
     S3(S3Config),
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct S3Config {
     pub bucket: String,
     pub region: String,
@@ -160,6 +163,7 @@ impl AppConfig {
         })
     }
 
+    #[allow(dead_code)]
     pub fn public_url_for(&self, access_key: &str) -> String {
         format!(
             "{}/listen/{}",

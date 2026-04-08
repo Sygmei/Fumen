@@ -26,6 +26,7 @@ pub struct MusicRecord {
 }
 
 #[derive(Clone, Debug, FromRow)]
+#[allow(dead_code)]
 pub struct StemRecord {
     pub id: i64,
     pub music_id: String,
@@ -45,6 +46,7 @@ pub struct UserRecord {
 }
 
 #[derive(Clone, Debug, FromRow)]
+#[allow(dead_code)]
 pub struct UserSessionRecord {
     pub id: String,
     pub user_id: String,
