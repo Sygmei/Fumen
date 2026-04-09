@@ -48,7 +48,9 @@
         }
 
         open = true;
-        const selectedIndex = options.findIndex((option) => option.value === value);
+        const selectedIndex = options.findIndex(
+            (option) => option.value === value,
+        );
         highlightIndex = selectedIndex >= 0 ? selectedIndex : 0;
     }
 
@@ -83,7 +85,8 @@
         }
 
         const baseIndex = highlightIndex >= 0 ? highlightIndex : 0;
-        highlightIndex = (baseIndex + direction + options.length) % options.length;
+        highlightIndex =
+            (baseIndex + direction + options.length) % options.length;
     }
 
     function handleTriggerKeydown(event: KeyboardEvent) {
@@ -148,14 +151,19 @@
         await tick();
 
         const rect = rootElement.getBoundingClientRect();
-        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+        const viewportHeight =
+            window.visualViewport?.height ?? window.innerHeight;
         const margin = 16;
         const gap = 8;
-        const availableBelow = Math.max(140, viewportHeight - rect.bottom - margin - gap);
+        const availableBelow = Math.max(
+            140,
+            viewportHeight - rect.bottom - margin - gap,
+        );
         const availableAbove = Math.max(140, rect.top - margin - gap);
         const preferredHeight = Math.min(menuElement?.scrollHeight ?? 320, 360);
 
-        openUpward = availableBelow < preferredHeight && availableAbove > availableBelow;
+        openUpward =
+            availableBelow < preferredHeight && availableAbove > availableBelow;
         menuMaxHeight = Math.max(
             140,
             Math.min(openUpward ? availableAbove : availableBelow, 360),
@@ -191,7 +199,7 @@
         class="custom-select-trigger"
         class:is-open={open}
         class:is-compact={compact}
-        disabled={disabled}
+        {disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listboxId}
@@ -211,7 +219,16 @@
             {/if}
         </span>
         <span class="custom-select-trigger-chevron" aria-hidden="true">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
                 <path d="m6 9 6 6 6-6" />
             </svg>
         </span>
@@ -251,9 +268,21 @@
                                 <small>{option.description}</small>
                             {/if}
                         </span>
-                        <span class="custom-select-option-check" aria-hidden="true">
+                        <span
+                            class="custom-select-option-check"
+                            aria-hidden="true"
+                        >
                             {#if option.value === value}
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                <svg
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.4"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                >
                                     <path d="M20 6 9 17l-5-5" />
                                 </svg>
                             {/if}
@@ -270,14 +299,24 @@
         position: relative;
         display: grid;
         gap: 8px;
-        --custom-select-trigger-bg:
-            linear-gradient(135deg, rgba(255, 255, 255, 0.97), rgba(244, 247, 252, 0.94)),
+        --custom-select-trigger-bg: linear-gradient(
+                135deg,
+                rgba(255, 255, 255, 0.97),
+                rgba(244, 247, 252, 0.94)
+            ),
             var(--surface-alt);
         --custom-select-panel-bg: rgba(255, 252, 250, 0.97);
         --custom-select-hover-bg: rgba(255, 255, 255, 0.82);
-        --custom-select-selected-bg:
-            linear-gradient(135deg, rgba(255, 255, 255, 0.96), color-mix(in srgb, var(--accent) 8%, white 92%));
-        --custom-select-border: color-mix(in srgb, var(--border) 84%, white 16%);
+        --custom-select-selected-bg: linear-gradient(
+            135deg,
+            rgba(255, 255, 255, 0.96),
+            color-mix(in srgb, var(--accent) 8%, white 92%)
+        );
+        --custom-select-border: color-mix(
+            in srgb,
+            var(--border) 84%,
+            white 16%
+        );
         --custom-select-panel-border: rgba(18, 32, 56, 0.1);
         --custom-select-shadow: 0 14px 32px rgba(18, 32, 56, 0.08);
         --custom-select-shadow-strong: 0 26px 60px rgba(18, 32, 56, 0.18);
@@ -285,21 +324,35 @@
 
     @media (prefers-color-scheme: dark) {
         .custom-select {
-            --custom-select-trigger-bg:
-                linear-gradient(
-                    135deg,
-                    color-mix(in srgb, var(--surface) 88%, black 12%),
-                    color-mix(in srgb, var(--surface-alt) 92%, black 8%)
-                );
-            --custom-select-panel-bg: color-mix(in srgb, var(--surface-dark-2) 88%, black 12%);
-            --custom-select-hover-bg: color-mix(in srgb, var(--surface-dark-3) 88%, white 12%);
-            --custom-select-selected-bg:
-                linear-gradient(
-                    135deg,
-                    color-mix(in srgb, var(--surface-dark-2) 80%, var(--accent) 20%),
-                    color-mix(in srgb, var(--surface-dark-3) 90%, black 10%)
-                );
-            --custom-select-border: color-mix(in srgb, var(--border-strong) 78%, white 22%);
+            --custom-select-trigger-bg: linear-gradient(
+                135deg,
+                color-mix(in srgb, var(--surface) 88%, black 12%),
+                color-mix(in srgb, var(--surface-alt) 92%, black 8%)
+            );
+            --custom-select-panel-bg: color-mix(
+                in srgb,
+                var(--surface-dark-2) 88%,
+                black 12%
+            );
+            --custom-select-hover-bg: color-mix(
+                in srgb,
+                var(--surface-dark-3) 88%,
+                white 12%
+            );
+            --custom-select-selected-bg: linear-gradient(
+                135deg,
+                color-mix(
+                    in srgb,
+                    var(--surface-dark-2) 80%,
+                    var(--accent) 20%
+                ),
+                color-mix(in srgb, var(--surface-dark-3) 90%, black 10%)
+            );
+            --custom-select-border: color-mix(
+                in srgb,
+                var(--border-strong) 78%,
+                white 22%
+            );
             --custom-select-panel-border: var(--border-dark-strong);
             --custom-select-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
             --custom-select-shadow-strong: 0 28px 68px rgba(0, 0, 0, 0.46);
@@ -358,9 +411,14 @@
         width: 42px;
         height: 42px;
         border-radius: 14px;
-        background: color-mix(in srgb, var(--surface) 78%, var(--surface-alt) 22%);
+        background: color-mix(
+            in srgb,
+            var(--surface) 78%,
+            var(--surface-alt) 22%
+        );
         color: color-mix(in srgb, var(--text-dim) 78%, var(--text) 22%);
-        border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent 28%);
+        border: 1px solid
+            color-mix(in srgb, var(--border-strong) 72%, transparent 28%);
         box-shadow: inset 0 1px 0 color-mix(in srgb, white 28%, transparent 72%);
         font-size: 1.05rem;
         line-height: 1;
@@ -377,19 +435,31 @@
     .custom-select-trigger-icon.tone-admin,
     .custom-select-option-icon.tone-admin {
         color: #184fae;
-        background: linear-gradient(135deg, rgba(210, 229, 255, 0.98), rgba(238, 245, 255, 0.9));
+        background: linear-gradient(
+            135deg,
+            rgba(210, 229, 255, 0.98),
+            rgba(238, 245, 255, 0.9)
+        );
     }
 
     .custom-select-trigger-icon.tone-manager,
     .custom-select-option-icon.tone-manager {
         color: #0e7b68;
-        background: linear-gradient(135deg, rgba(201, 247, 234, 0.98), rgba(238, 255, 248, 0.92));
+        background: linear-gradient(
+            135deg,
+            rgba(201, 247, 234, 0.98),
+            rgba(238, 255, 248, 0.92)
+        );
     }
 
     .custom-select-trigger-icon.tone-editor,
     .custom-select-option-icon.tone-editor {
         color: #9a4a07;
-        background: linear-gradient(135deg, rgba(255, 227, 198, 0.98), rgba(255, 244, 231, 0.92));
+        background: linear-gradient(
+            135deg,
+            rgba(255, 227, 198, 0.98),
+            rgba(255, 244, 231, 0.92)
+        );
     }
 
     .custom-select-trigger-copy,

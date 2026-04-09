@@ -1255,32 +1255,31 @@ h3 {
   }
 
 
-@media (prefers-color-scheme: dark) {
-  .admin-split-column {
-    border-color: var(--border-dark-strong);
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--surface-dark-2) 88%, white 12%),
-        color-mix(in srgb, var(--surface-dark-3) 92%, black 8%)
-      );
-    box-shadow: 0 24px 54px rgba(0, 0, 0, 0.28);
+  @media (prefers-color-scheme: dark) {
+    .admin-split-column {
+      border-color: var(--border-dark-strong);
+      background:
+        linear-gradient(180deg,
+          color-mix(in srgb, var(--surface-dark-2) 88%, white 12%),
+          color-mix(in srgb, var(--surface-dark-3) 92%, black 8%));
+      box-shadow: 0 24px 54px rgba(0, 0, 0, 0.28);
+    }
+
+    .admin-split-header {
+      border-bottom-color: var(--border-dark);
+    }
+
+    .admin-split-modal-actions {
+      border-top-color: var(--border-dark);
+    }
+
+    .admin-inline-row,
+    .admin-selector-row {
+      border-color: var(--border-dark-strong);
+      background: color-mix(in srgb, var(--surface-dark-2) 90%, black 10%);
+    }
   }
 
-  .admin-split-header {
-    border-bottom-color: var(--border-dark);
-  }
-
-  .admin-split-modal-actions {
-    border-top-color: var(--border-dark);
-  }
-
-  .admin-inline-row,
-  .admin-selector-row {
-    border-color: var(--border-dark-strong);
-    background: color-mix(in srgb, var(--surface-dark-2) 90%, black 10%);
-  }
-}
   .admin-score-download-menu {
     margin-left: 0;
   }

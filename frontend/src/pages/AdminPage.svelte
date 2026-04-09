@@ -110,8 +110,12 @@
     let currentMemberSearchQuery = $state("");
     let addMemberSearchQuery = $state("");
     let inviteRoles = $state<Record<string, EnsembleRole>>({});
-    let originalManagedMemberRoles = $state<Record<string, ManagedMemberDraftRole>>({});
-    let managedMemberDraftRoles = $state<Record<string, ManagedMemberDraftRole>>({});
+    let originalManagedMemberRoles = $state<
+        Record<string, ManagedMemberDraftRole>
+    >({});
+    let managedMemberDraftRoles = $state<
+        Record<string, ManagedMemberDraftRole>
+    >({});
     let savingManagedMembers = $state(false);
     let ensemblePickerMode = $state<"upload" | "score" | "">("");
     let ensemblePickerMusicId = $state("");
@@ -150,7 +154,11 @@
     }
 
     function canManageEnsembleMembers(ensemble: Ensemble, user = currentUser) {
-        return !!user && (hasGlobalPower(user) || user.managed_ensemble_ids.includes(ensemble.id));
+        return (
+            !!user &&
+            (hasGlobalPower(user) ||
+                user.managed_ensemble_ids.includes(ensemble.id))
+        );
     }
 
     function canDeleteUserAccount(user: AppUser, actor = currentUser) {
@@ -206,7 +214,9 @@
         return canManageUsers(user);
     }
 
-    function allowedCreateRoles(actor = currentUser): Array<Exclude<GlobalRole, "superadmin">> {
+    function allowedCreateRoles(
+        actor = currentUser,
+    ): Array<Exclude<GlobalRole, "superadmin">> {
         if (!actor) {
             return ["user"];
         }
@@ -219,7 +229,9 @@
         return ["user"];
     }
 
-    function defaultCreateRole(actor = currentUser): Exclude<GlobalRole, "superadmin"> {
+    function defaultCreateRole(
+        actor = currentUser,
+    ): Exclude<GlobalRole, "superadmin"> {
         const roles = allowedCreateRoles(actor);
         return roles.includes("user") ? "user" : (roles[0] ?? "user");
     }
@@ -329,7 +341,9 @@
 
     function currentAdminSectionItem() {
         return (
-            visibleAdminSectionItems.find((section) => section.id === adminSection) ??
+            visibleAdminSectionItems.find(
+                (section) => section.id === adminSection,
+            ) ??
             visibleAdminSectionItems[0] ??
             adminSectionItems[0]
         );
@@ -350,11 +364,9 @@
         }
 
         return sorted.filter((user) =>
-            [
-                user.username,
-                user.role,
-                prettyDate(user.created_at),
-            ].some((value) => value.toLowerCase().includes(query)),
+            [user.username, user.role, prettyDate(user.created_at)].some(
+                (value) => value.toLowerCase().includes(query),
+            ),
         );
     });
 
@@ -399,7 +411,9 @@
     });
 
     let activeManagedEnsemble = $derived.by(
-        () => ensembles.find((ensemble) => ensemble.id === managingEnsembleId) ?? null,
+        () =>
+            ensembles.find((ensemble) => ensemble.id === managingEnsembleId) ??
+            null,
     );
 
     function managedMemberRoleForUser(userId: string): ManagedMemberDraftRole {
@@ -423,8 +437,11 @@
             .filter(
                 (
                     entry,
-                ): entry is { user_id: string; role: EnsembleRole; user: AppUser } =>
-                    entry.role !== "none",
+                ): entry is {
+                    user_id: string;
+                    role: EnsembleRole;
+                    user: AppUser;
+                } => entry.role !== "none",
             )
             .sort((left, right) =>
                 left.user!.username.localeCompare(right.user!.username),
@@ -457,12 +474,19 @@
             .filter((user) =>
                 !query
                     ? true
-                    : [user.username, user.role].join(" ").toLowerCase().includes(query),
+                    : [user.username, user.role]
+                          .join(" ")
+                          .toLowerCase()
+                          .includes(query),
             );
     });
 
     $effect(() => {
-        if (!visibleAdminSectionItems.some((section) => section.id === adminSection)) {
+        if (
+            !visibleAdminSectionItems.some(
+                (section) => section.id === adminSection,
+            )
+        ) {
             adminSection = visibleAdminSectionItems[0]?.id ?? "scores";
         }
     });
@@ -530,7 +554,9 @@
             }
             if (
                 managingEnsembleId &&
-                !ensembleItems.some((ensemble) => ensemble.id === managingEnsembleId)
+                !ensembleItems.some(
+                    (ensemble) => ensemble.id === managingEnsembleId,
+                )
             ) {
                 managingEnsembleId = "";
             }
@@ -661,7 +687,10 @@
         ) as Record<string, ManagedMemberDraftRole>;
     }
 
-    function stageManagedMemberRole(userId: string, role: ManagedMemberDraftRole) {
+    function stageManagedMemberRole(
+        userId: string,
+        role: ManagedMemberDraftRole,
+    ) {
         managedMemberDraftRoles = {
             ...managedMemberDraftRoles,
             [userId]: role,
@@ -703,7 +732,8 @@
             ]);
 
             for (const userId of keys) {
-                const originalRole = originalManagedMemberRoles[userId] ?? "none";
+                const originalRole =
+                    originalManagedMemberRoles[userId] ?? "none";
                 const nextRole = managedMemberDraftRoles[userId] ?? "none";
 
                 if (originalRole === nextRole) {
@@ -742,7 +772,10 @@
         return uploadEnsembleIds.includes(ensembleId);
     }
 
-    function toggleUploadEnsembleSelection(ensembleId: string, checked: boolean) {
+    function toggleUploadEnsembleSelection(
+        ensembleId: string,
+        checked: boolean,
+    ) {
         if (checked) {
             if (!uploadEnsembleIds.includes(ensembleId)) {
                 uploadEnsembleIds = [...uploadEnsembleIds, ensembleId];
@@ -750,7 +783,9 @@
             return;
         }
 
-        uploadEnsembleIds = uploadEnsembleIds.filter((value) => value !== ensembleId);
+        uploadEnsembleIds = uploadEnsembleIds.filter(
+            (value) => value !== ensembleId,
+        );
     }
 
     function openCreateScoreModal() {
@@ -772,11 +807,15 @@
         selectedFile = null;
         selectedIconFile = null;
         uploadEnsembleIds = ensembles[0] ? [ensembles[0].id] : [];
-        const scoreInput = document.getElementById("mscz-input") as HTMLInputElement | null;
+        const scoreInput = document.getElementById(
+            "mscz-input",
+        ) as HTMLInputElement | null;
         if (scoreInput) {
             scoreInput.value = "";
         }
-        const iconInput = document.getElementById("icon-file-input") as HTMLInputElement | null;
+        const iconInput = document.getElementById(
+            "icon-file-input",
+        ) as HTMLInputElement | null;
         if (iconInput) {
             iconInput.value = "";
         }
@@ -982,7 +1021,9 @@
 
         try {
             await deleteUser(user.id);
-            adminUsers = adminUsers.filter((candidate) => candidate.id !== user.id);
+            adminUsers = adminUsers.filter(
+                (candidate) => candidate.id !== user.id,
+            );
             await refreshAdminData();
             adminSuccess = `User ${user.username} deleted.`;
         } catch (error) {
@@ -1006,7 +1047,9 @@
 
         try {
             await deleteEnsemble(ensemble.id);
-            ensembles = ensembles.filter((candidate) => candidate.id !== ensemble.id);
+            ensembles = ensembles.filter(
+                (candidate) => candidate.id !== ensemble.id,
+            );
             await refreshAdminData();
             adminSuccess = `Ensemble ${ensemble.name} deleted.`;
         } catch (error) {
@@ -1262,22 +1305,36 @@
                             {:else}
                                 <div class="music-list admin-user-list">
                                     {#each filteredAdminUsers as user}
-                                        <article class="music-card admin-user-row">
+                                        <article
+                                            class="music-card admin-user-row"
+                                        >
                                             <div class="admin-user-row-main">
-                                                <div class="admin-user-avatar" aria-hidden="true">
-                                                    {user.username.slice(0, 1).toUpperCase()}
+                                                <div
+                                                    class="admin-user-avatar"
+                                                    aria-hidden="true"
+                                                >
+                                                    {user.username
+                                                        .slice(0, 1)
+                                                        .toUpperCase()}
                                                 </div>
                                                 <div class="admin-user-copy">
                                                     <h3>{user.username}</h3>
-                                                    <p class="admin-user-role-pill">
+                                                    <p
+                                                        class="admin-user-role-pill"
+                                                    >
                                                         {user.role}
                                                     </p>
                                                 </div>
                                             </div>
-                                            <div class="actions admin-user-actions">
+                                            <div
+                                                class="actions admin-user-actions"
+                                            >
                                                 <button
                                                     class="button secondary admin-user-action"
-                                                    onclick={() => void handleShowUserQr(user)}
+                                                    onclick={() =>
+                                                        void handleShowUserQr(
+                                                            user,
+                                                        )}
                                                     aria-label={`Show QR code for ${user.username}`}
                                                     title="Show QR code"
                                                 >
@@ -1293,16 +1350,26 @@
                                                         aria-hidden="true"
                                                     >
                                                         <path d="M3 3h7v7H3z" />
-                                                        <path d="M14 3h7v7h-7z" />
-                                                        <path d="M3 14h7v7H3z" />
-                                                        <path d="M14 14h3v3h-3z" />
-                                                        <path d="M18 14h3v7h-7v-3" />
+                                                        <path
+                                                            d="M14 3h7v7h-7z"
+                                                        />
+                                                        <path
+                                                            d="M3 14h7v7H3z"
+                                                        />
+                                                        <path
+                                                            d="M14 14h3v3h-3z"
+                                                        />
+                                                        <path
+                                                            d="M18 14h3v7h-7v-3"
+                                                        />
                                                     </svg>
                                                 </button>
                                                 <button
                                                     class="button ghost admin-user-action"
                                                     onclick={() =>
-                                                        void handleCopyUserLink(user)}
+                                                        void handleCopyUserLink(
+                                                            user,
+                                                        )}
                                                     aria-label={`Generate connection link for ${user.username}`}
                                                     title="Generate connection link"
                                                 >
@@ -1329,17 +1396,39 @@
                                                     <button
                                                         class="button ghost danger admin-user-action"
                                                         type="button"
-                                                        disabled={deletingUserFor === user.id}
-                                                        onclick={() => void handleDeleteUser(user)}
+                                                        disabled={deletingUserFor ===
+                                                            user.id}
+                                                        onclick={() =>
+                                                            void handleDeleteUser(
+                                                                user,
+                                                            )}
                                                         aria-label={`Delete ${user.username}`}
                                                         title="Delete user"
                                                     >
-                                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                        <svg
+                                                            width="15"
+                                                            height="15"
+                                                            viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            stroke-width="2"
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            aria-hidden="true"
+                                                        >
                                                             <path d="M3 6h18" />
-                                                            <path d="M8 6V4h8v2" />
-                                                            <path d="M19 6l-1 14H6L5 6" />
-                                                            <path d="M10 11v6" />
-                                                            <path d="M14 11v6" />
+                                                            <path
+                                                                d="M8 6V4h8v2"
+                                                            />
+                                                            <path
+                                                                d="M19 6l-1 14H6L5 6"
+                                                            />
+                                                            <path
+                                                                d="M10 11v6"
+                                                            />
+                                                            <path
+                                                                d="M14 11v6"
+                                                            />
                                                         </svg>
                                                     </button>
                                                 {/if}
@@ -1358,7 +1447,8 @@
                                     <h3>Ensembles</h3>
                                 </div>
                                 <label class="field admin-user-search">
-                                    <span class="sr-only">Search ensembles</span>
+                                    <span class="sr-only">Search ensembles</span
+                                    >
                                     <div class="admin-user-search-input-wrap">
                                         <svg
                                             width="15"
@@ -1416,9 +1506,13 @@
                                     </p>
                                 </div>
                             {:else}
-                                <div class="music-list admin-user-list admin-ensemble-list">
+                                <div
+                                    class="music-list admin-user-list admin-ensemble-list"
+                                >
                                     {#each filteredEnsembles as ensemble}
-                                        <article class="music-card admin-user-row admin-ensemble-card">
+                                        <article
+                                            class="music-card admin-user-row admin-ensemble-card"
+                                        >
                                             <div class="admin-user-row-main">
                                                 <div
                                                     class="admin-user-avatar admin-ensemble-avatar"
@@ -1434,32 +1528,55 @@
                                                         stroke-linecap="round"
                                                         stroke-linejoin="round"
                                                     >
-                                                        <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                                                        <circle cx="8.5" cy="7" r="3" />
+                                                        <path
+                                                            d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"
+                                                        />
+                                                        <circle
+                                                            cx="8.5"
+                                                            cy="7"
+                                                            r="3"
+                                                        />
                                                         <path d="M20 8v6" />
                                                         <path d="M23 11h-6" />
                                                     </svg>
                                                 </div>
-                                                <div class="admin-user-copy admin-ensemble-copy">
+                                                <div
+                                                    class="admin-user-copy admin-ensemble-copy"
+                                                >
                                                     <h3>{ensemble.name}</h3>
-                                                    <div class="admin-card-badges">
-                                                        <span class="admin-user-role-pill">
-                                                            {ensemble.members.length} members
+                                                    <div
+                                                        class="admin-card-badges"
+                                                    >
+                                                        <span
+                                                            class="admin-user-role-pill"
+                                                        >
+                                                            {ensemble.members
+                                                                .length} members
                                                         </span>
-                                                        <span class="admin-user-role-pill">
-                                                            {ensemble.score_count} scores
+                                                        <span
+                                                            class="admin-user-role-pill"
+                                                        >
+                                                            {ensemble.score_count}
+                                                            scores
                                                         </span>
                                                     </div>
                                                 </div>
                                             </div>
-                                            <div class="actions admin-user-actions">
+                                            <div
+                                                class="actions admin-user-actions"
+                                            >
                                                 <button
                                                     class="button secondary admin-user-action"
                                                     type="button"
-                                                    onclick={() => openManageMembersModal(ensemble)}
+                                                    onclick={() =>
+                                                        openManageMembersModal(
+                                                            ensemble,
+                                                        )}
                                                     aria-label={`Manage members for ${ensemble.name}`}
                                                     title="Manage members"
-                                                    disabled={!canManageEnsembleMembers(ensemble)}
+                                                    disabled={!canManageEnsembleMembers(
+                                                        ensemble,
+                                                    )}
                                                 >
                                                     <svg
                                                         width="16"
@@ -1471,8 +1588,14 @@
                                                         stroke-linecap="round"
                                                         stroke-linejoin="round"
                                                     >
-                                                        <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                                                        <circle cx="8.5" cy="7" r="3" />
+                                                        <path
+                                                            d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"
+                                                        />
+                                                        <circle
+                                                            cx="8.5"
+                                                            cy="7"
+                                                            r="3"
+                                                        />
                                                         <path d="M20 8v6" />
                                                         <path d="M23 11h-6" />
                                                     </svg>
@@ -1481,17 +1604,38 @@
                                                     <button
                                                         class="button ghost danger admin-user-action"
                                                         type="button"
-                                                        disabled={deletingEnsembleFor === ensemble.id}
-                                                        onclick={() => void handleDeleteEnsemble(ensemble)}
+                                                        disabled={deletingEnsembleFor ===
+                                                            ensemble.id}
+                                                        onclick={() =>
+                                                            void handleDeleteEnsemble(
+                                                                ensemble,
+                                                            )}
                                                         aria-label={`Delete ${ensemble.name}`}
                                                         title="Delete ensemble"
                                                     >
-                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                        <svg
+                                                            width="16"
+                                                            height="16"
+                                                            viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            stroke-width="2"
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                        >
                                                             <path d="M3 6h18" />
-                                                            <path d="M8 6V4h8v2" />
-                                                            <path d="M19 6l-1 14H6L5 6" />
-                                                            <path d="M10 11v6" />
-                                                            <path d="M14 11v6" />
+                                                            <path
+                                                                d="M8 6V4h8v2"
+                                                            />
+                                                            <path
+                                                                d="M19 6l-1 14H6L5 6"
+                                                            />
+                                                            <path
+                                                                d="M10 11v6"
+                                                            />
+                                                            <path
+                                                                d="M14 11v6"
+                                                            />
                                                         </svg>
                                                     </button>
                                                 {/if}
@@ -1568,20 +1712,37 @@
                             {:else}
                                 <div class="music-list admin-score-list">
                                     {#each filteredMusics as music}
-                                        <article class="music-card admin-score-card">
+                                        <article
+                                            class="music-card admin-score-card"
+                                        >
                                             {#if canDeleteScore(music)}
                                                 <button
                                                     class="button ghost danger admin-score-delete"
                                                     type="button"
                                                     aria-label={`Delete ${music.title}`}
                                                     title="Delete score"
-                                                    disabled={deletingMusicFor === music.id}
-                                                    onclick={() => void handleDeleteMusic(music.id)}
+                                                    disabled={deletingMusicFor ===
+                                                        music.id}
+                                                    onclick={() =>
+                                                        void handleDeleteMusic(
+                                                            music.id,
+                                                        )}
                                                 >
-                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                    <svg
+                                                        width="16"
+                                                        height="16"
+                                                        viewBox="0 0 24 24"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        stroke-width="2"
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                    >
                                                         <path d="M3 6h18" />
                                                         <path d="M8 6V4h8v2" />
-                                                        <path d="M19 6l-1 14H6L5 6" />
+                                                        <path
+                                                            d="M19 6l-1 14H6L5 6"
+                                                        />
                                                         <path d="M10 11v6" />
                                                         <path d="M14 11v6" />
                                                     </svg>
@@ -1596,72 +1757,251 @@
                                                     />
                                                     <span>{music.title}</span>
                                                 </h3>
-                                                <p class="subtle admin-score-filename">{music.filename}</p>
+                                                <p
+                                                    class="subtle admin-score-filename"
+                                                >
+                                                    {music.filename}
+                                                </p>
                                             </div>
                                             <div class="admin-score-badges">
-                                                <span class="admin-user-role-pill">{music.ensemble_names.length} ensembles</span>
-                                                <span class="admin-user-role-pill">{qualityProfileLabel(music.quality_profile)}</span>
-                                                <span class="admin-user-role-pill">Stems {music.stems_status}</span>
+                                                <span
+                                                    class="admin-user-role-pill"
+                                                    >{music.ensemble_names
+                                                        .length} ensembles</span
+                                                >
+                                                <span
+                                                    class="admin-user-role-pill"
+                                                    >{qualityProfileLabel(
+                                                        music.quality_profile,
+                                                    )}</span
+                                                >
+                                                <span
+                                                    class="admin-user-role-pill"
+                                                    >Stems {music.stems_status}</span
+                                                >
                                             </div>
                                             <div class="admin-score-meta">
-                                                <p>{music.ensemble_names.join(", ") || "No ensemble"}</p>
-                                                <p>{formatBytes(music.stems_total_bytes)} stems</p>
-                                                <p>Uploaded {prettyDate(music.created_at)}</p>
+                                                <p>
+                                                    {music.ensemble_names.join(
+                                                        ", ",
+                                                    ) || "No ensemble"}
+                                                </p>
+                                                <p>
+                                                    {formatBytes(
+                                                        music.stems_total_bytes,
+                                                    )} stems
+                                                </p>
+                                                <p>
+                                                    Uploaded {prettyDate(
+                                                        music.created_at,
+                                                    )}
+                                                </p>
                                             </div>
                                             {#if music.audio_error}
-                                                <p class="hint">{music.audio_error}</p>
+                                                <p class="hint">
+                                                    {music.audio_error}
+                                                </p>
                                             {/if}
                                             {#if music.stems_error}
-                                                <p class="hint">{music.stems_error}</p>
+                                                <p class="hint">
+                                                    {music.stems_error}
+                                                </p>
                                             {/if}
-                                            <div class="actions admin-score-actions">
+                                            <div
+                                                class="actions admin-score-actions"
+                                            >
                                                 {#if canManageScoreEnsembles(music)}
-                                                    <button class="button secondary admin-user-action" type="button" onclick={() => openScoreEnsembleModal(music)} aria-label={`Manage ensembles for ${music.title}`} title="Manage ensembles">
-                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                            <path d="M4 19a8 8 0 0 1 16 0" />
-                                                            <circle cx="12" cy="8" r="4" />
+                                                    <button
+                                                        class="button secondary admin-user-action"
+                                                        type="button"
+                                                        onclick={() =>
+                                                            openScoreEnsembleModal(
+                                                                music,
+                                                            )}
+                                                        aria-label={`Manage ensembles for ${music.title}`}
+                                                        title="Manage ensembles"
+                                                    >
+                                                        <svg
+                                                            width="16"
+                                                            height="16"
+                                                            viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            stroke-width="2"
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                        >
+                                                            <path
+                                                                d="M4 19a8 8 0 0 1 16 0"
+                                                            />
+                                                            <circle
+                                                                cx="12"
+                                                                cy="8"
+                                                                r="4"
+                                                            />
                                                             <path d="M20 6v6" />
-                                                            <path d="M23 9h-6" />
+                                                            <path
+                                                                d="M23 9h-6"
+                                                            />
                                                         </svg>
                                                     </button>
                                                 {/if}
                                                 {#if canEditOwnedScore(music)}
-                                                    <button class="button secondary admin-user-action" type="button" onclick={() => openScoreMetadataModal(music)} aria-label={`Edit metadata for ${music.title}`} title="Edit metadata">
-                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                            <path d="M12 20h9" />
-                                                            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                                    <button
+                                                        class="button secondary admin-user-action"
+                                                        type="button"
+                                                        onclick={() =>
+                                                            openScoreMetadataModal(
+                                                                music,
+                                                            )}
+                                                        aria-label={`Edit metadata for ${music.title}`}
+                                                        title="Edit metadata"
+                                                    >
+                                                        <svg
+                                                            width="16"
+                                                            height="16"
+                                                            viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            stroke-width="2"
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                        >
+                                                            <path
+                                                                d="M12 20h9"
+                                                            />
+                                                            <path
+                                                                d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"
+                                                            />
                                                         </svg>
                                                     </button>
                                                 {/if}
-                                                <button class="button secondary admin-user-action" type="button" onclick={() => void copyText(scoreLinkForCopy(music), "Score link copied.")} aria-label={`Copy link for ${music.title}`} title="Copy score link">
-                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L10.6 5.3" />
-                                                        <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 1 0 7.07 7.07l2.12-2.12" />
+                                                <button
+                                                    class="button secondary admin-user-action"
+                                                    type="button"
+                                                    onclick={() =>
+                                                        void copyText(
+                                                            scoreLinkForCopy(
+                                                                music,
+                                                            ),
+                                                            "Score link copied.",
+                                                        )}
+                                                    aria-label={`Copy link for ${music.title}`}
+                                                    title="Copy score link"
+                                                >
+                                                    <svg
+                                                        width="16"
+                                                        height="16"
+                                                        viewBox="0 0 24 24"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        stroke-width="2"
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                    >
+                                                        <path
+                                                            d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L10.6 5.3"
+                                                        />
+                                                        <path
+                                                            d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 1 0 7.07 7.07l2.12-2.12"
+                                                        />
                                                     </svg>
                                                 </button>
-                                                <div class="download-menu admin-score-download-menu" class:open={openDownloadMenuFor === music.id}>
-                                                    <button class="download-menu-btn admin-score-download-btn" type="button" onclick={() => toggleDownloadMenu(music.id)} aria-label={`Download files for ${music.title}`} title="Downloads" aria-haspopup="true" aria-expanded={openDownloadMenuFor === music.id}>
-                                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                                                            <path d="M12 3v12M7 11l5 5 5-5" />
-                                                            <path d="M4 20h16" />
+                                                <div
+                                                    class="download-menu admin-score-download-menu"
+                                                    class:open={openDownloadMenuFor ===
+                                                        music.id}
+                                                >
+                                                    <button
+                                                        class="download-menu-btn admin-score-download-btn"
+                                                        type="button"
+                                                        onclick={() =>
+                                                            toggleDownloadMenu(
+                                                                music.id,
+                                                            )}
+                                                        aria-label={`Download files for ${music.title}`}
+                                                        title="Downloads"
+                                                        aria-haspopup="true"
+                                                        aria-expanded={openDownloadMenuFor ===
+                                                            music.id}
+                                                    >
+                                                        <svg
+                                                            width="15"
+                                                            height="15"
+                                                            viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            stroke-width="2.2"
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                        >
+                                                            <path
+                                                                d="M12 3v12M7 11l5 5 5-5"
+                                                            />
+                                                            <path
+                                                                d="M4 20h16"
+                                                            />
                                                         </svg>
-                                                        <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                                                            <polyline points="6 9 12 15 18 9" />
+                                                        <svg
+                                                            class="chevron"
+                                                            width="12"
+                                                            height="12"
+                                                            viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            stroke-width="2.5"
+                                                        >
+                                                            <polyline
+                                                                points="6 9 12 15 18 9"
+                                                            />
                                                         </svg>
                                                     </button>
                                                     {#if openDownloadMenuFor === music.id}
-                                                        <div class="download-dropdown">
-                                                            <a class="download-item" href={music.download_url} target="_blank" rel="noreferrer" onclick={() => (openDownloadMenuFor = "")}>Download MuseScore</a>
+                                                        <div
+                                                            class="download-dropdown"
+                                                        >
+                                                            <a
+                                                                class="download-item"
+                                                                href={music.download_url}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                onclick={() =>
+                                                                    (openDownloadMenuFor =
+                                                                        "")}
+                                                                >Download
+                                                                MuseScore</a
+                                                            >
                                                             {#if music.midi_download_url}
-                                                                <a class="download-item" href={music.midi_download_url} target="_blank" rel="noreferrer" onclick={() => (openDownloadMenuFor = "")}>Download MIDI</a>
+                                                                <a
+                                                                    class="download-item"
+                                                                    href={music.midi_download_url}
+                                                                    target="_blank"
+                                                                    rel="noreferrer"
+                                                                    onclick={() =>
+                                                                        (openDownloadMenuFor =
+                                                                            "")}
+                                                                    >Download
+                                                                    MIDI</a
+                                                                >
                                                             {/if}
                                                         </div>
                                                     {/if}
                                                 </div>
                                             </div>
                                             {#if music.stems_status !== "ready" && canEditOwnedScore(music)}
-                                                <button class="button ghost admin-score-retry" type="button" disabled={retryingFor === music.id} onclick={() => void handleRetryRender(music.id)}>
-                                                    {retryingFor === music.id ? "Retrying render..." : "Retry render"}
+                                                <button
+                                                    class="button ghost admin-score-retry"
+                                                    type="button"
+                                                    disabled={retryingFor ===
+                                                        music.id}
+                                                    onclick={() =>
+                                                        void handleRetryRender(
+                                                            music.id,
+                                                        )}
+                                                >
+                                                    {retryingFor === music.id
+                                                        ? "Retrying render..."
+                                                        : "Retry render"}
                                                 </button>
                                             {/if}
                                         </article>
@@ -1683,60 +2023,61 @@
         cardClass="admin-user-modal"
         labelledBy="create-user-title"
     >
-            <div class="card-header admin-user-modal-header">
-                <div>
-                    <p class="meta-label">Create</p>
-                    <h3 id="create-user-title">New account</h3>
-                </div>
-                <button
-                    class="button ghost admin-modal-close"
-                    type="button"
-                    aria-label="Close create user modal"
-                    onclick={closeCreateUserModal}
-                >
-                    Close
-                </button>
+        <div class="card-header admin-user-modal-header">
+            <div>
+                <p class="meta-label">Create</p>
+                <h3 id="create-user-title">New account</h3>
             </div>
-            <p class="subtle">
-                Create a username-only account, assign its global role, then generate a QR code or connection link from the list.
-            </p>
-            <label class="field">
-                <span>Username</span>
-                <input
-                    bind:value={newUsername}
-                    placeholder="example: lucas"
-                    onkeydown={(event) => {
-                        if (event.key === "Enter") {
-                            void handleCreateUser();
-                        } else if (event.key === "Escape") {
-                            closeCreateUserModal();
-                        }
-                    }}
-                />
-            </label>
-            <CustomSelect
-                label="Global role"
-                bind:value={newUserRole}
-                options={createUserRoleOptions}
+            <button
+                class="button ghost admin-modal-close"
+                type="button"
+                aria-label="Close create user modal"
+                onclick={closeCreateUserModal}
+            >
+                Close
+            </button>
+        </div>
+        <p class="subtle">
+            Create a username-only account, assign its global role, then
+            generate a QR code or connection link from the list.
+        </p>
+        <label class="field">
+            <span>Username</span>
+            <input
+                bind:value={newUsername}
+                placeholder="example: lucas"
+                onkeydown={(event) => {
+                    if (event.key === "Enter") {
+                        void handleCreateUser();
+                    } else if (event.key === "Escape") {
+                        closeCreateUserModal();
+                    }
+                }}
             />
-            <div class="actions admin-user-modal-actions">
-                <button
-                    class="button ghost"
-                    type="button"
-                    disabled={creatingUser}
-                    onclick={closeCreateUserModal}
-                >
-                    Cancel
-                </button>
-                <button
-                    class="button"
-                    type="button"
-                    disabled={creatingUser}
-                    onclick={() => void handleCreateUser()}
-                >
-                    {creatingUser ? "Creating..." : "Create user"}
-                </button>
-            </div>
+        </label>
+        <CustomSelect
+            label="Global role"
+            bind:value={newUserRole}
+            options={createUserRoleOptions}
+        />
+        <div class="actions admin-user-modal-actions">
+            <button
+                class="button ghost"
+                type="button"
+                disabled={creatingUser}
+                onclick={closeCreateUserModal}
+            >
+                Cancel
+            </button>
+            <button
+                class="button"
+                type="button"
+                disabled={creatingUser}
+                onclick={() => void handleCreateUser()}
+            >
+                {creatingUser ? "Creating..." : "Create user"}
+            </button>
+        </div>
     </BaseModal>
 {/if}
 
@@ -1747,52 +2088,52 @@
         cardClass="admin-user-modal"
         labelledBy="create-ensemble-title"
     >
-            <div class="card-header admin-user-modal-header">
-                <div>
-                    <p class="meta-label">Create</p>
-                    <h3 id="create-ensemble-title">New ensemble</h3>
-                </div>
-                <button
-                    class="button ghost admin-modal-close"
-                    type="button"
-                    aria-label="Close create ensemble modal"
-                    onclick={closeCreateEnsembleModal}
-                >
-                    Close
-                </button>
+        <div class="card-header admin-user-modal-header">
+            <div>
+                <p class="meta-label">Create</p>
+                <h3 id="create-ensemble-title">New ensemble</h3>
             </div>
-            <label class="field">
-                <span>Ensemble name</span>
-                <input
-                    bind:value={newEnsembleName}
-                    placeholder="example: Strings"
-                    onkeydown={(event) => {
-                        if (event.key === "Enter") {
-                            void handleCreateEnsemble();
-                        } else if (event.key === "Escape") {
-                            closeCreateEnsembleModal();
-                        }
-                    }}
-                />
-            </label>
-            <div class="actions admin-user-modal-actions">
-                <button
-                    class="button ghost"
-                    type="button"
-                    disabled={creatingEnsemble}
-                    onclick={closeCreateEnsembleModal}
-                >
-                    Cancel
-                </button>
-                <button
-                    class="button"
-                    type="button"
-                    disabled={creatingEnsemble}
-                    onclick={() => void handleCreateEnsemble()}
-                >
-                    {creatingEnsemble ? "Creating..." : "Create ensemble"}
-                </button>
-            </div>
+            <button
+                class="button ghost admin-modal-close"
+                type="button"
+                aria-label="Close create ensemble modal"
+                onclick={closeCreateEnsembleModal}
+            >
+                Close
+            </button>
+        </div>
+        <label class="field">
+            <span>Ensemble name</span>
+            <input
+                bind:value={newEnsembleName}
+                placeholder="example: Strings"
+                onkeydown={(event) => {
+                    if (event.key === "Enter") {
+                        void handleCreateEnsemble();
+                    } else if (event.key === "Escape") {
+                        closeCreateEnsembleModal();
+                    }
+                }}
+            />
+        </label>
+        <div class="actions admin-user-modal-actions">
+            <button
+                class="button ghost"
+                type="button"
+                disabled={creatingEnsemble}
+                onclick={closeCreateEnsembleModal}
+            >
+                Cancel
+            </button>
+            <button
+                class="button"
+                type="button"
+                disabled={creatingEnsemble}
+                onclick={() => void handleCreateEnsemble()}
+            >
+                {creatingEnsemble ? "Creating..." : "Create ensemble"}
+            </button>
+        </div>
     </BaseModal>
 {/if}
 
@@ -1803,121 +2144,121 @@
         cardClass="admin-score-modal"
         labelledBy="create-score-title"
     >
-            <div class="card-header admin-user-modal-header">
-                <div>
-                    <p class="meta-label">Upload</p>
-                    <h3 id="create-score-title">Add a MuseScore score</h3>
-                </div>
-                <button
-                    class="button ghost admin-modal-close"
-                    type="button"
-                    aria-label="Close add score modal"
-                    onclick={closeCreateScoreModal}
-                >
-                    Close
-                </button>
-            </div>
-            <div class="upload-grid admin-score-modal-grid">
-                <label class="field">
-                    <span>Title</span>
-                    <input
-                        bind:value={uploadTitle}
-                        placeholder="Optional display title"
-                    />
-                </label>
-                <label class="field">
-                    <span>Icon</span>
-                    <input
-                        bind:value={uploadIcon}
-                        maxlength="2"
-                        placeholder="Optional emoji or 2-char mark"
-                    />
-                </label>
-                <label class="field">
-                    <span>Public id</span>
-                    <input
-                        bind:value={uploadPublicId}
-                        placeholder="Optional friendly id"
-                    />
-                </label>
-                <label class="field">
-                    <span>Stem quality</span>
-                    <select bind:value={uploadQualityProfile}>
-                        {#each STEM_QUALITY_PROFILES as option}
-                            <option value={option.value}>{option.label}</option>
-                        {/each}
-                    </select>
-                    <small class="subtle">
-                        {STEM_QUALITY_PROFILES.find((option) =>
-                            option.value === uploadQualityProfile,
-                        )?.description}
-                    </small>
-                </label>
-                <label class="field file-field">
-                    <span>Icon image</span>
-                    <input
-                        id="icon-file-input"
-                        type="file"
-                        accept="image/*"
-                        onchange={(event) => {
-                            const target = event.currentTarget as HTMLInputElement;
-                            selectedIconFile = target.files?.[0] ?? null;
-                        }}
-                    />
-                </label>
-                <label class="field file-field">
-                    <span>MSCZ file</span>
-                    <input
-                        id="mscz-input"
-                        type="file"
-                        accept=".mscz"
-                        onchange={handleFileSelection}
-                    />
-                </label>
+        <div class="card-header admin-user-modal-header">
+            <div>
+                <p class="meta-label">Upload</p>
+                <h3 id="create-score-title">Add a MuseScore score</h3>
             </div>
             <button
-                class="button ghost admin-score-ensemble-trigger"
+                class="button ghost admin-modal-close"
                 type="button"
-                onclick={openUploadEnsembleModal}
+                aria-label="Close add score modal"
+                onclick={closeCreateScoreModal}
             >
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M4 19a8 8 0 0 1 16 0" />
-                    <circle cx="12" cy="8" r="4" />
-                    <path d="M20 6v6" />
-                    <path d="M23 9h-6" />
-                </svg>
-                {uploadEnsembleIds.length > 0
-                    ? `Selected ensembles (${uploadEnsembleIds.length})`
-                    : "Choose ensembles"}
+                Close
             </button>
-            <div class="actions admin-user-modal-actions">
-                <button
-                    class="button ghost"
-                    type="button"
-                    disabled={uploadBusy}
-                    onclick={closeCreateScoreModal}
-                >
-                    Cancel
-                </button>
-                <button
-                    class="button"
-                    type="button"
-                    disabled={uploadBusy}
-                    onclick={() => void handleUpload()}
-                >
-                    {uploadBusy ? "Uploading..." : "Add score"}
-                </button>
-            </div>
+        </div>
+        <div class="upload-grid admin-score-modal-grid">
+            <label class="field">
+                <span>Title</span>
+                <input
+                    bind:value={uploadTitle}
+                    placeholder="Optional display title"
+                />
+            </label>
+            <label class="field">
+                <span>Icon</span>
+                <input
+                    bind:value={uploadIcon}
+                    maxlength="2"
+                    placeholder="Optional emoji or 2-char mark"
+                />
+            </label>
+            <label class="field">
+                <span>Public id</span>
+                <input
+                    bind:value={uploadPublicId}
+                    placeholder="Optional friendly id"
+                />
+            </label>
+            <label class="field">
+                <span>Stem quality</span>
+                <select bind:value={uploadQualityProfile}>
+                    {#each STEM_QUALITY_PROFILES as option}
+                        <option value={option.value}>{option.label}</option>
+                    {/each}
+                </select>
+                <small class="subtle">
+                    {STEM_QUALITY_PROFILES.find(
+                        (option) => option.value === uploadQualityProfile,
+                    )?.description}
+                </small>
+            </label>
+            <label class="field file-field">
+                <span>Icon image</span>
+                <input
+                    id="icon-file-input"
+                    type="file"
+                    accept="image/*"
+                    onchange={(event) => {
+                        const target = event.currentTarget as HTMLInputElement;
+                        selectedIconFile = target.files?.[0] ?? null;
+                    }}
+                />
+            </label>
+            <label class="field file-field">
+                <span>MSCZ file</span>
+                <input
+                    id="mscz-input"
+                    type="file"
+                    accept=".mscz"
+                    onchange={handleFileSelection}
+                />
+            </label>
+        </div>
+        <button
+            class="button ghost admin-score-ensemble-trigger"
+            type="button"
+            onclick={openUploadEnsembleModal}
+        >
+            <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+            >
+                <path d="M4 19a8 8 0 0 1 16 0" />
+                <circle cx="12" cy="8" r="4" />
+                <path d="M20 6v6" />
+                <path d="M23 9h-6" />
+            </svg>
+            {uploadEnsembleIds.length > 0
+                ? `Selected ensembles (${uploadEnsembleIds.length})`
+                : "Choose ensembles"}
+        </button>
+        <div class="actions admin-user-modal-actions">
+            <button
+                class="button ghost"
+                type="button"
+                disabled={uploadBusy}
+                onclick={closeCreateScoreModal}
+            >
+                Cancel
+            </button>
+            <button
+                class="button"
+                type="button"
+                disabled={uploadBusy}
+                onclick={() => void handleUpload()}
+            >
+                {uploadBusy ? "Uploading..." : "Add score"}
+            </button>
+        </div>
     </BaseModal>
 {/if}
 
@@ -1928,190 +2269,202 @@
         cardClass="admin-split-modal"
         labelledBy="manage-ensemble-title"
     >
-            <div class="card-header admin-user-modal-header">
-                <div>
-                    <p class="meta-label">Members</p>
-                    <h3 id="manage-ensemble-title">{activeManagedEnsemble.name}</h3>
-                </div>
-                <button
-                    class="button ghost admin-modal-close"
-                    type="button"
-                    aria-label="Close members modal"
-                    onclick={closeManageMembersModal}
-                >
-                    Close
-                </button>
+        <div class="card-header admin-user-modal-header">
+            <div>
+                <p class="meta-label">Members</p>
+                <h3 id="manage-ensemble-title">{activeManagedEnsemble.name}</h3>
             </div>
-            <div class="admin-split-pane">
-                <section class="admin-split-column">
-                    <div class="admin-split-header">
-                        <div class="admin-split-header-main">
-                            <h4>Current members</h4>
-                            <span class="admin-user-role-pill">
-                                {filteredManagedMembers.length}
-                            </span>
-                        </div>
-                        <label class="field admin-user-search admin-split-search">
-                            <span class="sr-only">Search current members</span>
-                            <div class="admin-user-search-input-wrap">
-                                <svg
-                                    width="15"
-                                    height="15"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    aria-hidden="true"
-                                >
-                                    <circle cx="11" cy="11" r="7" />
-                                    <path d="m20 20-3.5-3.5" />
-                                </svg>
-                                <input
-                                    bind:value={currentMemberSearchQuery}
-                                    placeholder="Search current members"
-                                />
-                            </div>
-                        </label>
+            <button
+                class="button ghost admin-modal-close"
+                type="button"
+                aria-label="Close members modal"
+                onclick={closeManageMembersModal}
+            >
+                Close
+            </button>
+        </div>
+        <div class="admin-split-pane">
+            <section class="admin-split-column">
+                <div class="admin-split-header">
+                    <div class="admin-split-header-main">
+                        <h4>Current members</h4>
+                        <span class="admin-user-role-pill">
+                            {filteredManagedMembers.length}
+                        </span>
                     </div>
-                    <div class="admin-inline-list">
-                        {#if filteredManagedMembers.length === 0}
-                            <p class="hint">No matching members.</p>
-                        {:else}
-                            {#each filteredManagedMembers as member}
-                                <div class="admin-inline-row">
-                                    <div class="admin-inline-copy">
-                                        <strong>{member.user!.username}</strong>
-                                        <span class="admin-user-role-pill">
-                                            {memberRoleLabel(member.role)}
-                                        </span>
-                                    </div>
-                                    <div class="admin-inline-actions">
-                                        {#if allowedEnsembleRolesForUser(member.user!).length > 0}
-                                            <CustomSelect
-                                                value={member.role}
-                                                options={ensembleRoleOptionsForUser(member.user!)}
-                                                compact={true}
-                                                showDescriptionInTrigger={false}
-                                                onValueChange={(role) =>
-                                                    stageManagedMemberRole(
-                                                        member.user_id,
-                                                        role as EnsembleRole,
-                                                    )}
-                                            />
-                                            <button
-                                                class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
-                                                type="button"
-                                                aria-label={`Remove ${member.user!.username}`}
-                                                title={`Remove ${member.user!.username}`}
-                                                onclick={() =>
-                                                    stageManagedMemberRole(
-                                                        member.user_id,
-                                                        "none",
-                                                    )}
-                                            >
-                                                <span aria-hidden="true">-</span>
-                                            </button>
-                                        {:else}
-                                            <span class="hint">Locked</span>
-                                        {/if}
-                                    </div>
+                    <label class="field admin-user-search admin-split-search">
+                        <span class="sr-only">Search current members</span>
+                        <div class="admin-user-search-input-wrap">
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <circle cx="11" cy="11" r="7" />
+                                <path d="m20 20-3.5-3.5" />
+                            </svg>
+                            <input
+                                bind:value={currentMemberSearchQuery}
+                                placeholder="Search current members"
+                            />
+                        </div>
+                    </label>
+                </div>
+                <div class="admin-inline-list">
+                    {#if filteredManagedMembers.length === 0}
+                        <p class="hint">No matching members.</p>
+                    {:else}
+                        {#each filteredManagedMembers as member}
+                            <div class="admin-inline-row">
+                                <div class="admin-inline-copy">
+                                    <strong>{member.user!.username}</strong>
+                                    <span class="admin-user-role-pill">
+                                        {memberRoleLabel(member.role)}
+                                    </span>
                                 </div>
-                            {/each}
-                        {/if}
-                    </div>
-                </section>
-                <section class="admin-split-column">
-                    <div class="admin-split-header">
-                        <div class="admin-split-header-main">
-                            <h4>Add members</h4>
-                            <span class="admin-user-role-pill">
-                                {filteredAvailableEnsembleUsers.length}
-                            </span>
-                        </div>
-                        <label class="field admin-user-search admin-split-search">
-                            <span class="sr-only">Search available users</span>
-                            <div class="admin-user-search-input-wrap">
-                                <svg
-                                    width="15"
-                                    height="15"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    aria-hidden="true"
-                                >
-                                    <circle cx="11" cy="11" r="7" />
-                                    <path d="m20 20-3.5-3.5" />
-                                </svg>
-                                <input
-                                    bind:value={addMemberSearchQuery}
-                                    placeholder="Search available users"
-                                />
-                            </div>
-                        </label>
-                    </div>
-                    <div class="admin-inline-list">
-                        {#if filteredAvailableEnsembleUsers.length === 0}
-                            <p class="hint">No available users.</p>
-                        {:else}
-                            {#each filteredAvailableEnsembleUsers as user}
-                                <div class="admin-inline-row">
-                                    <div class="admin-inline-copy">
-                                        <strong>{user.username}</strong>
-                                        <span class="admin-user-role-pill">{user.role}</span>
-                                    </div>
-                                    <div class="admin-inline-actions">
+                                <div class="admin-inline-actions">
+                                    {#if allowedEnsembleRolesForUser(member.user!).length > 0}
                                         <CustomSelect
-                                            value={inviteRoles[user.id] ?? allowedEnsembleRolesForUser(user)[0] ?? "user"}
-                                            options={ensembleRoleOptionsForUser(user)}
+                                            value={member.role}
+                                            options={ensembleRoleOptionsForUser(
+                                                member.user!,
+                                            )}
                                             compact={true}
                                             showDescriptionInTrigger={false}
-                                            onValueChange={(role) => {
-                                                inviteRoles = {
-                                                    ...inviteRoles,
-                                                    [user.id]: role as EnsembleRole,
-                                                };
-                                            }}
+                                            onValueChange={(role) =>
+                                                stageManagedMemberRole(
+                                                    member.user_id,
+                                                    role as EnsembleRole,
+                                                )}
                                         />
                                         <button
-                                            class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
+                                            class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
                                             type="button"
-                                            aria-label={`Add ${user.username}`}
-                                            title={`Add ${user.username}`}
+                                            aria-label={`Remove ${member.user!.username}`}
+                                            title={`Remove ${member.user!.username}`}
                                             onclick={() =>
-                                                void handleAddUserToManagedEnsemble(user.id)}
+                                                stageManagedMemberRole(
+                                                    member.user_id,
+                                                    "none",
+                                                )}
                                         >
-                                            <span aria-hidden="true">+</span>
+                                            <span aria-hidden="true">-</span>
                                         </button>
-                                    </div>
+                                    {:else}
+                                        <span class="hint">Locked</span>
+                                    {/if}
                                 </div>
-                            {/each}
-                        {/if}
+                            </div>
+                        {/each}
+                    {/if}
+                </div>
+            </section>
+            <section class="admin-split-column">
+                <div class="admin-split-header">
+                    <div class="admin-split-header-main">
+                        <h4>Add members</h4>
+                        <span class="admin-user-role-pill">
+                            {filteredAvailableEnsembleUsers.length}
+                        </span>
                     </div>
-                </section>
-            </div>
-            <div class="actions admin-split-modal-actions">
-                <button
-                    class="button ghost"
-                    type="button"
-                    disabled={savingManagedMembers}
-                    onclick={closeManageMembersModal}
-                >
-                    Cancel
-                </button>
-                <button
-                    class="button"
-                    type="button"
-                    disabled={savingManagedMembers || !hasManagedMemberChanges()}
-                    onclick={() => void saveManagedEnsembleChanges()}
-                >
-                    {savingManagedMembers ? "Saving..." : "Save changes"}
-                </button>
-            </div>
+                    <label class="field admin-user-search admin-split-search">
+                        <span class="sr-only">Search available users</span>
+                        <div class="admin-user-search-input-wrap">
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <circle cx="11" cy="11" r="7" />
+                                <path d="m20 20-3.5-3.5" />
+                            </svg>
+                            <input
+                                bind:value={addMemberSearchQuery}
+                                placeholder="Search available users"
+                            />
+                        </div>
+                    </label>
+                </div>
+                <div class="admin-inline-list">
+                    {#if filteredAvailableEnsembleUsers.length === 0}
+                        <p class="hint">No available users.</p>
+                    {:else}
+                        {#each filteredAvailableEnsembleUsers as user}
+                            <div class="admin-inline-row">
+                                <div class="admin-inline-copy">
+                                    <strong>{user.username}</strong>
+                                    <span class="admin-user-role-pill"
+                                        >{user.role}</span
+                                    >
+                                </div>
+                                <div class="admin-inline-actions">
+                                    <CustomSelect
+                                        value={inviteRoles[user.id] ??
+                                            allowedEnsembleRolesForUser(
+                                                user,
+                                            )[0] ??
+                                            "user"}
+                                        options={ensembleRoleOptionsForUser(
+                                            user,
+                                        )}
+                                        compact={true}
+                                        showDescriptionInTrigger={false}
+                                        onValueChange={(role) => {
+                                            inviteRoles = {
+                                                ...inviteRoles,
+                                                [user.id]: role as EnsembleRole,
+                                            };
+                                        }}
+                                    />
+                                    <button
+                                        class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
+                                        type="button"
+                                        aria-label={`Add ${user.username}`}
+                                        title={`Add ${user.username}`}
+                                        onclick={() =>
+                                            void handleAddUserToManagedEnsemble(
+                                                user.id,
+                                            )}
+                                    >
+                                        <span aria-hidden="true">+</span>
+                                    </button>
+                                </div>
+                            </div>
+                        {/each}
+                    {/if}
+                </div>
+            </section>
+        </div>
+        <div class="actions admin-split-modal-actions">
+            <button
+                class="button ghost"
+                type="button"
+                disabled={savingManagedMembers}
+                onclick={closeManageMembersModal}
+            >
+                Cancel
+            </button>
+            <button
+                class="button"
+                type="button"
+                disabled={savingManagedMembers || !hasManagedMemberChanges()}
+                onclick={() => void saveManagedEnsembleChanges()}
+            >
+                {savingManagedMembers ? "Saving..." : "Save changes"}
+            </button>
+        </div>
     </BaseModal>
 {/if}
 
@@ -2122,85 +2475,92 @@
         cardClass="admin-selector-modal"
         labelledBy="ensemble-selector-title"
     >
-            <div class="card-header admin-user-modal-header">
-                <div>
-                    <p class="meta-label">Ensembles</p>
-                    <h3 id="ensemble-selector-title">
-                        {ensemblePickerMode === "upload"
-                            ? "Choose ensembles for the new score"
-                            : `Manage ensembles for ${activeEnsemblePickerMusic?.title ?? "score"}`}
-                    </h3>
-                </div>
-                <button
-                    class="button ghost admin-modal-close"
-                    type="button"
-                    aria-label="Close ensemble selector"
-                    onclick={closeEnsemblePickerModal}
+        <div class="card-header admin-user-modal-header">
+            <div>
+                <p class="meta-label">Ensembles</p>
+                <h3 id="ensemble-selector-title">
+                    {ensemblePickerMode === "upload"
+                        ? "Choose ensembles for the new score"
+                        : `Manage ensembles for ${activeEnsemblePickerMusic?.title ?? "score"}`}
+                </h3>
+            </div>
+            <button
+                class="button ghost admin-modal-close"
+                type="button"
+                aria-label="Close ensemble selector"
+                onclick={closeEnsemblePickerModal}
+            >
+                Close
+            </button>
+        </div>
+        <label class="field admin-user-search">
+            <span class="sr-only">Search ensembles</span>
+            <div class="admin-user-search-input-wrap">
+                <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
                 >
-                    Close
-                </button>
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="m20 20-3.5-3.5" />
+                </svg>
+                <input
+                    bind:value={ensemblePickerSearchQuery}
+                    placeholder="Search ensembles"
+                />
             </div>
-            <label class="field admin-user-search">
-                <span class="sr-only">Search ensembles</span>
-                <div class="admin-user-search-input-wrap">
-                    <svg
-                        width="15"
-                        height="15"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                    >
-                        <circle cx="11" cy="11" r="7" />
-                        <path d="m20 20-3.5-3.5" />
-                    </svg>
-                    <input
-                        bind:value={ensemblePickerSearchQuery}
-                        placeholder="Search ensembles"
-                    />
-                </div>
-            </label>
-            <div class="admin-inline-list admin-selector-list">
-                {#if filteredPickerEnsembles.length === 0}
-                    <p class="hint">No ensembles match this search.</p>
-                {:else}
-                    {#each filteredPickerEnsembles as ensemble}
-                        <label class="admin-selector-row">
-                            <div class="admin-inline-copy">
-                                <strong>{ensemble.name}</strong>
-                                <span class="admin-user-role-pill">
-                                    {ensemble.members.length} members
-                                </span>
-                            </div>
-                            {#if ensemblePickerMode === "upload"}
-                                <input
-                                    type="checkbox"
-                                    checked={isUploadEnsembleSelected(ensemble.id)}
-                                    onchange={(event) =>
-                                        toggleUploadEnsembleSelection(
-                                            ensemble.id,
-                                            (event.currentTarget as HTMLInputElement).checked,
-                                        )}
-                                />
-                            {:else if activeEnsemblePickerMusic}
-                                <input
-                                    type="checkbox"
-                                    checked={musicHasEnsemble(activeEnsemblePickerMusic, ensemble.id)}
-                                    onchange={(event) =>
-                                        void toggleMusicEnsembleAssignment(
-                                            activeEnsemblePickerMusic.id,
-                                            ensemble.id,
-                                            (event.currentTarget as HTMLInputElement).checked,
-                                        )}
-                                />
-                            {/if}
-                        </label>
-                    {/each}
-                {/if}
-            </div>
+        </label>
+        <div class="admin-inline-list admin-selector-list">
+            {#if filteredPickerEnsembles.length === 0}
+                <p class="hint">No ensembles match this search.</p>
+            {:else}
+                {#each filteredPickerEnsembles as ensemble}
+                    <label class="admin-selector-row">
+                        <div class="admin-inline-copy">
+                            <strong>{ensemble.name}</strong>
+                            <span class="admin-user-role-pill">
+                                {ensemble.members.length} members
+                            </span>
+                        </div>
+                        {#if ensemblePickerMode === "upload"}
+                            <input
+                                type="checkbox"
+                                checked={isUploadEnsembleSelected(ensemble.id)}
+                                onchange={(event) =>
+                                    toggleUploadEnsembleSelection(
+                                        ensemble.id,
+                                        (
+                                            event.currentTarget as HTMLInputElement
+                                        ).checked,
+                                    )}
+                            />
+                        {:else if activeEnsemblePickerMusic}
+                            <input
+                                type="checkbox"
+                                checked={musicHasEnsemble(
+                                    activeEnsemblePickerMusic,
+                                    ensemble.id,
+                                )}
+                                onchange={(event) =>
+                                    void toggleMusicEnsembleAssignment(
+                                        activeEnsemblePickerMusic.id,
+                                        ensemble.id,
+                                        (
+                                            event.currentTarget as HTMLInputElement
+                                        ).checked,
+                                    )}
+                            />
+                        {/if}
+                    </label>
+                {/each}
+            {/if}
+        </div>
     </BaseModal>
 {/if}
 
@@ -2211,72 +2571,76 @@
         cardClass="admin-score-modal"
         labelledBy="score-metadata-title"
     >
-            <div class="card-header admin-user-modal-header">
-                <div>
-                    <p class="meta-label">Metadata</p>
-                    <h3 id="score-metadata-title">Edit score</h3>
-                </div>
-                <button
-                    class="button ghost admin-modal-close"
-                    type="button"
-                    aria-label="Close score metadata modal"
-                    onclick={closeScoreMetadataModal}
+        <div class="card-header admin-user-modal-header">
+            <div>
+                <p class="meta-label">Metadata</p>
+                <h3 id="score-metadata-title">Edit score</h3>
+            </div>
+            <button
+                class="button ghost admin-modal-close"
+                type="button"
+                aria-label="Close score metadata modal"
+                onclick={closeScoreMetadataModal}
+            >
+                Close
+            </button>
+        </div>
+        <div class="upload-grid admin-score-modal-grid">
+            <label class="field">
+                <span>Title</span>
+                <input bind:value={metadataTitle} />
+            </label>
+            <label class="field">
+                <span>Score icon</span>
+                <input
+                    bind:value={metadataIcon}
+                    maxlength="2"
+                    placeholder="Optional emoji or 2-char mark"
+                />
+            </label>
+            <label class="field admin-score-modal-full">
+                <span>Friendly public id</span>
+                <input
+                    bind:value={metadataPublicId}
+                    placeholder="example: moonlight-sonata"
+                />
+            </label>
+        </div>
+        <div class="admin-score-links">
+            <a
+                href={activeMetadataMusic.public_url}
+                target="_blank"
+                rel="noreferrer"
+            >
+                Random link
+            </a>
+            {#if activeMetadataMusic.public_id_url}
+                <a
+                    href={activeMetadataMusic.public_id_url}
+                    target="_blank"
+                    rel="noreferrer"
                 >
-                    Close
-                </button>
-            </div>
-            <div class="upload-grid admin-score-modal-grid">
-                <label class="field">
-                    <span>Title</span>
-                    <input bind:value={metadataTitle} />
-                </label>
-                <label class="field">
-                    <span>Score icon</span>
-                    <input
-                        bind:value={metadataIcon}
-                        maxlength="2"
-                        placeholder="Optional emoji or 2-char mark"
-                    />
-                </label>
-                <label class="field admin-score-modal-full">
-                    <span>Friendly public id</span>
-                    <input
-                        bind:value={metadataPublicId}
-                        placeholder="example: moonlight-sonata"
-                    />
-                </label>
-            </div>
-            <div class="admin-score-links">
-                <a href={activeMetadataMusic.public_url} target="_blank" rel="noreferrer">
-                    Random link
+                    Public id link
                 </a>
-                {#if activeMetadataMusic.public_id_url}
-                    <a
-                        href={activeMetadataMusic.public_id_url}
-                        target="_blank"
-                        rel="noreferrer"
-                    >
-                        Public id link
-                    </a>
-                {/if}
-            </div>
-            <div class="actions admin-user-modal-actions">
-                <button
-                    class="button ghost"
-                    type="button"
-                    disabled={!!savingMetadataFor}
-                    onclick={closeScoreMetadataModal}
-                >
-                    Cancel
-                </button>
-                <button
-                    class="button"
-                    type="button"
-                    disabled={!!savingMetadataFor}
-                    onclick={() => void handleSaveScoreMetadata()}
-                >
-                    {savingMetadataFor ? "Saving..." : "Save changes"}
-                </button>
-            </div>
+            {/if}
+        </div>
+        <div class="actions admin-user-modal-actions">
+            <button
+                class="button ghost"
+                type="button"
+                disabled={!!savingMetadataFor}
+                onclick={closeScoreMetadataModal}
+            >
+                Cancel
+            </button>
+            <button
+                class="button"
+                type="button"
+                disabled={!!savingMetadataFor}
+                onclick={() => void handleSaveScoreMetadata()}
+            >
+                {savingMetadataFor ? "Saving..." : "Save changes"}
+            </button>
+        </div>
     </BaseModal>
 {/if}
