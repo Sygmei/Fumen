@@ -1,5 +1,6 @@
 <script lang="ts">
     import { tick } from "svelte";
+    import { portal } from "../lib/portal";
 
     type SelectOption = {
         value: string;
@@ -35,6 +36,10 @@
     let menuElement = $state<HTMLElement | null>(null);
     let openUpward = $state(false);
     let menuMaxHeight = $state(320);
+    let menuLeft = $state(0);
+    let menuWidth = $state(0);
+    let menuTop = $state<number | null>(null);
+    let menuBottom = $state<number | null>(null);
 
     const listboxId = `custom-select-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -134,7 +139,11 @@
         }
 
         const target = event.target;
-        if (target instanceof Node && !rootElement.contains(target)) {
+        if (
+            target instanceof Node &&
+            !rootElement.contains(target) &&
+            !menuElement?.contains(target)
+        ) {
             closeMenu();
         }
     }
@@ -155,6 +164,7 @@
             window.visualViewport?.height ?? window.innerHeight;
         const margin = 16;
         const gap = 8;
+        const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
         const availableBelow = Math.max(
             140,
             viewportHeight - rect.bottom - margin - gap,
@@ -168,6 +178,13 @@
             140,
             Math.min(openUpward ? availableAbove : availableBelow, 360),
         );
+        menuLeft = Math.min(
+            Math.max(margin, rect.left),
+            Math.max(margin, viewportWidth - rect.width - margin),
+        );
+        menuWidth = Math.min(rect.width, viewportWidth - margin * 2);
+        menuTop = openUpward ? null : rect.bottom + gap;
+        menuBottom = openUpward ? viewportHeight - rect.top + gap : null;
     }
 
     function handleViewportChange() {
@@ -235,7 +252,14 @@
     </button>
 
     {#if open}
-        <div class="custom-select-menu-wrap" class:opens-upward={openUpward}>
+        <div
+            class="custom-select-menu-wrap"
+            class:opens-upward={openUpward}
+            use:portal
+            style={`left: ${menuLeft}px; width: ${menuWidth}px; ${
+                menuTop === null ? "" : `top: ${menuTop}px;`
+            } ${menuBottom === null ? "" : `bottom: ${menuBottom}px;`}`}
+        >
             <div
                 class="custom-select-menu"
                 bind:this={menuElement}
@@ -373,7 +397,7 @@
         width: 100%;
         padding: 8px 10px 8px 8px;
         border: 1px solid var(--custom-select-border);
-        border-radius: 16px;
+        border-radius: var(--radius-lg);
         background: var(--custom-select-trigger-bg);
         box-shadow: var(--custom-select-shadow);
         color: var(--text);
@@ -400,7 +424,7 @@
     .custom-select-trigger.is-compact {
         padding: 6px 8px 6px 6px;
         gap: 8px;
-        border-radius: 14px;
+        border-radius: var(--radius-md);
     }
 
     .custom-select-trigger-icon,
@@ -410,7 +434,7 @@
         justify-content: center;
         width: 42px;
         height: 42px;
-        border-radius: 14px;
+        border-radius: var(--radius-md);
         background: color-mix(
             in srgb,
             var(--surface) 78%,
@@ -428,7 +452,7 @@
     .custom-select-option.is-compact .custom-select-option-icon {
         width: 34px;
         height: 34px;
-        border-radius: 11px;
+        border-radius: var(--radius-sm);
         font-size: 0.92rem;
     }
 
@@ -505,16 +529,12 @@
     }
 
     .custom-select-menu-wrap {
-        position: absolute;
-        top: calc(100% + 8px);
-        left: 0;
-        right: 0;
-        z-index: 25;
+        position: fixed;
+        z-index: 1200;
     }
 
     .custom-select-menu-wrap.opens-upward {
         top: auto;
-        bottom: calc(100% + 8px);
     }
 
     .custom-select-menu {
@@ -522,7 +542,7 @@
         gap: 8px;
         padding: 10px;
         overflow-y: auto;
-        border-radius: 20px;
+        border-radius: var(--radius-xl);
         border: 1px solid var(--custom-select-panel-border);
         background: var(--custom-select-panel-bg);
         backdrop-filter: blur(20px);
@@ -538,7 +558,7 @@
         width: 100%;
         padding: 10px;
         border: 1px solid transparent;
-        border-radius: 16px;
+        border-radius: var(--radius-lg);
         background: transparent;
         color: var(--text);
         text-align: left;
@@ -551,7 +571,7 @@
     .custom-select-option.is-compact {
         gap: 10px;
         padding: 8px;
-        border-radius: 14px;
+        border-radius: var(--radius-md);
     }
 
     .custom-select-option.is-highlighted,

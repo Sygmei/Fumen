@@ -15,8 +15,6 @@ use std::collections::HashSet;
 
 pub(crate) const LOGIN_LINK_TTL_MINUTES: i64 = 5;
 pub(crate) const ACCESS_TOKEN_TTL_SECONDS: i64 = 86400;
-pub(crate) const DEFAULT_ENSEMBLE_ID: &str = "general";
-pub(crate) const DEFAULT_ENSEMBLE_NAME: &str = "General";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AppRole {

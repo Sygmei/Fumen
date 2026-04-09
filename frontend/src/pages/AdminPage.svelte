@@ -58,7 +58,7 @@
         preloadedUsername: string;
         onShowCredential: (
             title: string,
-            response: LoginLinkResponse,
+            loadLink: () => Promise<LoginLinkResponse>,
         ) => Promise<void>;
         onLogout: () => Promise<void>;
     } = $props();
@@ -81,7 +81,6 @@
     let adminError = $state("");
     let adminSuccess = $state("");
     let uploadTitle = $state("");
-    let uploadIcon = $state("");
     let selectedIconFile = $state<File | null>(null);
     let uploadPublicId = $state("");
     let uploadQualityProfile = $state<StemQualityProfile>("standard");
@@ -107,8 +106,11 @@
         cachedEnsembles[0] ? [cachedEnsembles[0].id] : [],
     );
     let managingEnsembleId = $state("");
+    let managingEnsembleScoresId = $state("");
     let currentMemberSearchQuery = $state("");
     let addMemberSearchQuery = $state("");
+    let currentEnsembleScoreSearchQuery = $state("");
+    let addEnsembleScoreSearchQuery = $state("");
     let inviteRoles = $state<Record<string, EnsembleRole>>({});
     let originalManagedMemberRoles = $state<
         Record<string, ManagedMemberDraftRole>
@@ -128,6 +130,13 @@
     let retryingFor = $state("");
     let deletingMusicFor = $state("");
     let openDownloadMenuFor = $state("");
+    let updatingManagedEnsembleScore = $state("");
+
+    const stemQualityOptions = STEM_QUALITY_PROFILES.map((option) => ({
+        value: option.value,
+        label: option.label,
+        description: option.description,
+    }));
 
     function canAccessAdmin(user = currentUser) {
         return !!user && user.role !== "user";
@@ -207,6 +216,18 @@
             hasGlobalPower(actor) ||
             actor.role === "manager" ||
             music.owner_user_id === actor.id
+        );
+    }
+
+    function canManageEnsembleScores(ensemble: Ensemble, actor = currentUser) {
+        if (!actor) {
+            return false;
+        }
+        return (
+            hasGlobalPower(actor) ||
+            actor.role === "manager" ||
+            actor.managed_ensemble_ids.includes(ensemble.id) ||
+            actor.editable_ensemble_ids.includes(ensemble.id)
         );
     }
 
@@ -349,6 +370,20 @@
         );
     }
 
+    function mobileAdminSectionItems() {
+        return visibleAdminSectionItems.map((section) => ({
+            id: section.id,
+            label: section.label,
+            eyebrow: section.eyebrow,
+            meta:
+                section.id === "users"
+                    ? `${adminUsers.length} total`
+                    : section.id === "ensembles"
+                      ? `${ensembles.length} groups`
+                      : `${musics.length} scores`,
+        }));
+    }
+
     function normalizeQuery(value: string) {
         return value.trim().toLowerCase();
     }
@@ -416,6 +451,13 @@
             null,
     );
 
+    let activeManagedScoreEnsemble = $derived.by(
+        () =>
+            ensembles.find(
+                (ensemble) => ensemble.id === managingEnsembleScoresId,
+            ) ?? null,
+    );
+
     function managedMemberRoleForUser(userId: string): ManagedMemberDraftRole {
         return managedMemberDraftRoles[userId] ?? "none";
     }
@@ -475,6 +517,56 @@
                 !query
                     ? true
                     : [user.username, user.role]
+                          .join(" ")
+                          .toLowerCase()
+                          .includes(query),
+            );
+    });
+
+    let filteredManagedEnsembleScores = $derived.by(() => {
+        const ensemble = activeManagedScoreEnsemble;
+        if (!ensemble) {
+            return [];
+        }
+
+        const query = normalizeQuery(currentEnsembleScoreSearchQuery);
+
+        return [...musics]
+            .filter((music) => musicHasEnsemble(music, ensemble.id))
+            .sort((left, right) => left.title.localeCompare(right.title))
+            .filter((music) =>
+                !query
+                    ? true
+                    : [
+                          music.title,
+                          music.public_id ?? "",
+                          ...music.ensemble_names,
+                      ]
+                          .join(" ")
+                          .toLowerCase()
+                          .includes(query),
+            );
+    });
+
+    let filteredAvailableEnsembleScores = $derived.by(() => {
+        const ensemble = activeManagedScoreEnsemble;
+        if (!ensemble) {
+            return [];
+        }
+
+        const query = normalizeQuery(addEnsembleScoreSearchQuery);
+
+        return [...musics]
+            .filter((music) => !musicHasEnsemble(music, ensemble.id))
+            .sort((left, right) => left.title.localeCompare(right.title))
+            .filter((music) =>
+                !query
+                    ? true
+                    : [
+                          music.title,
+                          music.public_id ?? "",
+                          ...music.ensemble_names,
+                      ]
                           .join(" ")
                           .toLowerCase()
                           .includes(query),
@@ -559,6 +651,14 @@
                 )
             ) {
                 managingEnsembleId = "";
+            }
+            if (
+                managingEnsembleScoresId &&
+                !ensembleItems.some(
+                    (ensemble) => ensemble.id === managingEnsembleScoresId,
+                )
+            ) {
+                closeManageScoresModal();
             }
             if (
                 metadataMusicId &&
@@ -793,15 +893,14 @@
         showCreateScoreModal = true;
     }
 
-    function closeCreateScoreModal() {
-        if (uploadBusy) {
+    function closeCreateScoreModal(force = false) {
+        if (uploadBusy && !force) {
             return;
         }
 
         showCreateScoreModal = false;
         closeEnsemblePickerModal();
         uploadTitle = "";
-        uploadIcon = "";
         uploadPublicId = "";
         uploadQualityProfile = "standard";
         selectedFile = null;
@@ -863,6 +962,24 @@
         inviteRoles = {};
     }
 
+    function openManageScoresModal(ensemble: Ensemble) {
+        managingEnsembleScoresId = ensemble.id;
+        currentEnsembleScoreSearchQuery = "";
+        addEnsembleScoreSearchQuery = "";
+        updatingManagedEnsembleScore = "";
+        adminError = "";
+    }
+
+    function closeManageScoresModal() {
+        if (updatingManagedEnsembleScore) {
+            return;
+        }
+        managingEnsembleScoresId = "";
+        currentEnsembleScoreSearchQuery = "";
+        addEnsembleScoreSearchQuery = "";
+        updatingManagedEnsembleScore = "";
+    }
+
     function openScoreMetadataModal(music: AdminMusic) {
         metadataMusicId = music.id;
         metadataTitle = music.title;
@@ -910,6 +1027,27 @@
         }
     }
 
+    async function toggleManagedEnsembleScore(
+        musicId: string,
+        shouldAdd: boolean,
+    ) {
+        if (!managingEnsembleScoresId) {
+            return;
+        }
+
+        updatingManagedEnsembleScore = `${musicId}:${shouldAdd ? "add" : "remove"}`;
+
+        try {
+            await toggleMusicEnsembleAssignment(
+                musicId,
+                managingEnsembleScoresId,
+                shouldAdd,
+            );
+        } finally {
+            updatingManagedEnsembleScore = "";
+        }
+    }
+
     async function handleUpload() {
         if (!selectedFile) {
             adminError = "Choose an .mscz file first.";
@@ -928,7 +1066,7 @@
             const uploaded = await uploadMusic({
                 file: selectedFile,
                 title: uploadTitle,
-                icon: uploadIcon,
+                icon: "",
                 iconFile: selectedIconFile,
                 publicId: uploadPublicId,
                 qualityProfile: uploadQualityProfile,
@@ -941,14 +1079,17 @@
                 }
             }
 
-            closeCreateScoreModal();
             await refreshAdminData();
+            uploadBusy = false;
+            closeCreateScoreModal(true);
             adminSuccess = "Upload completed.";
         } catch (error) {
             adminError =
                 error instanceof Error ? error.message : "Upload failed";
         } finally {
-            uploadBusy = false;
+            if (uploadBusy) {
+                uploadBusy = false;
+            }
         }
     }
 
@@ -1092,32 +1233,16 @@
         adminSuccess = "";
 
         try {
-            const response = await createAdminUserLoginLink(user.id);
-            await onShowCredential(`QR code for ${user.username}`, response);
+            await onShowCredential(
+                `QR code for ${user.username}`,
+                () => createAdminUserLoginLink(user.id),
+            );
             adminSuccess = `QR code ready for ${user.username}.`;
         } catch (error) {
             adminError =
                 error instanceof Error
                     ? error.message
                     : "Unable to create QR code";
-        }
-    }
-
-    async function handleCopyUserLink(user: AppUser) {
-        adminError = "";
-        adminSuccess = "";
-
-        try {
-            const response = await createAdminUserLoginLink(user.id);
-            await copyText(
-                response.connection_url,
-                `Connection link copied for ${user.username}.`,
-            );
-        } catch (error) {
-            adminError =
-                error instanceof Error
-                    ? error.message
-                    : "Unable to create connection link";
         }
     }
 
@@ -1203,6 +1328,11 @@
             {currentUser}
             userHomeHref="/"
             onLogout={() => void onLogout()}
+            mobileMenuItems={mobileAdminSectionItems()}
+            mobileMenuActiveId={adminSection}
+            mobileMenuAriaLabel="Admin sections"
+            onMobileMenuSelect={(sectionId) =>
+                (adminSection = sectionId as AdminSection)}
         />
 
         <div class="admin-shell-body">
@@ -1306,7 +1436,7 @@
                                 <div class="music-list admin-user-list">
                                     {#each filteredAdminUsers as user}
                                         <article
-                                            class="music-card admin-user-row"
+                                            class="music-card admin-user-row admin-account-card"
                                         >
                                             <div class="admin-user-row-main">
                                                 <div
@@ -1361,34 +1491,6 @@
                                                         />
                                                         <path
                                                             d="M18 14h3v7h-7v-3"
-                                                        />
-                                                    </svg>
-                                                </button>
-                                                <button
-                                                    class="button ghost admin-user-action"
-                                                    onclick={() =>
-                                                        void handleCopyUserLink(
-                                                            user,
-                                                        )}
-                                                    aria-label={`Generate connection link for ${user.username}`}
-                                                    title="Generate connection link"
-                                                >
-                                                    <svg
-                                                        width="15"
-                                                        height="15"
-                                                        viewBox="0 0 24 24"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        stroke-width="2"
-                                                        stroke-linecap="round"
-                                                        stroke-linejoin="round"
-                                                        aria-hidden="true"
-                                                    >
-                                                        <path
-                                                            d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L10.6 5.3"
-                                                        />
-                                                        <path
-                                                            d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 1 0 7.07 7.07l2.12-2.12"
                                                         />
                                                     </svg>
                                                 </button>
@@ -1544,27 +1646,55 @@
                                                     class="admin-user-copy admin-ensemble-copy"
                                                 >
                                                     <h3>{ensemble.name}</h3>
-                                                    <div
-                                                        class="admin-card-badges"
-                                                    >
-                                                        <span
-                                                            class="admin-user-role-pill"
-                                                        >
-                                                            {ensemble.members
-                                                                .length} members
-                                                        </span>
-                                                        <span
-                                                            class="admin-user-role-pill"
-                                                        >
-                                                            {ensemble.score_count}
-                                                            scores
-                                                        </span>
-                                                    </div>
                                                 </div>
                                             </div>
                                             <div
                                                 class="actions admin-user-actions"
                                             >
+                                                <button
+                                                    class="button secondary admin-user-action"
+                                                    type="button"
+                                                    onclick={() =>
+                                                        openManageScoresModal(
+                                                            ensemble,
+                                                        )}
+                                                    aria-label={`Manage scores for ${ensemble.name}`}
+                                                    title="Manage scores"
+                                                    disabled={!canManageEnsembleScores(
+                                                        ensemble,
+                                                    )}
+                                                >
+                                                    <svg
+                                                        width="16"
+                                                        height="16"
+                                                        viewBox="0 0 24 24"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        stroke-width="2"
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                        aria-hidden="true"
+                                                    >
+                                                        <path
+                                                            d="M9 18V5l12-2v13"
+                                                        />
+                                                        <circle
+                                                            cx="6"
+                                                            cy="18"
+                                                            r="3"
+                                                        />
+                                                        <circle
+                                                            cx="18"
+                                                            cy="16"
+                                                            r="3"
+                                                        />
+                                                    </svg>
+                                                    <span
+                                                        class="admin-action-badge"
+                                                        aria-hidden="true"
+                                                        >{ensemble.score_count}</span
+                                                    >
+                                                </button>
                                                 <button
                                                     class="button secondary admin-user-action"
                                                     type="button"
@@ -1599,6 +1729,11 @@
                                                         <path d="M20 8v6" />
                                                         <path d="M23 11h-6" />
                                                     </svg>
+                                                    <span
+                                                        class="admin-action-badge"
+                                                        aria-hidden="true"
+                                                        >{ensemble.members.length}</span
+                                                    >
                                                 </button>
                                                 {#if canDeleteEnsembleRecord(ensemble)}
                                                     <button
@@ -1715,39 +1850,6 @@
                                         <article
                                             class="music-card admin-score-card"
                                         >
-                                            {#if canDeleteScore(music)}
-                                                <button
-                                                    class="button ghost danger admin-score-delete"
-                                                    type="button"
-                                                    aria-label={`Delete ${music.title}`}
-                                                    title="Delete score"
-                                                    disabled={deletingMusicFor ===
-                                                        music.id}
-                                                    onclick={() =>
-                                                        void handleDeleteMusic(
-                                                            music.id,
-                                                        )}
-                                                >
-                                                    <svg
-                                                        width="16"
-                                                        height="16"
-                                                        viewBox="0 0 24 24"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        stroke-width="2"
-                                                        stroke-linecap="round"
-                                                        stroke-linejoin="round"
-                                                    >
-                                                        <path d="M3 6h18" />
-                                                        <path d="M8 6V4h8v2" />
-                                                        <path
-                                                            d="M19 6l-1 14H6L5 6"
-                                                        />
-                                                        <path d="M10 11v6" />
-                                                        <path d="M14 11v6" />
-                                                    </svg>
-                                                </button>
-                                            {/if}
                                             <div class="admin-score-header">
                                                 <h3 class="admin-score-title">
                                                     <ScoreIcon
@@ -1757,56 +1859,116 @@
                                                     />
                                                     <span>{music.title}</span>
                                                 </h3>
-                                                <p
-                                                    class="subtle admin-score-filename"
+                                                <div
+                                                    class="download-menu admin-score-download-menu"
+                                                    class:open={openDownloadMenuFor ===
+                                                        music.id}
                                                 >
-                                                    {music.filename}
-                                                </p>
+                                                    <button
+                                                        class="download-menu-btn admin-score-download-btn"
+                                                        type="button"
+                                                        onclick={() =>
+                                                            toggleDownloadMenu(
+                                                                music.id,
+                                                            )}
+                                                        aria-label={`Download files for ${music.title}`}
+                                                        title="Downloads"
+                                                        aria-haspopup="true"
+                                                        aria-expanded={openDownloadMenuFor ===
+                                                            music.id}
+                                                    >
+                                                        <svg
+                                                            width="15"
+                                                            height="15"
+                                                            viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            stroke-width="2.2"
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                        >
+                                                            <path
+                                                                d="M12 3v12M7 11l5 5 5-5"
+                                                            />
+                                                            <path d="M4 20h16" />
+                                                        </svg>
+                                                        <span>Download</span>
+                                                        <svg
+                                                            class="chevron"
+                                                            width="12"
+                                                            height="12"
+                                                            viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            stroke-width="2.5"
+                                                        >
+                                                            <polyline
+                                                                points="6 9 12 15 18 9"
+                                                            />
+                                                        </svg>
+                                                    </button>
+                                                    {#if openDownloadMenuFor === music.id}
+                                                        <div
+                                                            class="download-dropdown"
+                                                        >
+                                                            <a
+                                                                class="download-item"
+                                                                href={music.download_url}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                onclick={() =>
+                                                                    (openDownloadMenuFor =
+                                                                        "")}
+                                                            >
+                                                                <svg
+                                                                    width="18"
+                                                                    height="18"
+                                                                    viewBox="0 0 24 24"
+                                                                    fill="none"
+                                                                    stroke="currentColor"
+                                                                    stroke-width="2.2"
+                                                                    stroke-linecap="round"
+                                                                    stroke-linejoin="round"
+                                                                    aria-hidden="true"
+                                                                >
+                                                                    <path d="M12 3v12" />
+                                                                    <path d="M7 11l5 5 5-5" />
+                                                                    <path d="M4 20h16" />
+                                                                </svg>
+                                                                <span>Download MuseScore</span>
+                                                            </a>
+                                                            {#if music.midi_download_url}
+                                                                <a
+                                                                    class="download-item"
+                                                                    href={music.midi_download_url}
+                                                                    target="_blank"
+                                                                    rel="noreferrer"
+                                                                    onclick={() =>
+                                                                        (openDownloadMenuFor =
+                                                                            "")}
+                                                                >
+                                                                    <svg
+                                                                        width="18"
+                                                                        height="18"
+                                                                        viewBox="0 0 24 24"
+                                                                        fill="none"
+                                                                        stroke="currentColor"
+                                                                        stroke-width="2.2"
+                                                                        stroke-linecap="round"
+                                                                        stroke-linejoin="round"
+                                                                        aria-hidden="true"
+                                                                    >
+                                                                        <path d="M9 18V5l12-2v13" />
+                                                                        <circle cx="6" cy="18" r="3" />
+                                                                        <circle cx="18" cy="16" r="3" />
+                                                                    </svg>
+                                                                    <span>Download MIDI</span>
+                                                                </a>
+                                                            {/if}
+                                                        </div>
+                                                    {/if}
+                                                </div>
                                             </div>
-                                            <div class="admin-score-badges">
-                                                <span
-                                                    class="admin-user-role-pill"
-                                                    >{music.ensemble_names
-                                                        .length} ensembles</span
-                                                >
-                                                <span
-                                                    class="admin-user-role-pill"
-                                                    >{qualityProfileLabel(
-                                                        music.quality_profile,
-                                                    )}</span
-                                                >
-                                                <span
-                                                    class="admin-user-role-pill"
-                                                    >Stems {music.stems_status}</span
-                                                >
-                                            </div>
-                                            <div class="admin-score-meta">
-                                                <p>
-                                                    {music.ensemble_names.join(
-                                                        ", ",
-                                                    ) || "No ensemble"}
-                                                </p>
-                                                <p>
-                                                    {formatBytes(
-                                                        music.stems_total_bytes,
-                                                    )} stems
-                                                </p>
-                                                <p>
-                                                    Uploaded {prettyDate(
-                                                        music.created_at,
-                                                    )}
-                                                </p>
-                                            </div>
-                                            {#if music.audio_error}
-                                                <p class="hint">
-                                                    {music.audio_error}
-                                                </p>
-                                            {/if}
-                                            {#if music.stems_error}
-                                                <p class="hint">
-                                                    {music.stems_error}
-                                                </p>
-                                            {/if}
                                             <div
                                                 class="actions admin-score-actions"
                                             >
@@ -1844,6 +2006,12 @@
                                                                 d="M23 9h-6"
                                                             />
                                                         </svg>
+                                                        <span
+                                                            class="admin-action-badge"
+                                                            aria-hidden="true"
+                                                            >{music.ensemble_names
+                                                                .length}</span
+                                                        >
                                                     </button>
                                                 {/if}
                                                 {#if canEditOwnedScore(music)}
@@ -1907,103 +2075,70 @@
                                                         />
                                                     </svg>
                                                 </button>
-                                                <div
-                                                    class="download-menu admin-score-download-menu"
-                                                    class:open={openDownloadMenuFor ===
-                                                        music.id}
+                                                <button
+                                                    class="button secondary admin-user-action"
+                                                    type="button"
+                                                    onclick={() =>
+                                                        openScoreMetadataModal(
+                                                            music,
+                                                        )}
+                                                    aria-label={`View metadata for ${music.title}`}
+                                                    title="View metadata"
                                                 >
+                                                    <svg
+                                                        width="16"
+                                                        height="16"
+                                                        viewBox="0 0 24 24"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        stroke-width="2"
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                        aria-hidden="true"
+                                                    >
+                                                        <circle
+                                                            cx="12"
+                                                            cy="12"
+                                                            r="9"
+                                                        />
+                                                        <path d="M12 10v6" />
+                                                        <path d="M12 7h.01" />
+                                                    </svg>
+                                                </button>
+                                                {#if canDeleteScore(music)}
                                                     <button
-                                                        class="download-menu-btn admin-score-download-btn"
+                                                        class="button ghost danger admin-user-action"
                                                         type="button"
+                                                        aria-label={`Delete ${music.title}`}
+                                                        title="Delete score"
+                                                        disabled={deletingMusicFor ===
+                                                            music.id}
                                                         onclick={() =>
-                                                            toggleDownloadMenu(
+                                                            void handleDeleteMusic(
                                                                 music.id,
                                                             )}
-                                                        aria-label={`Download files for ${music.title}`}
-                                                        title="Downloads"
-                                                        aria-haspopup="true"
-                                                        aria-expanded={openDownloadMenuFor ===
-                                                            music.id}
                                                     >
                                                         <svg
-                                                            width="15"
-                                                            height="15"
+                                                            width="16"
+                                                            height="16"
                                                             viewBox="0 0 24 24"
                                                             fill="none"
                                                             stroke="currentColor"
-                                                            stroke-width="2.2"
+                                                            stroke-width="2"
                                                             stroke-linecap="round"
                                                             stroke-linejoin="round"
                                                         >
+                                                            <path d="M3 6h18" />
+                                                            <path d="M8 6V4h8v2" />
                                                             <path
-                                                                d="M12 3v12M7 11l5 5 5-5"
+                                                                d="M19 6l-1 14H6L5 6"
                                                             />
-                                                            <path
-                                                                d="M4 20h16"
-                                                            />
-                                                        </svg>
-                                                        <svg
-                                                            class="chevron"
-                                                            width="12"
-                                                            height="12"
-                                                            viewBox="0 0 24 24"
-                                                            fill="none"
-                                                            stroke="currentColor"
-                                                            stroke-width="2.5"
-                                                        >
-                                                            <polyline
-                                                                points="6 9 12 15 18 9"
-                                                            />
+                                                            <path d="M10 11v6" />
+                                                            <path d="M14 11v6" />
                                                         </svg>
                                                     </button>
-                                                    {#if openDownloadMenuFor === music.id}
-                                                        <div
-                                                            class="download-dropdown"
-                                                        >
-                                                            <a
-                                                                class="download-item"
-                                                                href={music.download_url}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                onclick={() =>
-                                                                    (openDownloadMenuFor =
-                                                                        "")}
-                                                                >Download
-                                                                MuseScore</a
-                                                            >
-                                                            {#if music.midi_download_url}
-                                                                <a
-                                                                    class="download-item"
-                                                                    href={music.midi_download_url}
-                                                                    target="_blank"
-                                                                    rel="noreferrer"
-                                                                    onclick={() =>
-                                                                        (openDownloadMenuFor =
-                                                                            "")}
-                                                                    >Download
-                                                                    MIDI</a
-                                                                >
-                                                            {/if}
-                                                        </div>
-                                                    {/if}
-                                                </div>
+                                                {/if}
                                             </div>
-                                            {#if music.stems_status !== "ready" && canEditOwnedScore(music)}
-                                                <button
-                                                    class="button ghost admin-score-retry"
-                                                    type="button"
-                                                    disabled={retryingFor ===
-                                                        music.id}
-                                                    onclick={() =>
-                                                        void handleRetryRender(
-                                                            music.id,
-                                                        )}
-                                                >
-                                                    {retryingFor === music.id
-                                                        ? "Retrying render..."
-                                                        : "Retry render"}
-                                                </button>
-                                            {/if}
                                         </article>
                                     {/each}
                                 </div>
@@ -2017,12 +2152,7 @@
 {/if}
 
 {#if showCreateUserModal}
-    <BaseModal
-        onClose={closeCreateUserModal}
-        size="small"
-        cardClass="admin-user-modal"
-        labelledBy="create-user-title"
-    >
+    {#snippet createUserHeader()}
         <div class="card-header admin-user-modal-header">
             <div>
                 <p class="meta-label">Create</p>
@@ -2034,9 +2164,30 @@
                 aria-label="Close create user modal"
                 onclick={closeCreateUserModal}
             >
-                Close
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                </svg>
             </button>
         </div>
+    {/snippet}
+    <BaseModal
+        onClose={closeCreateUserModal}
+        size="small"
+        cardClass="admin-user-modal"
+        labelledBy="create-user-title"
+        header={createUserHeader}
+    >
         <p class="subtle">
             Create a username-only account, assign its global role, then
             generate a QR code or connection link from the list.
@@ -2082,12 +2233,7 @@
 {/if}
 
 {#if showCreateEnsembleModal}
-    <BaseModal
-        onClose={closeCreateEnsembleModal}
-        size="small"
-        cardClass="admin-user-modal"
-        labelledBy="create-ensemble-title"
-    >
+    {#snippet createEnsembleHeader()}
         <div class="card-header admin-user-modal-header">
             <div>
                 <p class="meta-label">Create</p>
@@ -2099,9 +2245,30 @@
                 aria-label="Close create ensemble modal"
                 onclick={closeCreateEnsembleModal}
             >
-                Close
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                </svg>
             </button>
         </div>
+    {/snippet}
+    <BaseModal
+        onClose={closeCreateEnsembleModal}
+        size="small"
+        cardClass="admin-user-modal"
+        labelledBy="create-ensemble-title"
+        header={createEnsembleHeader}
+    >
         <label class="field">
             <span>Ensemble name</span>
             <input
@@ -2138,12 +2305,7 @@
 {/if}
 
 {#if showCreateScoreModal}
-    <BaseModal
-        onClose={closeCreateScoreModal}
-        size="large"
-        cardClass="admin-score-modal"
-        labelledBy="create-score-title"
-    >
+    {#snippet uploadScoreHeader()}
         <div class="card-header admin-user-modal-header">
             <div>
                 <p class="meta-label">Upload</p>
@@ -2155,23 +2317,57 @@
                 aria-label="Close add score modal"
                 onclick={closeCreateScoreModal}
             >
-                Close
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                </svg>
             </button>
         </div>
+    {/snippet}
+    {#snippet uploadScoreFooter()}
+        <div class="actions admin-user-modal-actions">
+            <button
+                class="button ghost"
+                type="button"
+                disabled={uploadBusy}
+                onclick={() => closeCreateScoreModal()}
+            >
+                Cancel
+            </button>
+            <button
+                class="button"
+                type="button"
+                disabled={uploadBusy}
+                onclick={() => void handleUpload()}
+            >
+                {uploadBusy ? "Uploading..." : "Add score"}
+            </button>
+        </div>
+    {/snippet}
+    <BaseModal
+        onClose={closeCreateScoreModal}
+        size="large"
+        cardClass="admin-score-modal"
+        labelledBy="create-score-title"
+        header={uploadScoreHeader}
+        footer={uploadScoreFooter}
+    >
         <div class="upload-grid admin-score-modal-grid">
-            <label class="field">
+            <label class="field admin-score-modal-full">
                 <span>Title</span>
                 <input
                     bind:value={uploadTitle}
                     placeholder="Optional display title"
-                />
-            </label>
-            <label class="field">
-                <span>Icon</span>
-                <input
-                    bind:value={uploadIcon}
-                    maxlength="2"
-                    placeholder="Optional emoji or 2-char mark"
                 />
             </label>
             <label class="field">
@@ -2181,20 +2377,21 @@
                     placeholder="Optional friendly id"
                 />
             </label>
-            <label class="field">
+            <label class="field admin-score-quality-field">
                 <span>Stem quality</span>
-                <select bind:value={uploadQualityProfile}>
-                    {#each STEM_QUALITY_PROFILES as option}
-                        <option value={option.value}>{option.label}</option>
-                    {/each}
-                </select>
+                <CustomSelect
+                    bind:value={uploadQualityProfile}
+                    options={stemQualityOptions}
+                    compact={true}
+                    showDescriptionInTrigger={false}
+                />
                 <small class="subtle">
                     {STEM_QUALITY_PROFILES.find(
                         (option) => option.value === uploadQualityProfile,
                     )?.description}
                 </small>
             </label>
-            <label class="field file-field">
+            <label class="field file-field admin-score-file-field">
                 <span>Icon image</span>
                 <input
                     id="icon-file-input"
@@ -2206,7 +2403,7 @@
                     }}
                 />
             </label>
-            <label class="field file-field">
+            <label class="field file-field admin-score-file-field">
                 <span>MSCZ file</span>
                 <input
                     id="mscz-input"
@@ -2241,34 +2438,11 @@
                 ? `Selected ensembles (${uploadEnsembleIds.length})`
                 : "Choose ensembles"}
         </button>
-        <div class="actions admin-user-modal-actions">
-            <button
-                class="button ghost"
-                type="button"
-                disabled={uploadBusy}
-                onclick={closeCreateScoreModal}
-            >
-                Cancel
-            </button>
-            <button
-                class="button"
-                type="button"
-                disabled={uploadBusy}
-                onclick={() => void handleUpload()}
-            >
-                {uploadBusy ? "Uploading..." : "Add score"}
-            </button>
-        </div>
     </BaseModal>
 {/if}
 
 {#if activeManagedEnsemble}
-    <BaseModal
-        onClose={closeManageMembersModal}
-        size="full"
-        cardClass="admin-split-modal"
-        labelledBy="manage-ensemble-title"
-    >
+    {#snippet manageMembersHeader()}
         <div class="card-header admin-user-modal-header">
             <div>
                 <p class="meta-label">Members</p>
@@ -2280,9 +2454,30 @@
                 aria-label="Close members modal"
                 onclick={closeManageMembersModal}
             >
-                Close
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                </svg>
             </button>
         </div>
+    {/snippet}
+    <BaseModal
+        onClose={closeManageMembersModal}
+        size="full"
+        cardClass="admin-split-modal"
+        labelledBy="manage-ensemble-title"
+        header={manageMembersHeader}
+    >
         <div class="admin-split-pane">
             <section class="admin-split-column">
                 <div class="admin-split-header">
@@ -2330,19 +2525,21 @@
                                 </div>
                                 <div class="admin-inline-actions">
                                     {#if allowedEnsembleRolesForUser(member.user!).length > 0}
-                                        <CustomSelect
-                                            value={member.role}
-                                            options={ensembleRoleOptionsForUser(
-                                                member.user!,
-                                            )}
-                                            compact={true}
-                                            showDescriptionInTrigger={false}
-                                            onValueChange={(role) =>
-                                                stageManagedMemberRole(
-                                                    member.user_id,
-                                                    role as EnsembleRole,
+                                        <div class="admin-member-role-select">
+                                            <CustomSelect
+                                                value={member.role}
+                                                options={ensembleRoleOptionsForUser(
+                                                    member.user!,
                                                 )}
-                                        />
+                                                compact={true}
+                                                showDescriptionInTrigger={false}
+                                                onValueChange={(role) =>
+                                                    stageManagedMemberRole(
+                                                        member.user_id,
+                                                        role as EnsembleRole,
+                                                    )}
+                                            />
+                                        </div>
                                         <button
                                             class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
                                             type="button"
@@ -2410,24 +2607,26 @@
                                     >
                                 </div>
                                 <div class="admin-inline-actions">
-                                    <CustomSelect
-                                        value={inviteRoles[user.id] ??
-                                            allowedEnsembleRolesForUser(
+                                    <div class="admin-member-role-select">
+                                        <CustomSelect
+                                            value={inviteRoles[user.id] ??
+                                                allowedEnsembleRolesForUser(
+                                                    user,
+                                                )[0] ??
+                                                "user"}
+                                            options={ensembleRoleOptionsForUser(
                                                 user,
-                                            )[0] ??
-                                            "user"}
-                                        options={ensembleRoleOptionsForUser(
-                                            user,
-                                        )}
-                                        compact={true}
-                                        showDescriptionInTrigger={false}
-                                        onValueChange={(role) => {
-                                            inviteRoles = {
-                                                ...inviteRoles,
-                                                [user.id]: role as EnsembleRole,
-                                            };
-                                        }}
-                                    />
+                                            )}
+                                            compact={true}
+                                            showDescriptionInTrigger={false}
+                                            onValueChange={(role) => {
+                                                inviteRoles = {
+                                                    ...inviteRoles,
+                                                    [user.id]: role as EnsembleRole,
+                                                };
+                                            }}
+                                        />
+                                    </div>
                                     <button
                                         class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
                                         type="button"
@@ -2468,13 +2667,188 @@
     </BaseModal>
 {/if}
 
-{#if ensemblePickerMode}
+{#if activeManagedScoreEnsemble}
+    {#snippet manageScoresHeader()}
+        <div class="card-header admin-user-modal-header admin-compact-modal-header">
+            <div>
+                <p class="meta-label">Scores</p>
+                <h3 id="manage-ensemble-scores-title">
+                    {activeManagedScoreEnsemble.name}
+                </h3>
+            </div>
+            <button
+                class="button ghost admin-modal-close"
+                type="button"
+                aria-label="Close scores modal"
+                onclick={closeManageScoresModal}
+            >
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                </svg>
+            </button>
+        </div>
+    {/snippet}
     <BaseModal
-        onClose={closeEnsemblePickerModal}
-        size="medium"
-        cardClass="admin-selector-modal"
-        labelledBy="ensemble-selector-title"
+        onClose={closeManageScoresModal}
+        size="full"
+        cardClass="admin-split-modal"
+        labelledBy="manage-ensemble-scores-title"
+        header={manageScoresHeader}
     >
+        <div class="admin-split-pane">
+            <section class="admin-split-column">
+                <div class="admin-split-header">
+                    <div class="admin-split-header-main">
+                        <h4>Current scores</h4>
+                        <span class="admin-user-role-pill">
+                            {filteredManagedEnsembleScores.length}
+                        </span>
+                    </div>
+                    <label class="field admin-user-search admin-split-search">
+                        <span class="sr-only">Search current scores</span>
+                        <div class="admin-user-search-input-wrap">
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <circle cx="11" cy="11" r="7" />
+                                <path d="m20 20-3.5-3.5" />
+                            </svg>
+                            <input
+                                bind:value={currentEnsembleScoreSearchQuery}
+                                placeholder="Search current scores"
+                            />
+                        </div>
+                    </label>
+                </div>
+                <div class="admin-inline-list">
+                    {#if filteredManagedEnsembleScores.length === 0}
+                        <p class="hint">No matching scores in this ensemble.</p>
+                    {:else}
+                        {#each filteredManagedEnsembleScores as music}
+                            <div class="admin-inline-row">
+                                <div class="admin-inline-copy">
+                                    <strong>{music.title}</strong>
+                                    {#if music.public_id}
+                                        <span class="status-pill">
+                                            {music.public_id}
+                                        </span>
+                                    {/if}
+                                </div>
+                                <div class="admin-inline-actions">
+                                    <button
+                                        class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
+                                        type="button"
+                                        disabled={updatingManagedEnsembleScore ===
+                                            `${music.id}:remove`}
+                                        aria-label={`Remove ${music.title}`}
+                                        title={`Remove ${music.title}`}
+                                        onclick={() =>
+                                            void toggleManagedEnsembleScore(
+                                                music.id,
+                                                false,
+                                            )}
+                                    >
+                                        <span aria-hidden="true">-</span>
+                                    </button>
+                                </div>
+                            </div>
+                        {/each}
+                    {/if}
+                </div>
+            </section>
+            <section class="admin-split-column">
+                <div class="admin-split-header">
+                    <div class="admin-split-header-main">
+                        <h4>Add scores</h4>
+                        <span class="admin-user-role-pill">
+                            {filteredAvailableEnsembleScores.length}
+                        </span>
+                    </div>
+                    <label class="field admin-user-search admin-split-search">
+                        <span class="sr-only">Search available scores</span>
+                        <div class="admin-user-search-input-wrap">
+                            <svg
+                                width="15"
+                                height="15"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <circle cx="11" cy="11" r="7" />
+                                <path d="m20 20-3.5-3.5" />
+                            </svg>
+                            <input
+                                bind:value={addEnsembleScoreSearchQuery}
+                                placeholder="Search available scores"
+                            />
+                        </div>
+                    </label>
+                </div>
+                <div class="admin-inline-list">
+                    {#if filteredAvailableEnsembleScores.length === 0}
+                        <p class="hint">No available scores.</p>
+                    {:else}
+                        {#each filteredAvailableEnsembleScores as music}
+                            <div class="admin-inline-row">
+                                <div class="admin-inline-copy">
+                                    <strong>{music.title}</strong>
+                                    {#if music.public_id}
+                                        <span class="status-pill">
+                                            {music.public_id}
+                                        </span>
+                                    {/if}
+                                </div>
+                                <div class="admin-inline-actions">
+                                    <button
+                                        class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
+                                        type="button"
+                                        disabled={updatingManagedEnsembleScore ===
+                                            `${music.id}:add`}
+                                        aria-label={`Add ${music.title}`}
+                                        title={`Add ${music.title}`}
+                                        onclick={() =>
+                                            void toggleManagedEnsembleScore(
+                                                music.id,
+                                                true,
+                                            )}
+                                    >
+                                        <span aria-hidden="true">+</span>
+                                    </button>
+                                </div>
+                            </div>
+                        {/each}
+                    {/if}
+                </div>
+            </section>
+        </div>
+    </BaseModal>
+{/if}
+
+{#if ensemblePickerMode}
+    {#snippet ensemblePickerHeader()}
         <div class="card-header admin-user-modal-header">
             <div>
                 <p class="meta-label">Ensembles</p>
@@ -2490,9 +2864,30 @@
                 aria-label="Close ensemble selector"
                 onclick={closeEnsemblePickerModal}
             >
-                Close
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                </svg>
             </button>
         </div>
+    {/snippet}
+    <BaseModal
+        onClose={closeEnsemblePickerModal}
+        size="medium"
+        cardClass="admin-selector-modal"
+        labelledBy="ensemble-selector-title"
+        header={ensemblePickerHeader}
+    >
         <label class="field admin-user-search">
             <span class="sr-only">Search ensembles</span>
             <div class="admin-user-search-input-wrap">
@@ -2565,12 +2960,7 @@
 {/if}
 
 {#if activeMetadataMusic}
-    <BaseModal
-        onClose={closeScoreMetadataModal}
-        size="large"
-        cardClass="admin-score-modal"
-        labelledBy="score-metadata-title"
-    >
+    {#snippet metadataHeader()}
         <div class="card-header admin-user-modal-header">
             <div>
                 <p class="meta-label">Metadata</p>
@@ -2582,9 +2972,30 @@
                 aria-label="Close score metadata modal"
                 onclick={closeScoreMetadataModal}
             >
-                Close
+                <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                >
+                    <path d="M18 6 6 18" />
+                    <path d="m6 6 12 12" />
+                </svg>
             </button>
         </div>
+    {/snippet}
+    <BaseModal
+        onClose={closeScoreMetadataModal}
+        size="large"
+        cardClass="admin-score-modal"
+        labelledBy="score-metadata-title"
+        header={metadataHeader}
+    >
         <div class="upload-grid admin-score-modal-grid">
             <label class="field">
                 <span>Title</span>
@@ -2605,7 +3016,63 @@
                     placeholder="example: moonlight-sonata"
                 />
             </label>
+            <label class="field">
+                <span>MSCZ filename</span>
+                <input value={activeMetadataMusic.filename} readonly />
+            </label>
+            <label class="field">
+                <span>Stem quality</span>
+                <input
+                    value={qualityProfileLabel(
+                        activeMetadataMusic.quality_profile,
+                    )}
+                    readonly
+                />
+            </label>
+            <label class="field admin-score-modal-full">
+                <span>Ensembles</span>
+                <input
+                    value={activeMetadataMusic.ensemble_names.join(", ") ||
+                        "No ensemble"}
+                    readonly
+                />
+            </label>
+            <label class="field">
+                <span>Stem files size</span>
+                <input
+                    value={`${formatBytes(activeMetadataMusic.stems_total_bytes)} total`}
+                    readonly
+                />
+            </label>
+            <label class="field">
+                <span>Uploaded</span>
+                <input
+                    value={prettyDate(activeMetadataMusic.created_at)}
+                    readonly
+                />
+            </label>
+            <label class="field">
+                <span>Stems status</span>
+                <input value={activeMetadataMusic.stems_status} readonly />
+            </label>
+            <label class="field">
+                <span>Audio status</span>
+                <input value={activeMetadataMusic.audio_status} readonly />
+            </label>
+            <label class="field">
+                <span>MIDI status</span>
+                <input value={activeMetadataMusic.midi_status} readonly />
+            </label>
         </div>
+        {#if activeMetadataMusic.audio_error}
+            <p class="hint">{activeMetadataMusic.audio_error}</p>
+        {/if}
+        {#if activeMetadataMusic.stems_error}
+            <p class="hint">{activeMetadataMusic.stems_error}</p>
+        {/if}
+        {#if activeMetadataMusic.midi_error}
+            <p class="hint">{activeMetadataMusic.midi_error}</p>
+        {/if}
         <div class="admin-score-links">
             <a
                 href={activeMetadataMusic.public_url}
@@ -2625,6 +3092,22 @@
             {/if}
         </div>
         <div class="actions admin-user-modal-actions">
+            {#if activeMetadataMusic.stems_status !== "ready" && canEditOwnedScore(
+                activeMetadataMusic,
+            )}
+                <button
+                    class="button ghost"
+                    type="button"
+                    disabled={retryingFor === activeMetadataMusic.id ||
+                        !!savingMetadataFor}
+                    onclick={() =>
+                        void handleRetryRender(activeMetadataMusic.id)}
+                >
+                    {retryingFor === activeMetadataMusic.id
+                        ? "Retrying render..."
+                        : "Retry render"}
+                </button>
+            {/if}
             <button
                 class="button ghost"
                 type="button"

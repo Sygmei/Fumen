@@ -386,7 +386,7 @@
                                         d="M4 20h16"
                                     /></svg
                                 >
-                                Download
+                                <span class="download-menu-label">Download</span>
                                 <svg
                                     class="chevron"
                                     width="12"
@@ -487,13 +487,13 @@
                                         y="4"
                                         width="4"
                                         height="16"
-                                        rx="1.5"
+                                        rx="0"
                                     /><rect
                                         x="15"
                                         y="4"
                                         width="4"
                                         height="16"
-                                        rx="1.5"
+                                        rx="0"
                                     /></svg
                                 >
                             {:else}
@@ -523,7 +523,7 @@
                                     y="4"
                                     width="16"
                                     height="16"
-                                    rx="2"
+                                    rx="0"
                                 /></svg
                             ></button
                         >

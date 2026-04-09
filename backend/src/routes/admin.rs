@@ -6,7 +6,7 @@ use crate::schemas::{
 };
 use crate::services::{auth, music};
 use crate::{
-    AppError, AppRole, AppState, DEFAULT_ENSEMBLE_ID, audio, ensure_membership_entities_exist,
+    AppError, AppRole, AppState, audio, ensure_membership_entities_exist,
     generate_public_token, normalize_music_icon, normalize_name, normalize_public_id,
     normalize_username, parse_quality_profile, sanitize_filename, utc_now_string,
 };
@@ -268,11 +268,6 @@ async fn admin_delete_ensemble(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let auth_context = auth::require_admin_context(&state, &headers).await?;
-    if id == DEFAULT_ENSEMBLE_ID {
-        return Err(AppError::bad_request(
-            "The default ensemble cannot be deleted",
-        ));
-    }
 
     let ensemble = music::find_ensemble_by_id(&state.db_rw, &id)
         .await?
@@ -669,7 +664,7 @@ async fn admin_upload_music(
     let ensemble_name = music::find_ensemble_by_id(&state.db_rw, &ensemble_id)
         .await?
         .map(|ensemble| ensemble.name)
-        .unwrap_or_else(|| music::default_ensemble_name().to_owned());
+        .unwrap_or_else(|| ensemble_id.clone());
     Ok(Json(music::record_to_admin_response(
         &state.config,
         &state.storage,

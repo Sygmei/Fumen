@@ -35,13 +35,44 @@ async fn current_user_library(
     headers: HeaderMap,
 ) -> Result<Json<UserLibraryResponse>, AppError> {
     let auth_context = auth::build_auth_context(&state, &headers).await?;
+    let ensemble_names = music::fetch_ensemble_summaries(&state.db_rw).await?;
     let music_entries = if auth_context.has_global_power() {
         music::find_all_accessible_music(&state.db_rw).await?
     } else {
         music::find_accessible_music_for_user(&state.db_rw, &auth_context.user.id).await?
     };
 
-    let mut ensembles: Vec<UserLibraryEnsembleResponse> = Vec::new();
+    let mut ensembles: Vec<UserLibraryEnsembleResponse> = if auth_context.has_global_power() {
+        let mut all_ensembles = ensemble_names
+            .iter()
+            .map(|(id, name)| UserLibraryEnsembleResponse {
+                id: id.clone(),
+                name: name.clone(),
+                scores: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        all_ensembles.sort_by(|left, right| left.name.cmp(&right.name));
+        all_ensembles
+    } else {
+        let mut user_ensembles = music::fetch_user_ensemble_memberships(&state.db_rw)
+            .await?
+            .into_iter()
+            .filter(|membership| membership.user_id == auth_context.user.id)
+            .filter_map(|membership| {
+                ensemble_names
+                    .get(&membership.ensemble_id)
+                    .cloned()
+                    .map(|name| UserLibraryEnsembleResponse {
+                        id: membership.ensemble_id,
+                        name,
+                        scores: Vec::new(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        user_ensembles.sort_by(|left, right| left.name.cmp(&right.name));
+        user_ensembles
+    };
+
     for (music_record, ensemble_id, ensemble_name) in music_entries {
         let public_id_url = music_record
             .public_id

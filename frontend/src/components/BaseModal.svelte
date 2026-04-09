@@ -6,12 +6,16 @@
     const {
         onClose,
         children,
+        header,
+        footer,
         size = "small",
         cardClass = "",
         labelledBy,
     }: {
         onClose: () => void;
         children: Snippet;
+        header?: Snippet;
+        footer?: Snippet;
         size?: ModalSize;
         cardClass?: string;
         labelledBy?: string;
@@ -33,12 +37,24 @@
     onkeydown={(event) => event.key === "Escape" && onClose()}
 >
     <div
-        class={`modal-card modal-card--${size} ${cardClass}`.trim()}
+        class={`modal-card modal-card--${size} ${header ? "modal-card--with-header" : ""} ${footer ? "modal-card--with-footer" : ""} ${cardClass}`.trim()}
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelledBy}
         tabindex="-1"
     >
-        {@render children()}
+        {#if header}
+            <div class="modal-header">
+                {@render header()}
+            </div>
+        {/if}
+        <div class="modal-main">
+            {@render children()}
+        </div>
+        {#if footer}
+            <div class="modal-footer">
+                {@render footer()}
+            </div>
+        {/if}
     </div>
 </div>

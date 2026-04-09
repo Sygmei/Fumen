@@ -147,21 +147,28 @@
                                     <div
                                         class="score-link-list library-score-grid"
                                     >
-                                        {#each ensemble.scores as score}
-                                            <a
-                                                class="score-link-row"
-                                                href={score.public_url}
-                                            >
-                                                <span class="score-link-title">
-                                                    <ScoreIcon
-                                                        variant="library"
-                                                        icon={score.icon}
-                                                        imageUrl={score.icon_image_url}
-                                                    />
-                                                    <span>{score.title}</span>
-                                                </span>
-                                            </a>
-                                        {/each}
+                                        {#if ensemble.scores.length === 0}
+                                            <p class="hint">
+                                                No scores are available for this
+                                                ensemble yet.
+                                            </p>
+                                        {:else}
+                                            {#each ensemble.scores as score}
+                                                <a
+                                                    class="score-link-row"
+                                                    href={score.public_url}
+                                                >
+                                                    <span class="score-link-title">
+                                                        <ScoreIcon
+                                                            variant="library"
+                                                            icon={score.icon}
+                                                            imageUrl={score.icon_image_url}
+                                                        />
+                                                        <span>{score.title}</span>
+                                                    </span>
+                                                </a>
+                                            {/each}
+                                        {/if}
                                     </div>
                                 </details>
                             {/each}

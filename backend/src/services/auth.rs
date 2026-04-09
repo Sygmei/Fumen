@@ -93,15 +93,33 @@ pub(crate) async fn build_auth_context(
     headers: &HeaderMap,
 ) -> Result<AuthContext, AppError> {
     let (user, session, access_token_exp) = require_user_session(state, headers).await?;
-    let managed_ensemble_ids = fetch_managed_ensemble_ids(&state.db_rw, &user.id)
-        .await?
-        .into_iter()
-        .collect::<HashSet<_>>();
-    let editable_ensemble_ids = fetch_editable_ensemble_ids(&state.db_rw, &user.id)
-        .await?
-        .into_iter()
-        .collect::<HashSet<_>>();
     let role = parse_global_role(&user.role)?;
+    let all_ensemble_ids = if role.has_global_power() {
+        Some(
+            fetch_all_ensemble_ids(&state.db_rw)
+                .await?
+                .into_iter()
+                .collect::<HashSet<_>>(),
+        )
+    } else {
+        None
+    };
+    let managed_ensemble_ids = if let Some(all_ensemble_ids) = &all_ensemble_ids {
+        all_ensemble_ids.clone()
+    } else {
+        fetch_managed_ensemble_ids(&state.db_rw, &user.id)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>()
+    };
+    let editable_ensemble_ids = if let Some(all_ensemble_ids) = &all_ensemble_ids {
+        all_ensemble_ids.clone()
+    } else {
+        fetch_editable_ensemble_ids(&state.db_rw, &user.id)
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>()
+    };
 
     Ok(AuthContext {
         user,
@@ -361,13 +379,30 @@ pub(crate) async fn fetch_editable_ensemble_ids(
     .await?)
 }
 
+pub(crate) async fn fetch_all_ensemble_ids(
+    db: &PgPool,
+) -> Result<Vec<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT id FROM ensembles ORDER BY id ASC",
+    )
+    .fetch_all(db)
+    .await?)
+}
+
 pub(crate) async fn user_record_to_response(
     db: &PgPool,
     record: UserRecord,
 ) -> Result<UserResponse, AppError> {
-    let managed_ensemble_ids = fetch_managed_ensemble_ids(db, &record.id).await?;
-    let editable_ensemble_ids = fetch_editable_ensemble_ids(db, &record.id).await?;
     let role = parse_global_role(&record.role)?;
+    let (managed_ensemble_ids, editable_ensemble_ids) = if role.has_global_power() {
+        let all_ensemble_ids = fetch_all_ensemble_ids(db).await?;
+        (all_ensemble_ids.clone(), all_ensemble_ids)
+    } else {
+        (
+            fetch_managed_ensemble_ids(db, &record.id).await?,
+            fetch_editable_ensemble_ids(db, &record.id).await?,
+        )
+    };
 
     Ok(UserResponse {
         id: record.id,

@@ -11,6 +11,7 @@
     fetchUserLibrary,
     initAuth,
     isPageUnloading,
+    listEnsembles,
     logout,
     setOnSessionExpired,
     setOnTokenRefreshed,
@@ -91,6 +92,7 @@
   let credentialLink = $state("");
   let credentialExpiresAt = $state("");
   let credentialQrDataUrl = $state("");
+  let credentialQrLoading = $state(false);
 
   let scannerOpen = $state(false);
   let scannerError = $state("");
@@ -175,7 +177,23 @@
 
     try {
       const response = await fetchCurrentUser();
-      const library = await fetchUserLibrary();
+      let library = await fetchUserLibrary();
+      if (
+        response.user.role === "admin" ||
+        response.user.role === "superadmin"
+      ) {
+        const adminEnsembles = await listEnsembles();
+        const libraryById = new Map(
+          library.ensembles.map((ensemble) => [ensemble.id, ensemble]),
+        );
+        library = {
+          ensembles: adminEnsembles.map((ensemble) => ({
+            id: ensemble.id,
+            name: ensemble.name,
+            scores: libraryById.get(ensemble.id)?.scores ?? [],
+          })),
+        };
+      }
       currentUser = response.user;
       userSessionExpiresAt = response.session_expires_at;
       userLibrary = library.ensembles;
@@ -309,10 +327,8 @@
     userSuccess = "";
 
     try {
-      const response = await createMyLoginLink();
-      await showCredentialModal(
-        `QR code for ${currentUser.username}`,
-        response,
+      await showCredentialModal(`QR code for ${currentUser.username}`, () =>
+        createMyLoginLink(),
       );
       userSuccess = "QR code ready.";
     } catch (error) {
@@ -355,20 +371,30 @@
 
   async function showCredentialModal(
     title: string,
-    linkResponse: LoginLinkResponse,
+    loadLink: () => Promise<LoginLinkResponse>,
   ) {
     credentialModalTitle = title;
-    credentialLink = linkResponse.connection_url;
-    credentialExpiresAt = linkResponse.expires_at;
-    credentialQrDataUrl = await QRCode.toDataURL(linkResponse.connection_url, {
-      width: 280,
-      margin: 1,
-      color: {
-        dark: "#111111",
-        light: "#0000",
-      },
-    });
     credentialModalOpen = true;
+    credentialQrLoading = true;
+    credentialQrDataUrl = "";
+    credentialLink = "";
+    credentialExpiresAt = "";
+
+    try {
+      const linkResponse = await loadLink();
+      credentialLink = linkResponse.connection_url;
+      credentialExpiresAt = linkResponse.expires_at;
+      credentialQrDataUrl = await QRCode.toDataURL(linkResponse.connection_url, {
+        width: 360,
+        margin: 1,
+        color: {
+          dark: "#111111",
+          light: "#0000",
+        },
+      });
+    } finally {
+      credentialQrLoading = false;
+    }
   }
 
   function navigate(pathname: string, replace = false) {
@@ -468,9 +494,16 @@
   <CredentialModal
     title={credentialModalTitle}
     qrDataUrl={credentialQrDataUrl}
+    isLoading={credentialQrLoading}
     link={credentialLink}
     expiresAt={credentialExpiresAt}
-    onClose={() => (credentialModalOpen = false)}
+    onClose={() => {
+      credentialModalOpen = false;
+      credentialQrLoading = false;
+      credentialQrDataUrl = "";
+      credentialLink = "";
+      credentialExpiresAt = "";
+    }}
   />
 {/if}
 

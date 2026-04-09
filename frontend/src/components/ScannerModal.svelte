@@ -12,14 +12,36 @@
     } = $props();
 </script>
 
-<BaseModal {onClose}>
+{#snippet modalHeader()}
     <div class="card-header">
         <div>
             <p class="meta-label">Scan</p>
             <h2>Scan a QR code</h2>
         </div>
-        <button class="button ghost" onclick={onClose}>Close</button>
+        <button
+            class="button ghost admin-modal-close"
+            onclick={onClose}
+            aria-label="Close scanner modal"
+        >
+            <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+            >
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+            </svg>
+        </button>
     </div>
+{/snippet}
+
+<BaseModal {onClose} header={modalHeader}>
     <div class="scanner-frame">
         <video class="scanner-video" bind:this={videoEl} muted playsinline
         ></video>

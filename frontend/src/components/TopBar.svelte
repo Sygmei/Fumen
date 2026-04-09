@@ -8,6 +8,10 @@
         onShowQr,
         adminHref,
         userHomeHref,
+        mobileMenuItems = [],
+        mobileMenuActiveId,
+        mobileMenuAriaLabel = "Section menu",
+        onMobileMenuSelect,
     }: {
         breadcrumbs: Array<{ label: string; href?: string }>;
         currentUser: AppUser | null;
@@ -18,9 +22,19 @@
         adminHref?: string;
         /** If set, "User homepage" appears in the user menu */
         userHomeHref?: string;
+        mobileMenuItems?: Array<{
+            id: string;
+            label: string;
+            eyebrow?: string;
+            meta?: string;
+        }>;
+        mobileMenuActiveId?: string;
+        mobileMenuAriaLabel?: string;
+        onMobileMenuSelect?: (id: string) => void;
     } = $props();
 
     let menuOpen = $state(false);
+    let mobileMenuOpen = $state(false);
 
     function toggleMenu() {
         menuOpen = !menuOpen;
@@ -28,6 +42,14 @@
 
     function closeMenu() {
         menuOpen = false;
+    }
+
+    function toggleMobileMenu() {
+        mobileMenuOpen = !mobileMenuOpen;
+    }
+
+    function closeMobileMenu() {
+        mobileMenuOpen = false;
     }
 
     function handleLogout() {
@@ -38,6 +60,11 @@
     function handleShowQr() {
         closeMenu();
         onShowQr?.();
+    }
+
+    function handleMobileMenuSelect(id: string) {
+        closeMobileMenu();
+        onMobileMenuSelect?.(id);
     }
 </script>
 
@@ -76,8 +103,62 @@
     </div>
 
     <div class="admin-topbar-actions">
-        {#if currentUser}
-            <span class="status-pill">{currentUser.role}</span>
+        {#if mobileMenuItems.length > 0}
+            <div class="topbar-menu-wrap topbar-mobile-only">
+                <button
+                    class="topbar-icon-btn"
+                    onclick={toggleMobileMenu}
+                    aria-haspopup="true"
+                    aria-expanded={mobileMenuOpen}
+                    aria-label={mobileMenuAriaLabel}
+                    title={mobileMenuAriaLabel}
+                >
+                    <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                    >
+                        <path d="M4 7h16" />
+                        <path d="M4 12h16" />
+                        <path d="M4 17h16" />
+                    </svg>
+                </button>
+
+                {#if mobileMenuOpen}
+                    <div
+                        class="topbar-menu-backdrop"
+                        onclick={closeMobileMenu}
+                        role="presentation"
+                    ></div>
+                    <div class="topbar-dropdown topbar-mobile-dropdown" role="menu">
+                        {#each mobileMenuItems as item}
+                            <button
+                                class="topbar-dropdown-item"
+                                class:topbar-dropdown-item--active={mobileMenuActiveId ===
+                                    item.id}
+                                role="menuitem"
+                                onclick={() => handleMobileMenuSelect(item.id)}
+                            >
+                                <div class="topbar-dropdown-copy">
+                                    {#if item.eyebrow}
+                                        <span class="meta-label">{item.eyebrow}</span>
+                                    {/if}
+                                    <strong>{item.label}</strong>
+                                    {#if item.meta}
+                                        <small>{item.meta}</small>
+                                    {/if}
+                                </div>
+                            </button>
+                        {/each}
+                    </div>
+                {/if}
+            </div>
         {/if}
 
         {#if adminHref}
@@ -181,7 +262,12 @@
                     <div class="topbar-dropdown" role="menu">
                         <div class="topbar-dropdown-user">
                             <span class="meta-label">Signed in as</span>
-                            <strong>{currentUser.username}</strong>
+                            <div class="topbar-dropdown-userline">
+                                <strong>{currentUser.username}</strong>
+                                <span class="topbar-role-badge">
+                                    {currentUser.role}
+                                </span>
+                            </div>
                         </div>
                         {#if onShowQr}
                             <button
@@ -330,7 +416,7 @@
         justify-content: center;
         width: 34px;
         height: 34px;
-        border-radius: 8px;
+        border-radius: var(--radius-md);
         border: 1px solid var(--border-strong);
         background: var(--surface-alt);
         color: var(--text-muted);
@@ -367,7 +453,7 @@
         min-width: 210px;
         background: var(--surface-alt);
         border: 1px solid var(--border-strong);
-        border-radius: 10px;
+        border-radius: var(--radius-lg);
         box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
         overflow: hidden;
         animation: fade-up-sm 0.12s ease both;
@@ -392,8 +478,35 @@
         gap: 2px;
     }
 
+    .topbar-dropdown-userline {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+
     .topbar-dropdown-user strong {
         font-size: 0.9rem;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .topbar-role-badge {
+        display: inline-flex;
+        align-items: center;
+        flex-shrink: 0;
+        padding: 2px 6px;
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        color: var(--accent);
+        font-family: 'Fira Code', 'Cascadia Code', monospace;
+        font-size: 0.62rem;
+        font-weight: 600;
+        line-height: 1;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
     }
 
     .topbar-dropdown-item {
@@ -421,8 +534,38 @@
         color: var(--accent);
     }
 
+    .topbar-dropdown-item--active {
+        background: var(--surface);
+        color: var(--accent);
+    }
+
+    .topbar-dropdown-copy {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+    }
+
+    .topbar-dropdown-copy strong,
+    .topbar-dropdown-copy small {
+        text-align: left;
+    }
+
     .topbar-dropdown-item svg {
         flex-shrink: 0;
         opacity: 0.7;
+    }
+
+    .topbar-mobile-only {
+        display: none;
+    }
+
+    @media (max-width: 1199px) {
+        .topbar-mobile-only {
+            display: block;
+        }
+
+        .topbar-mobile-dropdown {
+            min-width: min(280px, calc(100vw - 32px));
+        }
     }
 </style>

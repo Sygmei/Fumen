@@ -6,7 +6,7 @@ use crate::models::{
 use crate::schemas::{AdminMusicResponse, PublicMusicResponse, StemInfo};
 use crate::storage::Storage;
 use crate::{
-    AppError, AppRole, AppState, AuthContext, DEFAULT_ENSEMBLE_NAME, sanitize_content_disposition,
+    AppError, AppRole, AppState, AuthContext, sanitize_content_disposition,
 };
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -798,6 +798,3 @@ fn gzip_bytes(bytes: &Bytes) -> Result<Bytes, AppError> {
     Ok(Bytes::from(compressed))
 }
 
-pub(crate) fn default_ensemble_name() -> &'static str {
-    DEFAULT_ENSEMBLE_NAME
-}

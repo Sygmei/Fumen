@@ -8,8 +8,7 @@ mod services;
 mod storage;
 
 pub(crate) use app::{
-    ACCESS_TOKEN_TTL_SECONDS, AppError, AppRole, AppState, AuthContext, DEFAULT_ENSEMBLE_ID,
-    DEFAULT_ENSEMBLE_NAME, EnsembleRole, LOGIN_LINK_TTL_MINUTES,
+    ACCESS_TOKEN_TTL_SECONDS, AppError, AppRole, AppState, AuthContext, EnsembleRole, LOGIN_LINK_TTL_MINUTES,
     ensure_membership_entities_exist, format_timestamp, generate_auth_token,
     generate_public_token, normalize_music_icon, normalize_name, normalize_public_id,
     normalize_username, parse_quality_profile, sanitize_content_disposition,
@@ -171,7 +170,7 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
             public_id TEXT UNIQUE,
             quality_profile TEXT NOT NULL DEFAULT 'standard',
             created_at TEXT NOT NULL,
-            directory_id TEXT NOT NULL DEFAULT 'general'
+            directory_id TEXT NOT NULL
         )
         "#,
     )
@@ -320,7 +319,7 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
     ensure_music_column(
         db,
         "directory_id",
-        &format!("TEXT NOT NULL DEFAULT '{}'", DEFAULT_ENSEMBLE_ID),
+        "TEXT NOT NULL DEFAULT ''",
     )
     .await?;
     ensure_music_column(
@@ -374,13 +373,6 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
     .execute(db)
     .await?;
 
-    ensure_default_ensemble(db).await?;
-    sqlx::query(
-        "UPDATE musics SET directory_id = $1 WHERE directory_id IS NULL OR directory_id = ''",
-    )
-    .bind(DEFAULT_ENSEMBLE_ID)
-    .execute(db)
-    .await?;
     backfill_music_ensemble_links(db).await?;
 
     Ok(())
@@ -422,22 +414,6 @@ async fn ensure_stems_column(db: &PgPool, name: &str, definition: &str) -> Resul
     Ok(())
 }
 
-async fn ensure_default_ensemble(db: &PgPool) -> Result<()> {
-    sqlx::query(
-        r#"
-        INSERT INTO ensembles (id, name, created_at)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (id) DO NOTHING
-        "#,
-    )
-    .bind(DEFAULT_ENSEMBLE_ID)
-    .bind(DEFAULT_ENSEMBLE_NAME)
-    .bind(utc_now_string())
-    .execute(db)
-    .await?;
-    Ok(())
-}
-
 async fn backfill_music_ensemble_links(db: &PgPool) -> Result<()> {
     sqlx::query(
         r#"
@@ -448,23 +424,6 @@ async fn backfill_music_ensemble_links(db: &PgPool) -> Result<()> {
         ON CONFLICT DO NOTHING
         "#,
     )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO music_ensemble_links (music_id, ensemble_id)
-        SELECT m.id, $1
-        FROM musics m
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM music_ensemble_links mel
-            WHERE mel.music_id = m.id
-        )
-        ON CONFLICT DO NOTHING
-        "#,
-    )
-    .bind(DEFAULT_ENSEMBLE_ID)
     .execute(db)
     .await?;
 
