@@ -6,9 +6,6 @@ backend:
   musescoreDirectOggStems: true
   ingress:
     domain: "fumen-api.lehang.art"
-  soundfonts:
-    image: "ghcr.io/sygmei/fumen-soundfonts"
-    version: "1.1.0"
 
 frontend:
   version: "0.4.5"

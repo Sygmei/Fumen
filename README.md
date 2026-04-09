@@ -47,7 +47,6 @@ $env:MUSESCORE_BIN="C:\Program Files\MuseScore Studio 4\bin\MuseScoreStudio.exe"
 $env:MUSESCORE_DOCKER_IMAGE="your-musescore-cli-image"
 $env:DOCKER_BIN="docker"
 $env:MUSESCORE_QT_PLATFORM="offscreen"
-$env:MUSESCORE_DIRECT_OGG_STEMS="false"
 ```
 
 If `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` are all unset, the backend stores uploaded files under `LOCAL_STORAGE_PATH`.
@@ -74,10 +73,8 @@ headless export. On Windows and macOS it does not force a Qt platform plugin, wh
 "no Qt platform plugin could be initialized" failure from native Windows installs. Set
 `MUSESCORE_QT_PLATFORM` only when you need to override that default explicitly.
 
-By default, per-instrument OGG stems are rendered through the SFZ/`sfizz` pipeline so the backend
-can use the configured external soundfonts. Set `MUSESCORE_DIRECT_OGG_STEMS=true` to skip that
-stack and render stems by feeding one-track MIDI files back into MuseScore instead, which uses
-MuseScore's own default instruments for each track.
+Per-instrument OGG stems are rendered by feeding one-track MIDI files back into MuseScore, so stem
+playback always uses MuseScore's own instrument rendering.
 
 Derivative exports are optional. When MuseScore is available, the backend tries to export:
 
@@ -137,11 +134,10 @@ Then run the backend. If `frontend/dist` exists, the Rust server also serves the
 
 ## Docker images
 
-This repository now includes three Docker build targets:
+This repository now includes two Docker build targets:
 
 - `Dockerfile.frontend` builds the Svelte app into a small static image served by Nginx
 - `Dockerfile.backend` builds the Rust API server into a runtime image
-- `Dockerfile.soundfonts` builds a read-only asset image for the soundfont bundle
 
 Build the frontend image from the repository root:
 
@@ -158,32 +154,23 @@ Build the backend image from the repository root:
 docker build -f Dockerfile.backend -t fumen-backend .
 ```
 
-Build the soundfonts image from the repository root. The image reads `soundfonts/sources.json`,
-downloads each archive, and installs it under the matching key name:
-
-```bash
-docker build -f Dockerfile.soundfonts -t fumen-soundfonts .
-```
-
 The backend image defaults to:
 
 ```bash
 BIND_ADDRESS=0.0.0.0:3000
 LOCAL_STORAGE_PATH=/data/storage
-SOUNDFONT_DIR=/opt/soundfonts
 ```
 
 For Kubernetes, the intended setup is:
 
 - run `fumen-frontend` as the public web app
 - run `fumen-backend` as the API service
-- mount the contents of `fumen-soundfonts` into the backend pod at `/opt/soundfonts`
 
 The frontend image serves only static files and expects `API_BASE_URL` to point at the public API
 root, for example `https://fumen-api.mydomain.com/api`.
 
-`Dockerfile.backend` includes `ffmpeg`, `fluidsynth`, `sfizz_render`, and MuseScore 4. The image
-sets `FLUIDSYNTH_BIN`, `SFIZZ_BIN`, and `MUSESCORE_BIN` automatically.
+`Dockerfile.backend` includes `ffmpeg` and MuseScore 4. The image sets `MUSESCORE_BIN`
+automatically.
 
 ## Helm deployment
 

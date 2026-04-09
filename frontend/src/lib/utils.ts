@@ -21,6 +21,8 @@ export function formatTime(seconds: number): string {
 }
 
 export function qualityProfileLabel(profile: string): string {
+    if (profile === 'compact') return 'Small'
+    if (profile === 'high') return 'Very small'
     return STEM_QUALITY_PROFILES.find((option) => option.value === profile)?.label ?? profile
 }
 

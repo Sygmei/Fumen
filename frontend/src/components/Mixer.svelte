@@ -1,11 +1,10 @@
 <script lang="ts">
-  import type { MixerTrack } from '../lib/midi-player'
   import type { StemTrack } from '../lib/stem-mixer'
   import InstrumentStrip from './InstrumentStrip.svelte'
 
   type MixerProps = {
     midiLoading: boolean
-    mixerTracks: (MixerTrack | StemTrack)[]
+    mixerTracks: StemTrack[]
     mixerRequested: boolean
     globalVolume: number
     trackLevels: Record<string, number>

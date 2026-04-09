@@ -17,11 +17,7 @@ pub struct AppConfig {
     pub musescore_bin: Option<String>,
     pub musescore_docker_image: Option<String>,
     pub musescore_qt_platform: Option<String>,
-    pub musescore_direct_ogg_stems: bool,
     pub docker_bin: String,
-    pub soundfont_dir: Option<PathBuf>,
-    pub sfizz_bin: Option<String>,
-    pub fluidsynth_bin: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,26 +117,10 @@ impl AppConfig {
             .ok()
             .filter(|value| !value.trim().is_empty());
 
-        let musescore_direct_ogg_stems =
-            bool_env_var("MUSESCORE_DIRECT_OGG_STEMS")?.unwrap_or(false);
-
         let docker_bin = env::var("DOCKER_BIN")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "docker".to_owned());
-
-        let soundfont_dir = env::var("SOUNDFONT_DIR")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from);
-
-        let sfizz_bin = env::var("SFIZZ_BIN")
-            .ok()
-            .filter(|value| !value.trim().is_empty());
-
-        let fluidsynth_bin = env::var("FLUIDSYNTH_BIN")
-            .ok()
-            .filter(|value| !value.trim().is_empty());
 
         Ok(Self {
             bind_address,
@@ -155,11 +135,7 @@ impl AppConfig {
             musescore_bin,
             musescore_docker_image,
             musescore_qt_platform,
-            musescore_direct_ogg_stems,
             docker_bin,
-            soundfont_dir,
-            sfizz_bin,
-            fluidsynth_bin,
         })
     }
 
@@ -178,24 +154,5 @@ impl AppConfig {
             self.app_base_url.trim_end_matches('/'),
             token
         )
-    }
-}
-
-fn bool_env_var(name: &str) -> Result<Option<bool>> {
-    let Some(raw) = env::var(name).ok() else {
-        return Ok(None);
-    };
-
-    let value = raw.trim();
-    if value.is_empty() {
-        return Ok(None);
-    }
-
-    match value.to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(Some(true)),
-        "0" | "false" | "no" | "off" => Ok(Some(false)),
-        _ => Err(anyhow!(
-            "Invalid {name} value '{value}'. Use one of: 1, 0, true, false, yes, no, on, off."
-        )),
     }
 }

@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onDestroy, onMount, tick } from "svelte";
     import { fetchPublicMusic, fetchStems, type PublicMusic } from "../lib/api";
-    import { MidiMixerPlayer, type MixerTrack } from "../lib/midi-player";
     import { StemMixerPlayer, type StemTrack } from "../lib/stem-mixer";
     import { ScoreViewer } from "../lib/score-viewer";
     import { formatTime } from "../lib/utils";
@@ -22,11 +21,9 @@
     let scoreLoaded = $state(false);
     let scoreError = $state("");
 
-    let midiPlayer = $state<MidiMixerPlayer | null>(null);
     let stemPlayer = $state<StemMixerPlayer | null>(null);
     let stemPlaybackReady = $state(false);
-    let mixerTracks = $state<(MixerTrack | StemTrack)[]>([]);
-    let playerMode = $state<"stems" | "midi" | null>(null);
+    let mixerTracks = $state<StemTrack[]>([]);
     let midiLoading = $state(false);
     let midiPlayerError = $state("");
     let playbackState = $state<"stopped" | "playing" | "paused">("stopped");
@@ -49,10 +46,6 @@
         if (stemPlayer) {
             void stemPlayer.dispose();
             stemPlayer = null;
-        }
-        if (midiPlayer) {
-            void midiPlayer.dispose();
-            midiPlayer = null;
         }
         if (scoreViewer) {
             scoreViewer.dispose();
@@ -119,7 +112,6 @@
         playbackDuration = 0;
         globalVolume = 1.0;
         mixerTracks = [];
-        playerMode = null;
         stemPlaybackReady = false;
         midiLoading = false;
         midiPlayerError = "";
@@ -128,10 +120,6 @@
         if (stemPlayer) {
             await stemPlayer.dispose();
             stemPlayer = null;
-        }
-        if (midiPlayer) {
-            await midiPlayer.dispose();
-            midiPlayer = null;
         }
         if (scoreViewer) {
             scoreViewer.dispose();
@@ -171,7 +159,6 @@
             playbackDuration = loaded.duration;
             playbackPosition = 0;
             playbackState = "stopped";
-            playerMode = "stems";
         } catch (error) {
             midiPlayerError =
                 error instanceof Error
@@ -183,12 +170,12 @@
     }
 
     async function togglePlayback() {
-        const player = stemPlayer ?? midiPlayer;
+        const player = stemPlayer;
         if (!player || playbackDuration <= 0) {
             return;
         }
 
-        if (playerMode === "stems" && !stemPlaybackReady) {
+        if (!stemPlaybackReady) {
             midiPlayerError =
                 "Stems are still buffering. Wait a moment before starting playback.";
             return;
@@ -220,7 +207,7 @@
     }
 
     function stopPlayback() {
-        const player = stemPlayer ?? midiPlayer;
+        const player = stemPlayer;
         if (!player) {
             return;
         }
@@ -232,7 +219,7 @@
     }
 
     function handleSeek(event: Event) {
-        const player = stemPlayer ?? midiPlayer;
+        const player = stemPlayer;
         if (!player) {
             return;
         }
@@ -245,7 +232,7 @@
     async function handleScoreSeek(seconds: number) {
         scoreViewer?.seek(seconds);
         playbackPosition = seconds;
-        const player = stemPlayer ?? midiPlayer;
+        const player = stemPlayer;
         if (!player) return;
         const wasPlaying = playbackState === "playing";
         if (wasPlaying) {
@@ -263,10 +250,8 @@
         mixerTracks = mixerTracks.map((track) =>
             track.id === trackId ? { ...track, volume } : track,
         );
-        if (stemPlayer && playerMode === "stems") {
+        if (stemPlayer) {
             stemPlayer.setTrackVolume(trackId, volume);
-        } else if (midiPlayer && playerMode === "midi") {
-            midiPlayer.setTrackVolume(trackId, volume);
         }
     }
 
@@ -276,13 +261,9 @@
             ...track,
             volume: globalVolume,
         }));
-        if (stemPlayer && playerMode === "stems") {
+        if (stemPlayer) {
             for (const track of mixerTracks) {
                 stemPlayer.setTrackVolume(track.id, globalVolume);
-            }
-        } else if (midiPlayer && playerMode === "midi") {
-            for (const track of mixerTracks) {
-                midiPlayer.setTrackVolume(track.id, globalVolume);
             }
         }
     }
@@ -296,10 +277,8 @@
             const muted = !track.muted;
             const anySoloed = soloedTrackIds.size > 0;
             const effectiveMuted = muted || (anySoloed && !soloedTrackIds.has(trackId));
-            if (stemPlayer && playerMode === "stems") {
+            if (stemPlayer) {
                 stemPlayer.setTrackMuted(trackId, effectiveMuted);
-            } else if (midiPlayer && playerMode === "midi") {
-                midiPlayer.setTrackMuted(trackId, effectiveMuted);
             }
             return { ...track, muted };
         });
@@ -317,10 +296,8 @@
         const anySoloed = newSoloedIds.size > 0;
         for (const track of mixerTracks) {
             const effectiveMuted = track.muted || (anySoloed && !newSoloedIds.has(track.id));
-            if (stemPlayer && playerMode === "stems") {
+            if (stemPlayer) {
                 stemPlayer.setTrackMuted(track.id, effectiveMuted);
-            } else if (midiPlayer && playerMode === "midi") {
-                midiPlayer.setTrackMuted(track.id, effectiveMuted);
             }
         }
     }
@@ -328,11 +305,11 @@
     function startPlaybackLoop() {
         stopPlaybackLoop();
         const tickPlayback = () => {
-            const player = stemPlayer ?? midiPlayer;
+            const player = stemPlayer;
             if (!player) return;
             playbackPosition = player.getCurrentTime();
             scoreViewer?.seek(playbackPosition);
-            if (stemPlayer && playerMode === "stems") {
+            if (stemPlayer) {
                 stemPlayer.synchronizePlayback();
                 const levels: Record<string, number> = {};
                 for (const track of mixerTracks)
@@ -494,7 +471,7 @@
                             onclick={() => void togglePlayback()}
                             disabled={mixerTracks.length === 0 ||
                                 midiLoading ||
-                                (playerMode === "stems" && !stemPlaybackReady)}
+                                !stemPlaybackReady}
                             aria-label={playbackState === "playing"
                                 ? "Pause"
                                 : "Play"}
@@ -534,7 +511,7 @@
                             onclick={stopPlayback}
                             disabled={mixerTracks.length === 0 ||
                                 midiLoading ||
-                                (playerMode === "stems" && !stemPlaybackReady)}
+                                !stemPlaybackReady}
                             aria-label="Stop"
                             ><svg
                                 width="14"
@@ -561,8 +538,7 @@
                                 oninput={handleSeek}
                                 disabled={mixerTracks.length === 0 ||
                                     midiLoading ||
-                                    (playerMode === "stems" &&
-                                        !stemPlaybackReady)}
+                                    !stemPlaybackReady}
                                 style="--pct: {pct}%"
                                 aria-label="Playback position"
                             />

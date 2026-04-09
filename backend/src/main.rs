@@ -1,4 +1,4 @@
-﻿mod audio;
+mod audio;
 mod config;
 mod models;
 mod storage;
@@ -19,8 +19,8 @@ use flate2::{Compression, write::GzEncoder};
 use models::{
     AccessTokenRefreshResponse, AdminEnsembleResponse, AdminMusicResponse, AuthTokenResponse,
     CreateEnsembleRequest, CreateUserRequest, CurrentUserResponse, EnsembleMemberResponse,
-    EnsembleRecord, EnsembleSummaryRecord, ExchangeLoginTokenRequest, ExportMixerGainsRequest,
-    LoginLinkResponse, MoveMusicRequest, MusicEnsembleLinkRecord, MusicRecord, PublicMusicResponse,
+    EnsembleRecord, EnsembleSummaryRecord, ExchangeLoginTokenRequest, LoginLinkResponse,
+    MoveMusicRequest, MusicEnsembleLinkRecord, MusicRecord, PublicMusicResponse,
     RefreshTokenRequest, StemInfo, StemRecord, UpdateEnsembleMemberRequest, UpdateMusicRequest,
     UserEnsembleMembershipRecord, UserLibraryEnsembleResponse, UserLibraryResponse,
     UserLibraryScoreResponse, UserRecord, UserResponse, UserSessionRecord,
@@ -226,11 +226,6 @@ async fn main() -> Result<()> {
             post(admin_add_music_to_ensemble).delete(admin_remove_music_from_ensemble),
         )
         .route("/admin/musics/{id}/delete", post(admin_delete_music))
-        .route("/admin/musics/{id}/gains", get(admin_export_score_gains))
-        .route(
-            "/admin/public/{access_key}/gains",
-            get(admin_export_public_score_gains).post(admin_export_public_mixer_gains),
-        )
         .route("/admin/musics/{id}/retry", post(admin_retry_render))
         .route("/public/{access_key}", get(public_music))
         .route("/public/{access_key}/audio", get(public_music_audio))
@@ -1505,7 +1500,10 @@ async fn admin_upload_music(
             }
             Some("icon_file") => {
                 icon_file = Some((
-                    field.content_type().map(ToOwned::to_owned).unwrap_or_else(|| "image/jpeg".to_owned()),
+                    field
+                        .content_type()
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| "image/jpeg".to_owned()),
                     field.bytes().await?,
                 ));
             }
@@ -1579,7 +1577,10 @@ async fn admin_upload_music(
             _ => "jpg",
         };
         let icon_key = format!("scores/{music_id}/icon.{ext}");
-        state.storage.upload_bytes(&icon_key, icon_bytes, &icon_content_type).await?;
+        state
+            .storage
+            .upload_bytes(&icon_key, icon_bytes, &icon_content_type)
+            .await?;
         Some(icon_key)
     } else {
         None
@@ -2021,16 +2022,27 @@ async fn admin_update_music(
 ) -> Result<Json<AdminMusicResponse>, AppError> {
     let auth = require_admin_context(&state, &headers).await?;
 
-    let _existing = find_music_by_id(&state.db_rw, &id)
+    let existing = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
 
+    let title = match payload.title {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(AppError::bad_request("Score title cannot be empty"));
+            }
+            trimmed.to_owned()
+        }
+        None => existing.title,
+    };
     let public_id = normalize_public_id(payload.public_id.as_deref())?;
     let icon = normalize_music_icon(payload.icon.as_deref())?;
     ensure_public_id_available(&state.db_rw, public_id.as_deref(), Some(&id)).await?;
 
-    let update_result = sqlx::query("UPDATE musics SET public_id = $1, icon = $2 WHERE id = $3")
+    let update_result = sqlx::query("UPDATE musics SET title = $1, public_id = $2, icon = $3 WHERE id = $4")
+        .bind(&title)
         .bind(&public_id)
         .bind(&icon)
         .bind(&id)
@@ -2154,107 +2166,6 @@ async fn admin_delete_music(
     }
 
     Ok(StatusCode::NO_CONTENT)
-}
-
-async fn admin_export_score_gains(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-) -> Result<Response, AppError> {
-    let auth = require_admin_context(&state, &headers).await?;
-
-    let record = find_music_by_id(&state.db_rw, &id)
-        .await?
-        .ok_or_else(|| AppError::not_found("Music not found"))?;
-    ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
-
-    export_score_gains_response(&state, &record).await
-}
-
-async fn admin_export_public_score_gains(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(access_key): Path<String>,
-) -> Result<Response, AppError> {
-    let auth = require_admin_context(&state, &headers).await?;
-
-    let record = find_public_music_record(&state, &access_key)
-        .await?
-        .ok_or_else(|| AppError::not_found("Music not found"))?;
-    ensure_can_manage_music(&state.db_rw, &auth, &record.id).await?;
-
-    export_score_gains_response(&state, &record).await
-}
-
-async fn admin_export_public_mixer_gains(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(access_key): Path<String>,
-    Json(payload): Json<ExportMixerGainsRequest>,
-) -> Result<Response, AppError> {
-    let auth = require_admin_context(&state, &headers).await?;
-
-    let record = find_public_music_record(&state, &access_key)
-        .await?
-        .ok_or_else(|| AppError::not_found("Music not found"))?;
-    ensure_can_manage_music(&state.db_rw, &auth, &record.id).await?;
-    let midi_key = record
-        .midi_object_key
-        .clone()
-        .ok_or_else(|| AppError::not_found("MIDI export is not available for this score"))?;
-    let (midi_bytes, _, _) = state.storage.get_bytes(&midi_key).await?;
-    let track_settings = payload
-        .tracks
-        .into_iter()
-        .map(|track| audio::LiveMixerTrackSetting {
-            track_index: track.track_index,
-            volume_multiplier: track.volume_multiplier,
-            muted: track.muted,
-        })
-        .collect::<Vec<_>>();
-    let gains =
-        audio::export_live_mixer_gain_template(&state.config, &midi_bytes, &track_settings).await?;
-
-    Ok(binary_response(
-        Bytes::from(
-            serde_json::to_vec_pretty(&gains)
-                .map_err(|error| AppError::from(anyhow::Error::from(error)))?,
-        ),
-        "application/json".to_owned(),
-        None,
-        Some(format!(
-            "attachment; filename=\"{}\"",
-            gains_filename_for(&record.filename)
-        )),
-    ))
-}
-
-async fn export_score_gains_response(
-    state: &AppState,
-    record: &MusicRecord,
-) -> Result<Response, AppError> {
-    let gains = if let Some(path) = state.storage.local_path_for_key(&record.object_key) {
-        audio::export_score_gain_template(&state.config, &path).await?
-    } else {
-        let (bytes, _, _) = state.storage.get_bytes(&record.object_key).await?;
-        let temp_dir = tempfile::tempdir()?;
-        let temp_score_path = temp_dir.path().join(sanitize_filename(&record.filename));
-        fs::write(&temp_score_path, bytes).await?;
-        audio::export_score_gain_template(&state.config, &temp_score_path).await?
-    };
-
-    let body = serde_json::to_vec_pretty(&gains)
-        .map_err(|error| AppError::from(anyhow::Error::from(error)))?;
-
-    Ok(binary_response(
-        Bytes::from(body),
-        "application/json".to_owned(),
-        None,
-        Some(format!(
-            "attachment; filename=\"{}\"",
-            gains_filename_for(&record.filename)
-        )),
-    ))
 }
 
 async fn public_music(
@@ -2738,7 +2649,9 @@ fn normalize_music_icon(value: Option<&str>) -> Result<Option<String>, AppError>
     }
 
     if trimmed.chars().count() > 2 {
-        return Err(AppError::bad_request("Score icon must be 1 or 2 characters"));
+        return Err(AppError::bad_request(
+            "Score icon must be 1 or 2 characters",
+        ));
     }
 
     let icon = trimmed.chars().take(2).collect::<String>();
@@ -2892,7 +2805,9 @@ fn parse_quality_profile(raw: Option<&str>) -> Result<audio::StemQualityProfile,
         .unwrap_or(audio::DEFAULT_STEM_QUALITY_PROFILE);
 
     audio::StemQualityProfile::from_slug(value).ok_or_else(|| {
-        AppError::bad_request("Invalid quality profile. Use one of: compact, standard, high.")
+        AppError::bad_request(
+            "Invalid quality profile. Use one of: standard, small, very-small, tiny.",
+        )
     })
 }
 
@@ -3003,15 +2918,6 @@ fn midi_filename_for(filename: &str) -> String {
         .trim_end_matches(".mscx")
         .trim_end_matches(".MSCX");
     sanitize_content_disposition(&format!("{stem}.mid"))
-}
-
-fn gains_filename_for(filename: &str) -> String {
-    let stem = filename
-        .trim_end_matches(".mscz")
-        .trim_end_matches(".MSCZ")
-        .trim_end_matches(".mscx")
-        .trim_end_matches(".MSCX");
-    sanitize_content_disposition(&format!("{stem}.gains.json"))
 }
 
 fn stem_full_key(music_id: &str, track_index: usize) -> String {

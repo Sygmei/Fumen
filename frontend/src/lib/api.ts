@@ -1,7 +1,9 @@
 export type AdminMusic = {
   id: string
   title: string
-  icon: string | null  icon_image_url: string | null  filename: string
+  icon: string | null
+  icon_image_url: string | null
+  filename: string
   content_type: string
   audio_status: string
   audio_error: string | null
@@ -22,7 +24,7 @@ export type AdminMusic = {
   ensemble_names: string[]
 }
 
-export type StemQualityProfile = 'compact' | 'standard' | 'high'
+export type StemQualityProfile = 'standard' | 'small' | 'very-small' | 'tiny'
 
 export type AppUser = {
   id: string
@@ -70,7 +72,9 @@ export type CurrentUserResponse = {
 export type UserLibraryScore = {
   id: string
   title: string
-  icon: string | null  icon_image_url: string | null  filename: string
+  icon: string | null
+  icon_image_url: string | null
+  filename: string
   public_url: string
   public_id_url: string | null
   created_at: string
@@ -92,19 +96,24 @@ export const STEM_QUALITY_PROFILES: Array<{
   description: string
 }> = [
     {
-      value: 'compact',
-      label: 'Compact',
-      description: 'Smaller stem files with more aggressive Opus compression at 24k.',
-    },
-    {
       value: 'standard',
       label: 'Standard',
-      description: 'Balanced stem quality and size at 32k.',
+      description: 'Keep the MuseScore-rendered OGG stems as-is with no extra compression.',
     },
     {
-      value: 'high',
-      label: 'High',
-      description: 'Higher stem quality with larger files at 48k.',
+      value: 'small',
+      label: 'Small',
+      description: 'Apply light Opus recompression for smaller stem files.',
+    },
+    {
+      value: 'very-small',
+      label: 'Very small',
+      description: 'Apply stronger Opus recompression to reduce stem size further.',
+    },
+    {
+      value: 'tiny',
+      label: 'Tiny',
+      description: 'Apply the strongest Opus recompression for the smallest stored stems.',
     },
   ]
 
@@ -526,40 +535,26 @@ export async function retryRender(id: string): Promise<AdminMusic> {
   return normalizeAdminMusic(music)
 }
 
-export async function downloadScoreGains(id: string): Promise<Blob> {
-  return requestBlob(`/admin/musics/${id}/gains`, {
-    authenticated: true,
-  })
-}
-
-export async function downloadPublicScoreGains(accessKey: string): Promise<Blob> {
-  return requestBlob(`/admin/public/${encodeURIComponent(accessKey)}/gains`, {
-    authenticated: true,
-  })
-}
-
-export async function exportPublicMixerGains(
-  accessKey: string,
-  tracks: Array<{ track_index: number; volume_multiplier: number; muted: boolean }>,
-): Promise<Blob> {
-  return requestBlob(`/admin/public/${encodeURIComponent(accessKey)}/gains`, {
-    method: 'POST',
-    authenticated: true,
-    body: JSON.stringify({ tracks }),
-  })
-}
-
-export async function updatePublicId(
+export async function updateMusicMetadata(
   id: string,
-  publicId: string,
-  icon?: string,
+  payload: {
+    title: string
+    publicId: string
+    icon?: string
+  },
 ): Promise<AdminMusic> {
   const music = await requestJson<AdminMusic>(`/admin/musics/${id}`, {
     method: 'PATCH',
     authenticated: true,
     body: JSON.stringify({
-      public_id: publicId.trim() ? publicId.trim() : null,
-      icon: icon !== undefined ? (icon.trim() ? icon.trim() : null) : null,
+      title: payload.title.trim(),
+      public_id: payload.publicId.trim() ? payload.publicId.trim() : null,
+      icon:
+        payload.icon !== undefined
+          ? payload.icon.trim()
+            ? payload.icon.trim()
+            : null
+          : null,
     }),
   })
 
