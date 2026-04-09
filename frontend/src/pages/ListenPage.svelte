@@ -6,6 +6,7 @@
     import { ScoreViewer } from "../lib/score-viewer";
     import { formatTime } from "../lib/utils";
     import Mixer from "../components/Mixer.svelte";
+    import ScoreIcon from "../components/ScoreIcon.svelte";
 
     const { accessKey }: { accessKey: string } = $props();
 
@@ -377,7 +378,14 @@
                         <span class="listen-title-separator" aria-hidden="true"
                             >-</span
                         >
-                        <h2>{publicMusic?.title ?? "Loading score"}</h2>
+                        <h2>
+                            <ScoreIcon
+                                variant="listen"
+                                icon={publicMusic?.icon ?? null}
+                                imageUrl={publicMusic?.icon_image_url ?? null}
+                            />
+                            <span>{publicMusic?.title ?? "Loading score"}</span>
+                        </h2>
                         <div class="download-menu" class:open={downloadMenuOpen}>
                             <button
                                 class="download-menu-btn"

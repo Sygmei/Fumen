@@ -65,7 +65,7 @@
   <div class="mixer-panel mixer-panel-loading">
     <div class="mixer-board mixer-board-loading">
       <InstrumentStrip
-        name="All"
+        name="Global"
         volume={globalVolume}
         muted={false}
         disabled={true}
@@ -92,7 +92,7 @@
   <div class="mixer-panel">
     <div class="mixer-board">
       <InstrumentStrip
-        name="All"
+        name="Global"
         volume={globalVolume}
         muted={false}
         showGauge={false}

@@ -22,6 +22,7 @@
         type LoginLinkResponse,
         type StemQualityProfile,
     } from "../lib/api";
+    import ScoreIcon from "../components/ScoreIcon.svelte";
     import { formatBytes, prettyDate, qualityProfileLabel } from "../lib/utils";
     import TopBar from "../components/TopBar.svelte";
 
@@ -75,6 +76,7 @@
     let adminSuccess = $state("");
     let uploadTitle = $state("");
     let uploadIcon = $state("");
+    let selectedIconFile = $state<File | null>(null);
     let uploadPublicId = $state("");
     let uploadQualityProfile = $state<StemQualityProfile>("standard");
     let selectedFile = $state<File | null>(null);
@@ -319,6 +321,7 @@
                 file: selectedFile,
                 title: uploadTitle,
                 icon: uploadIcon,
+                iconFile: selectedIconFile,
                 publicId: uploadPublicId,
                 qualityProfile: uploadQualityProfile,
                 ensembleId: uploadEnsembleId,
@@ -329,11 +332,18 @@
             uploadPublicId = "";
             uploadQualityProfile = "standard";
             selectedFile = null;
+            selectedIconFile = null;
             const input = document.getElementById(
                 "mscz-input",
             ) as HTMLInputElement | null;
             if (input) {
                 input.value = "";
+            }
+            const iconInput = document.getElementById(
+                "icon-file-input",
+            ) as HTMLInputElement | null;
+            if (iconInput) {
+                iconInput.value = "";
             }
 
             await refreshAdminData();
@@ -841,6 +851,17 @@
                                         ></label
                                     >
                                     <label class="field file-field"
+                                        ><span>Icon image</span><input
+                                            id="icon-file-input"
+                                            type="file"
+                                            accept="image/*"
+                                            onchange={(e) => {
+                                                const t = e.currentTarget as HTMLInputElement;
+                                                selectedIconFile = t.files?.[0] ?? null;
+                                            }}
+                                        /></label
+                                    >
+                                    <label class="field file-field"
                                         ><span>MSCZ file</span><input
                                             id="mscz-input"
                                             type="file"
@@ -870,13 +891,11 @@
                                             <div class="music-topline">
                                                 <div>
                                                     <h3 class="admin-score-title">
-                                                        {#if music.icon}
-                                                            <span
-                                                                class="admin-score-icon"
-                                                                aria-hidden="true"
-                                                                >{music.icon}</span
-                                                            >
-                                                        {/if}
+                                                        <ScoreIcon
+                                                            variant="admin"
+                                                            icon={music.icon}
+                                                            imageUrl={music.icon_image_url}
+                                                        />
                                                         <span>{music.title}</span>
                                                     </h3>
                                                     <p class="subtle">

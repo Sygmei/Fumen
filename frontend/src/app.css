@@ -1078,6 +1078,7 @@ h3 {
   align-self: center;
   display: flex;
   align-items: center;
+  gap: 12px;
   flex: 1;
   min-width: 0;
   line-height: 1;
@@ -1525,6 +1526,7 @@ h3 {
   background: rgba(196, 43, 13, 0.09);
   border-color: rgba(196, 43, 13, 0.22);
   margin-bottom: 2px;
+  padding-left: 32px; /* align slider with instrument strips: 22px (M/S stack) + 10px (gap) */
 }
 
 .channel-strip.muted {
@@ -1532,7 +1534,8 @@ h3 {
 }
 
 .channel-strip.solo-inactive {
-  opacity: 0.38;
+  opacity: 0.28;
+  filter: grayscale(0.7) brightness(0.6);
 }
 
 .channel-strip.solo-inactive:hover {
@@ -2124,7 +2127,7 @@ h3 {
 }
 
 .library-score-grid .score-link-row {
-  min-height: 79px;
+  min-height: 108px;
   justify-content: center;
   align-items: flex-start;
   background: rgba(255, 255, 255, 0.58);
@@ -2147,7 +2150,9 @@ h3 {
 .library-score-grid .score-link-title {
   align-self: center;
   justify-content: flex-start;
+  align-items: center;
   width: 100%;
+  gap: 14px;
 }
 
 .score-link-icon,
@@ -2168,9 +2173,73 @@ h3 {
   color: transparent;
 }
 
+.listen-score-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 3rem;
+  min-width: 3rem;
+  height: 3rem;
+  aspect-ratio: 1 / 1;
+  padding: 0.42rem;
+  border-radius: 0.95rem;
+  background: rgb(0 0 0 / 50%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 10%);
+  color: var(--text-on-dark);
+  font-size: 1.28rem;
+  line-height: 1;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.listen-score-icon.is-empty {
+  color: transparent;
+}
+
+.library-score-grid .score-link-icon {
+  width: 4.4rem;
+  min-width: 4.4rem;
+  height: 4.4rem;
+  aspect-ratio: 1 / 1;
+  padding: 0.45rem;
+  border-radius: 1.15rem;
+  background: rgb(0 0 0 / 50%);
+  overflow: hidden;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.score-link-icon-img {
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.library-score-grid .score-link-icon-img {
+  display: block;
+  width: 4.4rem;
+  min-width: 4.4rem;
+  height: 4.4rem;
+  aspect-ratio: 1 / 1;
+  padding: 0.5rem;
+  object-fit: contain;
+  object-position: center;
+}
+
 .admin-score-icon {
   background: var(--surface-alt);
   box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.admin-score-icon-img {
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 0.85rem;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.listen-score-icon-img {
+  object-fit: contain;
+  object-position: center;
 }
 
 .library-score-grid .score-link-row small {

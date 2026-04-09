@@ -1,8 +1,7 @@
 export type AdminMusic = {
   id: string
   title: string
-  icon: string | null
-  filename: string
+  icon: string | null  icon_image_url: string | null  filename: string
   content_type: string
   audio_status: string
   audio_error: string | null
@@ -71,8 +70,7 @@ export type CurrentUserResponse = {
 export type UserLibraryScore = {
   id: string
   title: string
-  icon: string | null
-  filename: string
+  icon: string | null  icon_image_url: string | null  filename: string
   public_url: string
   public_id_url: string | null
   created_at: string
@@ -112,6 +110,8 @@ export const STEM_QUALITY_PROFILES: Array<{
 
 export type PublicMusic = {
   title: string
+  icon: string | null
+  icon_image_url: string | null
   filename: string
   audio_status: string
   audio_error: string | null
@@ -291,6 +291,7 @@ function resolveBackendAssetUrl(url: string | null | undefined): string | null {
 function normalizeAdminMusic(music: AdminMusic): AdminMusic {
   return {
     ...music,
+    icon_image_url: resolveBackendAssetUrl(music.icon_image_url),
     download_url: resolveBackendAssetUrl(music.download_url) ?? music.download_url,
     midi_download_url: resolveBackendAssetUrl(music.midi_download_url),
   }
@@ -299,10 +300,23 @@ function normalizeAdminMusic(music: AdminMusic): AdminMusic {
 function normalizePublicMusic(music: PublicMusic): PublicMusic {
   return {
     ...music,
+    icon_image_url: resolveBackendAssetUrl(music.icon_image_url),
     audio_stream_url: resolveBackendAssetUrl(music.audio_stream_url),
     midi_download_url: resolveBackendAssetUrl(music.midi_download_url),
     musicxml_url: resolveBackendAssetUrl(music.musicxml_url),
     download_url: resolveBackendAssetUrl(music.download_url) ?? music.download_url,
+  }
+}
+
+function normalizeUserLibraryResponse(library: UserLibraryResponse): UserLibraryResponse {
+  return {
+    ensembles: library.ensembles.map((ensemble) => ({
+      ...ensemble,
+      scores: ensemble.scores.map((score) => ({
+        ...score,
+        icon_image_url: resolveBackendAssetUrl(score.icon_image_url),
+      })),
+    })),
   }
 }
 
@@ -479,6 +493,7 @@ export async function uploadMusic(
     file: File
     title: string
     icon: string
+    iconFile?: File | null
     publicId: string
     qualityProfile: StemQualityProfile
     ensembleId: string
@@ -488,6 +503,7 @@ export async function uploadMusic(
   body.append('file', payload.file)
   body.append('title', payload.title)
   body.append('icon', payload.icon)
+  if (payload.iconFile) body.append('icon_file', payload.iconFile)
   body.append('public_id', payload.publicId)
   body.append('quality_profile', payload.qualityProfile)
   body.append('ensemble_id', payload.ensembleId)
@@ -594,9 +610,11 @@ export async function fetchCurrentUser(): Promise<CurrentUserResponse> {
 }
 
 export async function fetchUserLibrary(): Promise<UserLibraryResponse> {
-  return requestJson<UserLibraryResponse>('/me/library', {
+  const library = await requestJson<UserLibraryResponse>('/me/library', {
     authenticated: true,
   })
+
+  return normalizeUserLibraryResponse(library)
 }
 
 export async function createMyLoginLink(): Promise<LoginLinkResponse> {

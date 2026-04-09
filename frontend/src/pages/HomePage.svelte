@@ -1,4 +1,5 @@
 <script lang="ts">
+    import ScoreIcon from "../components/ScoreIcon.svelte";
     import type { AppUser, UserLibraryEnsemble } from "../lib/api";
     import TopBar from "../components/TopBar.svelte";
 
@@ -148,12 +149,11 @@
                                                 href={score.public_url}
                                             >
                                                 <span class="score-link-title">
-                                                    <span
-                                                        class="score-link-icon"
-                                                        class:is-empty={!score.icon}
-                                                        aria-hidden="true"
-                                                        >{score.icon ?? ""}</span
-                                                    >
+                                                    <ScoreIcon
+                                                        variant="library"
+                                                        icon={score.icon}
+                                                        imageUrl={score.icon_image_url}
+                                                    />
                                                     <span>{score.title}</span>
                                                 </span>
                                             </a>
