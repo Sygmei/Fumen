@@ -5,7 +5,9 @@
         createAdminUserLoginLink,
         createEnsemble,
         createUser,
+        deleteEnsemble,
         deleteMusic,
+        deleteUser,
         listEnsembles,
         listMusics,
         listUsers,
@@ -18,10 +20,14 @@
         type AdminMusic,
         type AppUser,
         type Ensemble,
+        type EnsembleRole,
+        type GlobalRole,
         type LoginLinkResponse,
         type StemQualityProfile,
     } from "../lib/api";
     import ScoreIcon from "../components/ScoreIcon.svelte";
+    import CustomSelect from "../components/CustomSelect.svelte";
+    import BaseModal from "../components/BaseModal.svelte";
     import { formatBytes, prettyDate, qualityProfileLabel } from "../lib/utils";
     import TopBar from "../components/TopBar.svelte";
 
@@ -58,6 +64,7 @@
     } = $props();
 
     type AdminSection = "users" | "ensembles" | "scores";
+    type ManagedMemberDraftRole = "none" | EnsembleRole;
 
     const adminSectionItems: Array<{
         id: AdminSection;
@@ -84,21 +91,28 @@
     let adminUsers = $state<AppUser[]>(cachedAdminUsers);
     let ensembles = $state<Ensemble[]>(cachedEnsembles);
     let newUsername = $state("");
+    let newUserRole = $state<Exclude<GlobalRole, "superadmin">>("user");
     let userSearchQuery = $state("");
     let showCreateUserModal = $state(false);
     let creatingUser = $state(false);
+    let deletingUserFor = $state("");
     let ensembleSearchQuery = $state("");
     let newEnsembleName = $state("");
     let showCreateEnsembleModal = $state(false);
     let creatingEnsemble = $state(false);
+    let deletingEnsembleFor = $state("");
     let scoreSearchQuery = $state("");
     let showCreateScoreModal = $state(false);
     let uploadEnsembleIds = $state<string[]>(
         cachedEnsembles[0] ? [cachedEnsembles[0].id] : [],
     );
     let managingEnsembleId = $state("");
-    let ensembleMemberSearchQuery = $state("");
-    let inviteRoles = $state<Record<string, "user" | "admin">>({});
+    let currentMemberSearchQuery = $state("");
+    let addMemberSearchQuery = $state("");
+    let inviteRoles = $state<Record<string, EnsembleRole>>({});
+    let originalManagedMemberRoles = $state<Record<string, ManagedMemberDraftRole>>({});
+    let managedMemberDraftRoles = $state<Record<string, ManagedMemberDraftRole>>({});
+    let savingManagedMembers = $state(false);
     let ensemblePickerMode = $state<"upload" | "score" | "">("");
     let ensemblePickerMusicId = $state("");
     let ensemblePickerSearchQuery = $state("");
@@ -112,16 +126,211 @@
     let openDownloadMenuFor = $state("");
 
     function canAccessAdmin(user = currentUser) {
-        return user?.role === "admin" || user?.role === "superadmin";
+        return !!user && user.role !== "user";
     }
 
     function isSuperadmin(user = currentUser) {
         return user?.role === "superadmin";
     }
 
+    function hasGlobalPower(user = currentUser) {
+        return user?.role === "superadmin" || user?.role === "admin";
+    }
+
+    function canManageUsers(user = currentUser) {
+        return (
+            user?.role === "superadmin" ||
+            user?.role === "admin" ||
+            user?.role === "manager"
+        );
+    }
+
+    function canCreateEnsembles(user = currentUser) {
+        return canManageUsers(user);
+    }
+
+    function canManageEnsembleMembers(ensemble: Ensemble, user = currentUser) {
+        return !!user && (hasGlobalPower(user) || user.managed_ensemble_ids.includes(ensemble.id));
+    }
+
+    function canDeleteUserAccount(user: AppUser, actor = currentUser) {
+        if (!actor || user.id === actor.id) {
+            return false;
+        }
+        if (actor.role === "superadmin") {
+            return user.role !== "superadmin";
+        }
+        if (actor.role === "admin") {
+            return user.role !== "admin" && user.role !== "superadmin";
+        }
+        if (actor.role === "manager") {
+            return user.role === "user" && user.created_by_user_id === actor.id;
+        }
+        return false;
+    }
+
+    function canDeleteEnsembleRecord(ensemble: Ensemble, actor = currentUser) {
+        if (!actor) {
+            return false;
+        }
+        return (
+            hasGlobalPower(actor) ||
+            ensemble.created_by_user_id === actor.id ||
+            actor.managed_ensemble_ids.includes(ensemble.id)
+        );
+    }
+
+    function canDeleteScore(music: AdminMusic, actor = currentUser) {
+        if (!actor) {
+            return false;
+        }
+        return hasGlobalPower(actor) || music.owner_user_id === actor.id;
+    }
+
+    function canEditOwnedScore(music: AdminMusic, actor = currentUser) {
+        return canDeleteScore(music, actor);
+    }
+
+    function canManageScoreEnsembles(music: AdminMusic, actor = currentUser) {
+        if (!actor) {
+            return false;
+        }
+        return (
+            hasGlobalPower(actor) ||
+            actor.role === "manager" ||
+            music.owner_user_id === actor.id
+        );
+    }
+
+    function canUseUsersSection(user = currentUser) {
+        return canManageUsers(user);
+    }
+
+    function allowedCreateRoles(actor = currentUser): Array<Exclude<GlobalRole, "superadmin">> {
+        if (!actor) {
+            return ["user"];
+        }
+        if (actor.role === "superadmin" || actor.role === "admin") {
+            return ["admin", "manager", "editor", "user"];
+        }
+        if (actor.role === "manager") {
+            return ["user"];
+        }
+        return ["user"];
+    }
+
+    function defaultCreateRole(actor = currentUser): Exclude<GlobalRole, "superadmin"> {
+        const roles = allowedCreateRoles(actor);
+        return roles.includes("user") ? "user" : (roles[0] ?? "user");
+    }
+
+    function createRoleLabel(role: Exclude<GlobalRole, "superadmin">) {
+        if (role === "admin") {
+            return "Admin";
+        }
+        if (role === "manager") {
+            return "Manager";
+        }
+        if (role === "editor") {
+            return "Editor";
+        }
+        return "User";
+    }
+
+    function createRoleIcon(role: Exclude<GlobalRole, "superadmin">) {
+        if (role === "admin") {
+            return "🛡";
+        }
+        if (role === "manager") {
+            return "👥";
+        }
+        if (role === "editor") {
+            return "✎";
+        }
+        return "•";
+    }
+
+    let createUserRoleOptions = $derived.by(() =>
+        allowedCreateRoles().map((role) => ({
+            value: role,
+            label: createRoleLabel(role),
+            description: createRoleDescription(role),
+            icon: createRoleIcon(role),
+            tone: role,
+        })),
+    );
+
+    function createRoleDescription(role: Exclude<GlobalRole, "superadmin">) {
+        if (role === "admin") {
+            return "Full access, except removing other admins.";
+        }
+        if (role === "manager") {
+            return "Can create ensembles and users, and manage assigned ensembles.";
+        }
+        if (role === "editor") {
+            return "Standard access plus score uploads on assigned ensembles.";
+        }
+        return "Can sign in and listen to scores they can access.";
+    }
+
+    function ensembleRoleIcon(role: EnsembleRole) {
+        if (role === "manager") {
+            return "👥";
+        }
+        if (role === "editor") {
+            return "✎";
+        }
+        return "•";
+    }
+
+    function ensembleRoleDescription(role: EnsembleRole) {
+        if (role === "manager") {
+            return "Can manage ensemble members and score access.";
+        }
+        if (role === "editor") {
+            return "Can add scores and manage only their own uploads.";
+        }
+        return "Can access scores shared with the ensemble.";
+    }
+
+    function ensembleRoleOptionsForUser(user: AppUser) {
+        return allowedEnsembleRolesForUser(user).map((role) => ({
+            value: role,
+            label: memberRoleLabel(role),
+            description: ensembleRoleDescription(role),
+            icon: ensembleRoleIcon(role),
+            tone: role,
+        }));
+    }
+
+    function allowedEnsembleRolesForUser(user: AppUser): EnsembleRole[] {
+        if (user.role === "superadmin" || user.role === "admin") {
+            return [];
+        }
+        if (user.role === "manager") {
+            return currentUser?.role === "manager"
+                ? []
+                : ["manager", "editor", "user"];
+        }
+        if (user.role === "editor") {
+            return ["editor", "user"];
+        }
+        return ["user"];
+    }
+
+    const visibleAdminSectionItems = $derived.by(() =>
+        adminSectionItems.filter((section) => {
+            if (section.id === "users") {
+                return canUseUsersSection();
+            }
+            return canAccessAdmin();
+        }),
+    );
+
     function currentAdminSectionItem() {
         return (
-            adminSectionItems.find((section) => section.id === adminSection) ??
+            visibleAdminSectionItems.find((section) => section.id === adminSection) ??
+            visibleAdminSectionItems[0] ??
             adminSectionItems[0]
         );
     }
@@ -193,20 +402,30 @@
         () => ensembles.find((ensemble) => ensemble.id === managingEnsembleId) ?? null,
     );
 
+    function managedMemberRoleForUser(userId: string): ManagedMemberDraftRole {
+        return managedMemberDraftRoles[userId] ?? "none";
+    }
+
     let filteredManagedMembers = $derived.by(() => {
         const ensemble = activeManagedEnsemble;
         if (!ensemble) {
             return [];
         }
 
-        const query = normalizeQuery(ensembleMemberSearchQuery);
+        const query = normalizeQuery(currentMemberSearchQuery);
 
-        return ensemble.members
-            .map((member) => ({
-                ...member,
-                user: adminUsers.find((candidate) => candidate.id === member.user_id),
+        return adminUsers
+            .map((user) => ({
+                user_id: user.id,
+                role: managedMemberRoleForUser(user.id),
+                user,
             }))
-            .filter((entry) => entry.user)
+            .filter(
+                (
+                    entry,
+                ): entry is { user_id: string; role: EnsembleRole; user: AppUser } =>
+                    entry.role !== "none",
+            )
             .sort((left, right) =>
                 left.user!.username.localeCompare(right.user!.username),
             )
@@ -226,17 +445,26 @@
             return [];
         }
 
-        const memberIds = new Set(ensemble.members.map((member) => member.user_id));
-        const query = normalizeQuery(ensembleMemberSearchQuery);
+        const query = normalizeQuery(addMemberSearchQuery);
 
         return [...adminUsers]
-            .filter((user) => !memberIds.has(user.id))
+            .filter(
+                (user) =>
+                    managedMemberRoleForUser(user.id) === "none" &&
+                    allowedEnsembleRolesForUser(user).length > 0,
+            )
             .sort((left, right) => left.username.localeCompare(right.username))
             .filter((user) =>
                 !query
                     ? true
                     : [user.username, user.role].join(" ").toLowerCase().includes(query),
             );
+    });
+
+    $effect(() => {
+        if (!visibleAdminSectionItems.some((section) => section.id === adminSection)) {
+            adminSection = visibleAdminSectionItems[0]?.id ?? "scores";
+        }
     });
 
     let activeMetadataMusic = $derived.by(
@@ -340,11 +568,12 @@
         adminSuccess = "";
 
         try {
-            const user = await createUser(trimmed);
+            const user = await createUser(trimmed, newUserRole);
             adminUsers = [...adminUsers, user].sort((left, right) =>
                 left.username.localeCompare(right.username),
             );
             newUsername = "";
+            newUserRole = defaultCreateRole();
             showCreateUserModal = false;
             adminSuccess = `User ${user.username} created.`;
         } catch (error) {
@@ -360,6 +589,7 @@
     function openCreateUserModal() {
         adminError = "";
         newUsername = "";
+        newUserRole = defaultCreateRole();
         showCreateUserModal = true;
     }
 
@@ -369,6 +599,7 @@
         }
         showCreateUserModal = false;
         newUsername = "";
+        newUserRole = defaultCreateRole();
     }
 
     function openCreateEnsembleModal() {
@@ -417,34 +648,85 @@
     function ensembleMemberRole(
         ensemble: Ensemble,
         userId: string,
-    ): "none" | "user" | "admin" {
+    ): "none" | EnsembleRole {
         return (
             ensemble.members.find((member) => member.user_id === userId)
                 ?.role ?? "none"
         );
     }
 
-    async function updateUserEnsembleRole(
-        ensembleId: string,
-        userId: string,
-        role: "none" | "user" | "admin",
-    ) {
+    function buildEnsembleMemberRoleMap(ensemble: Ensemble) {
+        return Object.fromEntries(
+            ensemble.members.map((member) => [member.user_id, member.role]),
+        ) as Record<string, ManagedMemberDraftRole>;
+    }
+
+    function stageManagedMemberRole(userId: string, role: ManagedMemberDraftRole) {
+        managedMemberDraftRoles = {
+            ...managedMemberDraftRoles,
+            [userId]: role,
+        };
+    }
+
+    function hasManagedMemberChanges() {
+        const keys = new Set([
+            ...Object.keys(originalManagedMemberRoles),
+            ...Object.keys(managedMemberDraftRoles),
+        ]);
+
+        for (const userId of keys) {
+            if (
+                (originalManagedMemberRoles[userId] ?? "none") !==
+                (managedMemberDraftRoles[userId] ?? "none")
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    async function saveManagedEnsembleChanges() {
+        const ensembleId = managingEnsembleId;
+        if (!ensembleId || !hasManagedMemberChanges()) {
+            return;
+        }
+
+        savingManagedMembers = true;
         adminError = "";
         adminSuccess = "";
 
         try {
-            if (role === "none") {
-                await removeUserFromEnsemble(ensembleId, userId);
-            } else {
-                await addUserToEnsemble(ensembleId, userId, role);
+            const keys = new Set([
+                ...Object.keys(originalManagedMemberRoles),
+                ...Object.keys(managedMemberDraftRoles),
+            ]);
+
+            for (const userId of keys) {
+                const originalRole = originalManagedMemberRoles[userId] ?? "none";
+                const nextRole = managedMemberDraftRoles[userId] ?? "none";
+
+                if (originalRole === nextRole) {
+                    continue;
+                }
+
+                if (nextRole === "none") {
+                    await removeUserFromEnsemble(ensembleId, userId);
+                } else {
+                    await addUserToEnsemble(ensembleId, userId, nextRole);
+                }
             }
+
             await refreshAdminData();
-            adminSuccess = "Ensemble role updated.";
+            originalManagedMemberRoles = { ...managedMemberDraftRoles };
+            adminSuccess = "Ensemble members updated.";
         } catch (error) {
             adminError =
                 error instanceof Error
                     ? error.message
-                    : "Unable to update ensemble role";
+                    : "Unable to update ensemble members";
+        } finally {
+            savingManagedMembers = false;
         }
     }
 
@@ -521,13 +803,25 @@
 
     function openManageMembersModal(ensemble: Ensemble) {
         managingEnsembleId = ensemble.id;
-        ensembleMemberSearchQuery = "";
+        currentMemberSearchQuery = "";
+        addMemberSearchQuery = "";
+        originalManagedMemberRoles = buildEnsembleMemberRoleMap(ensemble);
+        managedMemberDraftRoles = buildEnsembleMemberRoleMap(ensemble);
+        inviteRoles = {};
+        savingManagedMembers = false;
         adminError = "";
     }
 
     function closeManageMembersModal() {
+        if (savingManagedMembers) {
+            return;
+        }
         managingEnsembleId = "";
-        ensembleMemberSearchQuery = "";
+        currentMemberSearchQuery = "";
+        addMemberSearchQuery = "";
+        originalManagedMemberRoles = {};
+        managedMemberDraftRoles = {};
+        inviteRoles = {};
     }
 
     function openScoreMetadataModal(music: AdminMusic) {
@@ -677,6 +971,54 @@
         }
     }
 
+    async function handleDeleteUser(user: AppUser) {
+        if (!window.confirm(`Delete ${user.username} permanently?`)) {
+            return;
+        }
+
+        deletingUserFor = user.id;
+        adminError = "";
+        adminSuccess = "";
+
+        try {
+            await deleteUser(user.id);
+            adminUsers = adminUsers.filter((candidate) => candidate.id !== user.id);
+            await refreshAdminData();
+            adminSuccess = `User ${user.username} deleted.`;
+        } catch (error) {
+            adminError =
+                error instanceof Error
+                    ? error.message
+                    : "Unable to delete user";
+        } finally {
+            deletingUserFor = "";
+        }
+    }
+
+    async function handleDeleteEnsemble(ensemble: Ensemble) {
+        if (!window.confirm(`Delete ensemble ${ensemble.name}?`)) {
+            return;
+        }
+
+        deletingEnsembleFor = ensemble.id;
+        adminError = "";
+        adminSuccess = "";
+
+        try {
+            await deleteEnsemble(ensemble.id);
+            ensembles = ensembles.filter((candidate) => candidate.id !== ensemble.id);
+            await refreshAdminData();
+            adminSuccess = `Ensemble ${ensemble.name} deleted.`;
+        } catch (error) {
+            adminError =
+                error instanceof Error
+                    ? error.message
+                    : "Unable to delete ensemble";
+        } finally {
+            deletingEnsembleFor = "";
+        }
+    }
+
     async function handleRetryRender(musicId: string) {
         retryingFor = musicId;
         adminError = "";
@@ -741,21 +1083,18 @@
         selectedFile = target.files?.[0] ?? null;
     }
 
-    function memberRoleLabel(role: "admin" | "user") {
-        return role === "admin" ? "Admin" : "Member";
+    function memberRoleLabel(role: EnsembleRole) {
+        if (role === "manager") {
+            return "Manager";
+        }
+        if (role === "editor") {
+            return "Editor";
+        }
+        return "Member";
     }
 
     async function handleAddUserToManagedEnsemble(userId: string) {
-        const ensemble = activeManagedEnsemble;
-        if (!ensemble) {
-            return;
-        }
-
-        await updateUserEnsembleRole(
-            ensemble.id,
-            userId,
-            inviteRoles[userId] ?? "user",
-        );
+        stageManagedMemberRole(userId, inviteRoles[userId] ?? "user");
     }
 </script>
 
@@ -826,7 +1165,7 @@
         <div class="admin-shell-body">
             <aside class="admin-sidebar">
                 <nav class="admin-nav-list" aria-label="Admin sections">
-                    {#each adminSectionItems as section}
+                    {#each visibleAdminSectionItems as section}
                         <button
                             class="admin-nav-button"
                             class:is-active={adminSection === section.id}
@@ -886,26 +1225,28 @@
                                         />
                                     </div>
                                 </label>
-                                <button
-                                    class="button admin-create-user-btn"
-                                    onclick={openCreateUserModal}
-                                >
-                                    <svg
-                                        width="15"
-                                        height="15"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        aria-hidden="true"
+                                {#if canManageUsers()}
+                                    <button
+                                        class="button admin-create-user-btn"
+                                        onclick={openCreateUserModal}
                                     >
-                                        <path d="M12 5v14" />
-                                        <path d="M5 12h14" />
-                                    </svg>
-                                    Create user
-                                </button>
+                                        <svg
+                                            width="15"
+                                            height="15"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            aria-hidden="true"
+                                        >
+                                            <path d="M12 5v14" />
+                                            <path d="M5 12h14" />
+                                        </svg>
+                                        Create user
+                                    </button>
+                                {/if}
                             </div>
 
                             {#if adminUsers.length === 0}
@@ -984,6 +1325,24 @@
                                                         />
                                                     </svg>
                                                 </button>
+                                                {#if canDeleteUserAccount(user)}
+                                                    <button
+                                                        class="button ghost danger admin-user-action"
+                                                        type="button"
+                                                        disabled={deletingUserFor === user.id}
+                                                        onclick={() => void handleDeleteUser(user)}
+                                                        aria-label={`Delete ${user.username}`}
+                                                        title="Delete user"
+                                                    >
+                                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                                            <path d="M3 6h18" />
+                                                            <path d="M8 6V4h8v2" />
+                                                            <path d="M19 6l-1 14H6L5 6" />
+                                                            <path d="M10 11v6" />
+                                                            <path d="M14 11v6" />
+                                                        </svg>
+                                                    </button>
+                                                {/if}
                                             </div>
                                         </article>
                                     {/each}
@@ -1021,7 +1380,7 @@
                                         />
                                     </div>
                                 </label>
-                                {#if isSuperadmin()}
+                                {#if canCreateEnsembles()}
                                     <button
                                         class="button admin-create-user-btn"
                                         type="button"
@@ -1100,6 +1459,7 @@
                                                     onclick={() => openManageMembersModal(ensemble)}
                                                     aria-label={`Manage members for ${ensemble.name}`}
                                                     title="Manage members"
+                                                    disabled={!canManageEnsembleMembers(ensemble)}
                                                 >
                                                     <svg
                                                         width="16"
@@ -1117,6 +1477,24 @@
                                                         <path d="M23 11h-6" />
                                                     </svg>
                                                 </button>
+                                                {#if canDeleteEnsembleRecord(ensemble)}
+                                                    <button
+                                                        class="button ghost danger admin-user-action"
+                                                        type="button"
+                                                        disabled={deletingEnsembleFor === ensemble.id}
+                                                        onclick={() => void handleDeleteEnsemble(ensemble)}
+                                                        aria-label={`Delete ${ensemble.name}`}
+                                                        title="Delete ensemble"
+                                                    >
+                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                            <path d="M3 6h18" />
+                                                            <path d="M8 6V4h8v2" />
+                                                            <path d="M19 6l-1 14H6L5 6" />
+                                                            <path d="M10 11v6" />
+                                                            <path d="M14 11v6" />
+                                                        </svg>
+                                                    </button>
+                                                {/if}
                                             </div>
                                         </article>
                                     {/each}
@@ -1191,22 +1569,24 @@
                                 <div class="music-list admin-score-list">
                                     {#each filteredMusics as music}
                                         <article class="music-card admin-score-card">
-                                            <button
-                                                class="button ghost danger admin-score-delete"
-                                                type="button"
-                                                aria-label={`Delete ${music.title}`}
-                                                title="Delete score"
-                                                disabled={deletingMusicFor === music.id}
-                                                onclick={() => void handleDeleteMusic(music.id)}
-                                            >
-                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                    <path d="M3 6h18" />
-                                                    <path d="M8 6V4h8v2" />
-                                                    <path d="M19 6l-1 14H6L5 6" />
-                                                    <path d="M10 11v6" />
-                                                    <path d="M14 11v6" />
-                                                </svg>
-                                            </button>
+                                            {#if canDeleteScore(music)}
+                                                <button
+                                                    class="button ghost danger admin-score-delete"
+                                                    type="button"
+                                                    aria-label={`Delete ${music.title}`}
+                                                    title="Delete score"
+                                                    disabled={deletingMusicFor === music.id}
+                                                    onclick={() => void handleDeleteMusic(music.id)}
+                                                >
+                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                        <path d="M3 6h18" />
+                                                        <path d="M8 6V4h8v2" />
+                                                        <path d="M19 6l-1 14H6L5 6" />
+                                                        <path d="M10 11v6" />
+                                                        <path d="M14 11v6" />
+                                                    </svg>
+                                                </button>
+                                            {/if}
                                             <div class="admin-score-header">
                                                 <h3 class="admin-score-title">
                                                     <ScoreIcon
@@ -1235,20 +1615,24 @@
                                                 <p class="hint">{music.stems_error}</p>
                                             {/if}
                                             <div class="actions admin-score-actions">
-                                                <button class="button secondary admin-user-action" type="button" onclick={() => openScoreEnsembleModal(music)} aria-label={`Manage ensembles for ${music.title}`} title="Manage ensembles">
-                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <path d="M4 19a8 8 0 0 1 16 0" />
-                                                        <circle cx="12" cy="8" r="4" />
-                                                        <path d="M20 6v6" />
-                                                        <path d="M23 9h-6" />
-                                                    </svg>
-                                                </button>
-                                                <button class="button secondary admin-user-action" type="button" onclick={() => openScoreMetadataModal(music)} aria-label={`Edit metadata for ${music.title}`} title="Edit metadata">
-                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                                        <path d="M12 20h9" />
-                                                        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                                                    </svg>
-                                                </button>
+                                                {#if canManageScoreEnsembles(music)}
+                                                    <button class="button secondary admin-user-action" type="button" onclick={() => openScoreEnsembleModal(music)} aria-label={`Manage ensembles for ${music.title}`} title="Manage ensembles">
+                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                            <path d="M4 19a8 8 0 0 1 16 0" />
+                                                            <circle cx="12" cy="8" r="4" />
+                                                            <path d="M20 6v6" />
+                                                            <path d="M23 9h-6" />
+                                                        </svg>
+                                                    </button>
+                                                {/if}
+                                                {#if canEditOwnedScore(music)}
+                                                    <button class="button secondary admin-user-action" type="button" onclick={() => openScoreMetadataModal(music)} aria-label={`Edit metadata for ${music.title}`} title="Edit metadata">
+                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                            <path d="M12 20h9" />
+                                                            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                                        </svg>
+                                                    </button>
+                                                {/if}
                                                 <button class="button secondary admin-user-action" type="button" onclick={() => void copyText(scoreLinkForCopy(music), "Score link copied.")} aria-label={`Copy link for ${music.title}`} title="Copy score link">
                                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                                         <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L10.6 5.3" />
@@ -1275,7 +1659,7 @@
                                                     {/if}
                                                 </div>
                                             </div>
-                                            {#if music.stems_status !== "ready"}
+                                            {#if music.stems_status !== "ready" && canEditOwnedScore(music)}
                                                 <button class="button ghost admin-score-retry" type="button" disabled={retryingFor === music.id} onclick={() => void handleRetryRender(music.id)}>
                                                     {retryingFor === music.id ? "Retrying render..." : "Retry render"}
                                                 </button>
@@ -1293,21 +1677,12 @@
 {/if}
 
 {#if showCreateUserModal}
-    <div
-        class="modal-backdrop"
-        role="presentation"
-        onclick={(event) => {
-            if (event.target === event.currentTarget) {
-                closeCreateUserModal();
-            }
-        }}
+    <BaseModal
+        onClose={closeCreateUserModal}
+        size="small"
+        cardClass="admin-user-modal"
+        labelledBy="create-user-title"
     >
-        <div
-            class="modal-card admin-user-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="create-user-title"
-        >
             <div class="card-header admin-user-modal-header">
                 <div>
                     <p class="meta-label">Create</p>
@@ -1323,7 +1698,7 @@
                 </button>
             </div>
             <p class="subtle">
-                Create a username-only account, then generate a QR code or connection link from the list.
+                Create a username-only account, assign its global role, then generate a QR code or connection link from the list.
             </p>
             <label class="field">
                 <span>Username</span>
@@ -1339,6 +1714,11 @@
                     }}
                 />
             </label>
+            <CustomSelect
+                label="Global role"
+                bind:value={newUserRole}
+                options={createUserRoleOptions}
+            />
             <div class="actions admin-user-modal-actions">
                 <button
                     class="button ghost"
@@ -1357,26 +1737,16 @@
                     {creatingUser ? "Creating..." : "Create user"}
                 </button>
             </div>
-        </div>
-    </div>
+    </BaseModal>
 {/if}
 
 {#if showCreateEnsembleModal}
-    <div
-        class="modal-backdrop"
-        role="presentation"
-        onclick={(event) => {
-            if (event.target === event.currentTarget) {
-                closeCreateEnsembleModal();
-            }
-        }}
+    <BaseModal
+        onClose={closeCreateEnsembleModal}
+        size="small"
+        cardClass="admin-user-modal"
+        labelledBy="create-ensemble-title"
     >
-        <div
-            class="modal-card admin-user-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="create-ensemble-title"
-        >
             <div class="card-header admin-user-modal-header">
                 <div>
                     <p class="meta-label">Create</p>
@@ -1423,26 +1793,16 @@
                     {creatingEnsemble ? "Creating..." : "Create ensemble"}
                 </button>
             </div>
-        </div>
-    </div>
+    </BaseModal>
 {/if}
 
 {#if showCreateScoreModal}
-    <div
-        class="modal-backdrop"
-        role="presentation"
-        onclick={(event) => {
-            if (event.target === event.currentTarget) {
-                closeCreateScoreModal();
-            }
-        }}
+    <BaseModal
+        onClose={closeCreateScoreModal}
+        size="large"
+        cardClass="admin-score-modal"
+        labelledBy="create-score-title"
     >
-        <div
-            class="modal-card admin-score-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="create-score-title"
-        >
             <div class="card-header admin-user-modal-header">
                 <div>
                     <p class="meta-label">Upload</p>
@@ -1558,26 +1918,16 @@
                     {uploadBusy ? "Uploading..." : "Add score"}
                 </button>
             </div>
-        </div>
-    </div>
+    </BaseModal>
 {/if}
 
 {#if activeManagedEnsemble}
-    <div
-        class="modal-backdrop"
-        role="presentation"
-        onclick={(event) => {
-            if (event.target === event.currentTarget) {
-                closeManageMembersModal();
-            }
-        }}
+    <BaseModal
+        onClose={closeManageMembersModal}
+        size="full"
+        cardClass="admin-split-modal"
+        labelledBy="manage-ensemble-title"
     >
-        <div
-            class="modal-card admin-split-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="manage-ensemble-title"
-        >
             <div class="card-header admin-user-modal-header">
                 <div>
                     <p class="meta-label">Members</p>
@@ -1592,36 +1942,38 @@
                     Close
                 </button>
             </div>
-            <label class="field admin-user-search">
-                <span class="sr-only">Search members</span>
-                <div class="admin-user-search-input-wrap">
-                    <svg
-                        width="15"
-                        height="15"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                    >
-                        <circle cx="11" cy="11" r="7" />
-                        <path d="m20 20-3.5-3.5" />
-                    </svg>
-                    <input
-                        bind:value={ensembleMemberSearchQuery}
-                        placeholder="Search members"
-                    />
-                </div>
-            </label>
             <div class="admin-split-pane">
                 <section class="admin-split-column">
                     <div class="admin-split-header">
-                        <h4>Current members</h4>
-                        <span class="admin-user-role-pill">
-                            {filteredManagedMembers.length}
-                        </span>
+                        <div class="admin-split-header-main">
+                            <h4>Current members</h4>
+                            <span class="admin-user-role-pill">
+                                {filteredManagedMembers.length}
+                            </span>
+                        </div>
+                        <label class="field admin-user-search admin-split-search">
+                            <span class="sr-only">Search current members</span>
+                            <div class="admin-user-search-input-wrap">
+                                <svg
+                                    width="15"
+                                    height="15"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <circle cx="11" cy="11" r="7" />
+                                    <path d="m20 20-3.5-3.5" />
+                                </svg>
+                                <input
+                                    bind:value={currentMemberSearchQuery}
+                                    placeholder="Search current members"
+                                />
+                            </div>
+                        </label>
                     </div>
                     <div class="admin-inline-list">
                         {#if filteredManagedMembers.length === 0}
@@ -1636,44 +1988,34 @@
                                         </span>
                                     </div>
                                     <div class="admin-inline-actions">
-                                        <select
-                                            value={member.role}
-                                            onchange={(event) =>
-                                                void updateUserEnsembleRole(
-                                                    activeManagedEnsemble.id,
-                                                    member.user_id,
-                                                    (event.currentTarget as HTMLSelectElement)
-                                                        .value as "none" | "user" | "admin",
-                                                )}
-                                        >
-                                            <option value="user">Member</option>
-                                            <option value="admin">Admin</option>
-                                        </select>
-                                        <button
-                                            class="button ghost danger admin-inline-icon-btn"
-                                            type="button"
-                                            aria-label={`Remove ${member.user!.username}`}
-                                            onclick={() =>
-                                                void updateUserEnsembleRole(
-                                                    activeManagedEnsemble.id,
-                                                    member.user_id,
-                                                    "none",
-                                                )}
-                                        >
-                                            <svg
-                                                width="14"
-                                                height="14"
-                                                viewBox="0 0 24 24"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                stroke-width="2"
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
+                                        {#if allowedEnsembleRolesForUser(member.user!).length > 0}
+                                            <CustomSelect
+                                                value={member.role}
+                                                options={ensembleRoleOptionsForUser(member.user!)}
+                                                compact={true}
+                                                showDescriptionInTrigger={false}
+                                                onValueChange={(role) =>
+                                                    stageManagedMemberRole(
+                                                        member.user_id,
+                                                        role as EnsembleRole,
+                                                    )}
+                                            />
+                                            <button
+                                                class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
+                                                type="button"
+                                                aria-label={`Remove ${member.user!.username}`}
+                                                title={`Remove ${member.user!.username}`}
+                                                onclick={() =>
+                                                    stageManagedMemberRole(
+                                                        member.user_id,
+                                                        "none",
+                                                    )}
                                             >
-                                                <path d="M18 6 6 18" />
-                                                <path d="m6 6 12 12" />
-                                            </svg>
-                                        </button>
+                                                <span aria-hidden="true">-</span>
+                                            </button>
+                                        {:else}
+                                            <span class="hint">Locked</span>
+                                        {/if}
                                     </div>
                                 </div>
                             {/each}
@@ -1682,10 +2024,35 @@
                 </section>
                 <section class="admin-split-column">
                     <div class="admin-split-header">
-                        <h4>Add members</h4>
-                        <span class="admin-user-role-pill">
-                            {filteredAvailableEnsembleUsers.length}
-                        </span>
+                        <div class="admin-split-header-main">
+                            <h4>Add members</h4>
+                            <span class="admin-user-role-pill">
+                                {filteredAvailableEnsembleUsers.length}
+                            </span>
+                        </div>
+                        <label class="field admin-user-search admin-split-search">
+                            <span class="sr-only">Search available users</span>
+                            <div class="admin-user-search-input-wrap">
+                                <svg
+                                    width="15"
+                                    height="15"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <circle cx="11" cy="11" r="7" />
+                                    <path d="m20 20-3.5-3.5" />
+                                </svg>
+                                <input
+                                    bind:value={addMemberSearchQuery}
+                                    placeholder="Search available users"
+                                />
+                            </div>
+                        </label>
                     </div>
                     <div class="admin-inline-list">
                         {#if filteredAvailableEnsembleUsers.length === 0}
@@ -1698,26 +2065,27 @@
                                         <span class="admin-user-role-pill">{user.role}</span>
                                     </div>
                                     <div class="admin-inline-actions">
-                                        <select
-                                            value={inviteRoles[user.id] ?? "user"}
-                                            onchange={(event) => {
+                                        <CustomSelect
+                                            value={inviteRoles[user.id] ?? allowedEnsembleRolesForUser(user)[0] ?? "user"}
+                                            options={ensembleRoleOptionsForUser(user)}
+                                            compact={true}
+                                            showDescriptionInTrigger={false}
+                                            onValueChange={(role) => {
                                                 inviteRoles = {
                                                     ...inviteRoles,
-                                                    [user.id]: (event.currentTarget as HTMLSelectElement)
-                                                        .value as "user" | "admin",
+                                                    [user.id]: role as EnsembleRole,
                                                 };
                                             }}
-                                        >
-                                            <option value="user">Member</option>
-                                            <option value="admin">Admin</option>
-                                        </select>
+                                        />
                                         <button
-                                            class="button secondary"
+                                            class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
                                             type="button"
+                                            aria-label={`Add ${user.username}`}
+                                            title={`Add ${user.username}`}
                                             onclick={() =>
                                                 void handleAddUserToManagedEnsemble(user.id)}
                                         >
-                                            Add
+                                            <span aria-hidden="true">+</span>
                                         </button>
                                     </div>
                                 </div>
@@ -1726,26 +2094,34 @@
                     </div>
                 </section>
             </div>
-        </div>
-    </div>
+            <div class="actions admin-split-modal-actions">
+                <button
+                    class="button ghost"
+                    type="button"
+                    disabled={savingManagedMembers}
+                    onclick={closeManageMembersModal}
+                >
+                    Cancel
+                </button>
+                <button
+                    class="button"
+                    type="button"
+                    disabled={savingManagedMembers || !hasManagedMemberChanges()}
+                    onclick={() => void saveManagedEnsembleChanges()}
+                >
+                    {savingManagedMembers ? "Saving..." : "Save changes"}
+                </button>
+            </div>
+    </BaseModal>
 {/if}
 
 {#if ensemblePickerMode}
-    <div
-        class="modal-backdrop"
-        role="presentation"
-        onclick={(event) => {
-            if (event.target === event.currentTarget) {
-                closeEnsemblePickerModal();
-            }
-        }}
+    <BaseModal
+        onClose={closeEnsemblePickerModal}
+        size="medium"
+        cardClass="admin-selector-modal"
+        labelledBy="ensemble-selector-title"
     >
-        <div
-            class="modal-card admin-selector-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="ensemble-selector-title"
-        >
             <div class="card-header admin-user-modal-header">
                 <div>
                     <p class="meta-label">Ensembles</p>
@@ -1825,26 +2201,16 @@
                     {/each}
                 {/if}
             </div>
-        </div>
-    </div>
+    </BaseModal>
 {/if}
 
 {#if activeMetadataMusic}
-    <div
-        class="modal-backdrop"
-        role="presentation"
-        onclick={(event) => {
-            if (event.target === event.currentTarget) {
-                closeScoreMetadataModal();
-            }
-        }}
+    <BaseModal
+        onClose={closeScoreMetadataModal}
+        size="large"
+        cardClass="admin-score-modal"
+        labelledBy="score-metadata-title"
     >
-        <div
-            class="modal-card admin-score-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="score-metadata-title"
-        >
             <div class="card-header admin-user-modal-header">
                 <div>
                     <p class="meta-label">Metadata</p>
@@ -1912,6 +2278,5 @@
                     {savingMetadataFor ? "Saving..." : "Save changes"}
                 </button>
             </div>
-        </div>
-    </div>
+    </BaseModal>
 {/if}

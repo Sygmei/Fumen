@@ -25,6 +25,7 @@ pub struct MusicRecord {
     pub public_id: Option<String>,
     pub quality_profile: String,
     pub created_at: String,
+    pub owner_user_id: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -45,6 +46,8 @@ pub struct UserRecord {
     pub username: String,
     pub created_at: String,
     pub is_superadmin: bool,
+    pub role: String,
+    pub created_by_user_id: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -62,6 +65,7 @@ pub struct EnsembleRecord {
     pub id: String,
     pub name: String,
     pub created_at: String,
+    pub created_by_user_id: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -97,6 +101,7 @@ pub struct DrumMapEntry {
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
     pub username: String,
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,6 +173,7 @@ pub struct AdminMusicResponse {
     pub stems_total_bytes: i64,
     pub ensemble_ids: Vec<String>,
     pub ensemble_names: Vec<String>,
+    pub owner_user_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -197,6 +203,8 @@ pub struct UserResponse {
     pub created_at: String,
     pub role: String,
     pub managed_ensemble_ids: Vec<String>,
+    pub editable_ensemble_ids: Vec<String>,
+    pub created_by_user_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,6 +220,7 @@ pub struct AdminEnsembleResponse {
     pub created_at: String,
     pub members: Vec<EnsembleMemberResponse>,
     pub score_count: i64,
+    pub created_by_user_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

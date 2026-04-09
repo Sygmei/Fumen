@@ -30,9 +30,7 @@
     } = $props();
 
     function canAccessAdmin() {
-        return (
-            currentUser?.role === "admin" || currentUser?.role === "superadmin"
-        );
+        return currentUser?.role !== undefined && currentUser.role !== "user";
     }
 
     function ensembleAccent(name: string) {

@@ -10,7 +10,7 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use bytes::Bytes;
 use chrono::{Duration, SecondsFormat, Utc};
@@ -51,18 +51,79 @@ const ACCESS_TOKEN_TTL_SECONDS: i64 = 86400; // 1 day
 const DEFAULT_ENSEMBLE_ID: &str = "general";
 const DEFAULT_ENSEMBLE_NAME: &str = "General";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppRole {
     Superadmin,
     Admin,
+    Manager,
+    Editor,
     User,
 }
 
 impl AppRole {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "superadmin" => Some(Self::Superadmin),
+            "admin" => Some(Self::Admin),
+            "manager" => Some(Self::Manager),
+            "editor" => Some(Self::Editor),
+            "user" => Some(Self::User),
+            _ => None,
+        }
+    }
+
     fn as_str(&self) -> &'static str {
         match self {
             Self::Superadmin => "superadmin",
             Self::Admin => "admin",
+            Self::Manager => "manager",
+            Self::Editor => "editor",
+            Self::User => "user",
+        }
+    }
+
+    fn has_global_power(&self) -> bool {
+        matches!(self, Self::Superadmin | Self::Admin)
+    }
+
+    fn can_access_control_room(&self) -> bool {
+        !matches!(self, Self::User)
+    }
+
+    fn can_list_users(&self) -> bool {
+        matches!(self, Self::Superadmin | Self::Admin | Self::Manager)
+    }
+
+    fn can_create_users(&self) -> bool {
+        self.can_list_users()
+    }
+
+    fn can_create_ensembles(&self) -> bool {
+        matches!(self, Self::Superadmin | Self::Admin | Self::Manager)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnsembleRole {
+    Manager,
+    Editor,
+    User,
+}
+
+impl EnsembleRole {
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "manager" => Some(Self::Manager),
+            "editor" => Some(Self::Editor),
+            "user" => Some(Self::User),
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Manager => "manager",
+            Self::Editor => "editor",
             Self::User => "user",
         }
     }
@@ -74,20 +135,37 @@ struct AuthContext {
     session: UserSessionRecord,
     role: AppRole,
     managed_ensemble_ids: HashSet<String>,
+    editable_ensemble_ids: HashSet<String>,
     access_token_exp: i64,
 }
 
 impl AuthContext {
-    fn is_superadmin(&self) -> bool {
-        self.role == AppRole::Superadmin
+    fn has_global_power(&self) -> bool {
+        self.role.has_global_power()
     }
 
-    fn is_admin(&self) -> bool {
-        self.role != AppRole::User
+    fn can_access_control_room(&self) -> bool {
+        self.role.can_access_control_room()
+    }
+
+    fn can_list_users(&self) -> bool {
+        self.role.can_list_users()
+    }
+
+    fn can_create_users(&self) -> bool {
+        self.role.can_create_users()
+    }
+
+    fn can_create_ensembles(&self) -> bool {
+        self.role.can_create_ensembles()
     }
 
     fn can_manage_ensemble(&self, ensemble_id: &str) -> bool {
-        self.is_superadmin() || self.managed_ensemble_ids.contains(ensemble_id)
+        self.has_global_power() || self.managed_ensemble_ids.contains(ensemble_id)
+    }
+
+    fn can_edit_ensemble_scores(&self, ensemble_id: &str) -> bool {
+        self.has_global_power() || self.editable_ensemble_ids.contains(ensemble_id)
     }
 }
 
@@ -203,6 +281,7 @@ async fn main() -> Result<()> {
             "/admin/users",
             get(admin_list_users).post(admin_create_user),
         )
+        .route("/admin/users/{id}", delete(admin_delete_user))
         .route(
             "/admin/users/{id}/login-link",
             post(admin_create_user_login_link),
@@ -211,6 +290,7 @@ async fn main() -> Result<()> {
             "/admin/ensembles",
             get(admin_list_ensembles).post(admin_create_ensemble),
         )
+        .route("/admin/ensembles/{id}", delete(admin_delete_ensemble))
         .route(
             "/admin/ensembles/{id}/users/{user_id}",
             post(admin_add_user_to_ensemble).delete(admin_remove_user_from_ensemble),
@@ -372,7 +452,9 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL,
-            is_superadmin BOOLEAN NOT NULL DEFAULT FALSE
+            is_superadmin BOOLEAN NOT NULL DEFAULT FALSE,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
         )
         "#,
     )
@@ -384,7 +466,8 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
         CREATE TABLE IF NOT EXISTS ensembles (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
         )
         "#,
     )
@@ -491,7 +574,26 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
         &format!("TEXT NOT NULL DEFAULT '{}'", DEFAULT_ENSEMBLE_ID),
     )
     .await?;
+    ensure_music_column(
+        db,
+        "owner_user_id",
+        "TEXT REFERENCES users(id) ON DELETE SET NULL",
+    )
+    .await?;
     ensure_user_column(db, "is_superadmin", "BOOLEAN NOT NULL DEFAULT FALSE").await?;
+    ensure_user_column(db, "role", "TEXT NOT NULL DEFAULT 'user'").await?;
+    ensure_user_column(
+        db,
+        "created_by_user_id",
+        "TEXT REFERENCES users(id) ON DELETE SET NULL",
+    )
+    .await?;
+    ensure_ensemble_column(
+        db,
+        "created_by_user_id",
+        "TEXT REFERENCES users(id) ON DELETE SET NULL",
+    )
+    .await?;
     ensure_user_ensemble_membership_column(db, "role", "TEXT NOT NULL DEFAULT 'user'").await?;
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS users_single_superadmin_idx ON users (is_superadmin) WHERE is_superadmin = TRUE",
@@ -499,7 +601,32 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
     .execute(db)
     .await?;
     sqlx::query(
-        "UPDATE user_ensemble_memberships SET role = 'user' WHERE role IS NULL OR role NOT IN ('user', 'admin')",
+        "UPDATE users SET role = 'superadmin' WHERE is_superadmin = TRUE",
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "UPDATE users SET role = 'manager' WHERE role = 'user' AND is_superadmin = FALSE AND EXISTS (SELECT 1 FROM user_ensemble_memberships uem WHERE uem.user_id = users.id AND uem.role = 'admin')",
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "UPDATE users SET role = 'user' WHERE role IS NULL OR role NOT IN ('superadmin', 'admin', 'manager', 'editor', 'user')",
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "UPDATE users SET is_superadmin = (role = 'superadmin')",
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "UPDATE user_ensemble_memberships SET role = 'manager' WHERE role = 'admin'",
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "UPDATE user_ensemble_memberships SET role = 'user' WHERE role IS NULL OR role NOT IN ('user', 'manager', 'editor')",
     )
     .execute(db)
     .await?;
@@ -524,6 +651,12 @@ async fn ensure_music_column(db: &PgPool, name: &str, definition: &str) -> Resul
 
 async fn ensure_user_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
     let query = format!("ALTER TABLE users ADD COLUMN IF NOT EXISTS {name} {definition}");
+    sqlx::query(&query).execute(db).await?;
+    Ok(())
+}
+
+async fn ensure_ensemble_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
+    let query = format!("ALTER TABLE ensembles ADD COLUMN IF NOT EXISTS {name} {definition}");
     sqlx::query(&query).execute(db).await?;
     Ok(())
 }
@@ -597,7 +730,7 @@ async fn backfill_music_ensemble_links(db: &PgPool) -> Result<()> {
 
 async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<UserRecord> {
     if let Some(existing) = sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at, is_superadmin FROM users WHERE is_superadmin = TRUE LIMIT 1",
+        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users WHERE role = 'superadmin' OR is_superadmin = TRUE LIMIT 1",
     )
     .fetch_optional(db)
     .await?
@@ -626,15 +759,19 @@ async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<UserR
         username,
         created_at: utc_now_string(),
         is_superadmin: true,
+        role: AppRole::Superadmin.as_str().to_owned(),
+        created_by_user_id: None,
     };
 
     sqlx::query(
-        "INSERT INTO users (id, username, created_at, is_superadmin) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO users (id, username, created_at, is_superadmin, role, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(&record.id)
     .bind(&record.username)
     .bind(&record.created_at)
     .bind(record.is_superadmin)
+    .bind(&record.role)
+    .bind(&record.created_by_user_id)
     .execute(db)
     .await?;
 
@@ -656,10 +793,13 @@ async fn admin_list_users(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<UserResponse>>, AppError> {
-    require_admin_context(&state, &headers).await?;
+    let auth = require_admin_context(&state, &headers).await?;
+    if !auth.can_list_users() {
+        return Err(AppError::unauthorized("You are not allowed to view all users"));
+    }
 
     let rows = sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at, is_superadmin FROM users ORDER BY username ASC",
+        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users ORDER BY username ASC",
     )
     .fetch_all(&state.db_rw)
     .await?;
@@ -677,9 +817,13 @@ async fn admin_create_user(
     headers: HeaderMap,
     Json(payload): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, AppError> {
-    require_admin_context(&state, &headers).await?;
+    let auth = require_admin_context(&state, &headers).await?;
+    if !auth.can_create_users() {
+        return Err(AppError::unauthorized("You are not allowed to create users"));
+    }
 
     let username = normalize_username(&payload.username)?;
+    let requested_role = resolve_creatable_user_role(&auth, payload.role.as_deref())?;
     if find_user_by_username(&state.db_rw, &username)
         .await?
         .is_some()
@@ -691,16 +835,20 @@ async fn admin_create_user(
         id: Uuid::new_v4().to_string(),
         username,
         created_at: utc_now_string(),
-        is_superadmin: false,
+        is_superadmin: requested_role == AppRole::Superadmin,
+        role: requested_role.as_str().to_owned(),
+        created_by_user_id: Some(auth.user.id.clone()),
     };
 
     sqlx::query(
-        "INSERT INTO users (id, username, created_at, is_superadmin) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO users (id, username, created_at, is_superadmin, role, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(&record.id)
     .bind(&record.username)
     .bind(&record.created_at)
     .bind(record.is_superadmin)
+    .bind(&record.role)
+    .bind(&record.created_by_user_id)
     .execute(&state.db_rw)
     .await?;
 
@@ -712,15 +860,35 @@ async fn admin_create_user_login_link(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<LoginLinkResponse>, AppError> {
-    require_admin_context(&state, &headers).await?;
+    let auth = require_admin_context(&state, &headers).await?;
 
     let user = find_user_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("User not found"))?;
+    ensure_can_generate_login_link_for_user(&auth, &user)?;
 
     Ok(Json(
         create_login_link(&state.db_rw, &state.config, &user.id).await?,
     ))
+}
+
+async fn admin_delete_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_admin_context(&state, &headers).await?;
+    let user = find_user_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("User not found"))?;
+    ensure_can_delete_user(&auth, &user)?;
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(&id)
+        .execute(&state.db_rw)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn admin_list_ensembles(
@@ -730,7 +898,7 @@ async fn admin_list_ensembles(
     let auth = require_admin_context(&state, &headers).await?;
 
     let ensembles = sqlx::query_as::<_, EnsembleRecord>(
-        "SELECT id, name, created_at FROM ensembles ORDER BY name ASC",
+        "SELECT id, name, created_at, created_by_user_id FROM ensembles ORDER BY name ASC",
     )
     .fetch_all(&state.db_rw)
     .await?;
@@ -738,7 +906,7 @@ async fn admin_list_ensembles(
     let score_counts = fetch_ensemble_score_counts(&state.db_rw).await?;
     let mut member_map: HashMap<String, Vec<EnsembleMemberResponse>> = HashMap::new();
     for membership in memberships {
-        if !auth.is_superadmin() && !auth.can_manage_ensemble(&membership.ensemble_id) {
+        if !auth.can_manage_ensemble(&membership.ensemble_id) {
             continue;
         }
         member_map
@@ -754,13 +922,16 @@ async fn admin_list_ensembles(
     Ok(Json(
         ensembles
             .into_iter()
-            .filter(|ensemble| auth.is_superadmin() || auth.can_manage_ensemble(&ensemble.id))
+            .filter(|ensemble| {
+                auth.has_global_power() || auth.can_edit_ensemble_scores(&ensemble.id)
+            })
             .map(|ensemble| AdminEnsembleResponse {
                 id: ensemble.id.clone(),
                 name: ensemble.name,
                 created_at: ensemble.created_at,
                 members: member_map.remove(&ensemble.id).unwrap_or_default(),
                 score_count: score_count_map.remove(&ensemble.id).unwrap_or(0),
+                created_by_user_id: ensemble.created_by_user_id,
             })
             .collect(),
     ))
@@ -772,7 +943,11 @@ async fn admin_create_ensemble(
     Json(payload): Json<CreateEnsembleRequest>,
 ) -> Result<Json<AdminEnsembleResponse>, AppError> {
     let auth = require_admin_context(&state, &headers).await?;
-    require_superadmin(&auth)?;
+    if !auth.can_create_ensembles() {
+        return Err(AppError::unauthorized(
+            "You are not allowed to create ensembles",
+        ));
+    }
 
     let name = normalize_name(&payload.name, "Ensemble names", 2, 64)?;
     if find_ensemble_by_name(&state.db_rw, &name).await?.is_some() {
@@ -783,14 +958,29 @@ async fn admin_create_ensemble(
         id: Uuid::new_v4().to_string(),
         name,
         created_at: utc_now_string(),
+        created_by_user_id: Some(auth.user.id.clone()),
     };
 
-    sqlx::query("INSERT INTO ensembles (id, name, created_at) VALUES ($1, $2, $3)")
+    sqlx::query(
+        "INSERT INTO ensembles (id, name, created_at, created_by_user_id) VALUES ($1, $2, $3, $4)",
+    )
         .bind(&record.id)
         .bind(&record.name)
         .bind(&record.created_at)
+        .bind(&record.created_by_user_id)
         .execute(&state.db_rw)
         .await?;
+
+    if auth.role == AppRole::Manager {
+        sqlx::query(
+            "INSERT INTO user_ensemble_memberships (user_id, ensemble_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, ensemble_id) DO UPDATE SET role = EXCLUDED.role",
+        )
+        .bind(&auth.user.id)
+        .bind(&record.id)
+        .bind(EnsembleRole::Manager.as_str())
+        .execute(&state.db_rw)
+        .await?;
+    }
 
     Ok(Json(AdminEnsembleResponse {
         id: record.id,
@@ -798,7 +988,48 @@ async fn admin_create_ensemble(
         created_at: record.created_at,
         members: Vec::new(),
         score_count: 0,
+        created_by_user_id: record.created_by_user_id,
     }))
+}
+
+async fn admin_delete_ensemble(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let auth = require_admin_context(&state, &headers).await?;
+    if id == DEFAULT_ENSEMBLE_ID {
+        return Err(AppError::bad_request("The default ensemble cannot be deleted"));
+    }
+
+    let ensemble = find_ensemble_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Ensemble not found"))?;
+    ensure_can_delete_ensemble(&auth, &ensemble)?;
+
+    let orphan_music_ids = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT mel.music_id
+        FROM music_ensemble_links mel
+        WHERE mel.ensemble_id = $1
+        GROUP BY mel.music_id
+        HAVING COUNT(*) FILTER (WHERE mel.ensemble_id <> $1) = 0
+        "#,
+    )
+    .bind(&id)
+    .fetch_all(&state.db_rw)
+    .await?;
+
+    sqlx::query("DELETE FROM ensembles WHERE id = $1")
+        .bind(&id)
+        .execute(&state.db_rw)
+        .await?;
+
+    for music_id in orphan_music_ids {
+        delete_music_record_and_assets(&state, &music_id).await?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn admin_add_user_to_ensemble(
@@ -808,22 +1039,17 @@ async fn admin_add_user_to_ensemble(
     Json(payload): Json<UpdateEnsembleMemberRequest>,
 ) -> Result<StatusCode, AppError> {
     let auth = require_admin_context(&state, &headers).await?;
-    ensure_membership_entities_exist(&state.db_rw, &id, &user_id).await?;
+    let target_user = ensure_membership_entities_exist(&state.db_rw, &id, &user_id).await?;
     ensure_can_manage_ensemble(&auth, &id)?;
 
-    let role = payload.role.trim();
-    if role != "user" && role != "admin" {
-        return Err(AppError::bad_request(
-            "Membership role must be either 'user' or 'admin'",
-        ));
-    }
+    let role = validate_target_membership_role(&auth, &target_user, payload.role.trim())?;
 
     sqlx::query(
         "INSERT INTO user_ensemble_memberships (user_id, ensemble_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, ensemble_id) DO UPDATE SET role = EXCLUDED.role",
     )
     .bind(&user_id)
     .bind(&id)
-    .bind(role)
+    .bind(role.as_str())
     .execute(&state.db_rw)
     .await?;
 
@@ -837,6 +1063,10 @@ async fn admin_remove_user_from_ensemble(
 ) -> Result<StatusCode, AppError> {
     let auth = require_admin_context(&state, &headers).await?;
     ensure_can_manage_ensemble(&auth, &id)?;
+    let target_user = find_user_by_id(&state.db_rw, &user_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("User not found"))?;
+    ensure_can_remove_member_from_ensemble(&auth, &target_user)?;
 
     sqlx::query("DELETE FROM user_ensemble_memberships WHERE user_id = $1 AND ensemble_id = $2")
         .bind(&user_id)
@@ -919,7 +1149,7 @@ async fn fetch_stems_total(db: &PgPool, music_id: &str) -> i64 {
 
 async fn find_ensemble_by_id(db: &PgPool, id: &str) -> Result<Option<EnsembleRecord>, AppError> {
     Ok(sqlx::query_as::<_, EnsembleRecord>(
-        "SELECT id, name, created_at FROM ensembles WHERE id = $1",
+        "SELECT id, name, created_at, created_by_user_id FROM ensembles WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(db)
@@ -931,7 +1161,7 @@ async fn find_ensemble_by_name(
     name: &str,
 ) -> Result<Option<EnsembleRecord>, AppError> {
     Ok(sqlx::query_as::<_, EnsembleRecord>(
-        "SELECT id, name, created_at FROM ensembles WHERE name = $1",
+        "SELECT id, name, created_at, created_by_user_id FROM ensembles WHERE name = $1",
     )
     .bind(name)
     .fetch_optional(db)
@@ -1033,7 +1263,7 @@ async fn ensemble_metadata_for_music(
 
 async fn find_user_by_id(db: &PgPool, id: &str) -> Result<Option<UserRecord>, AppError> {
     Ok(sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at, is_superadmin FROM users WHERE id = $1",
+        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(db)
@@ -1045,7 +1275,7 @@ async fn find_user_by_username(
     username: &str,
 ) -> Result<Option<UserRecord>, AppError> {
     Ok(sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at, is_superadmin FROM users WHERE username = $1",
+        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users WHERE username = $1",
     )
     .bind(username)
     .fetch_optional(db)
@@ -1103,19 +1333,18 @@ async fn build_auth_context(
         .await?
         .into_iter()
         .collect::<HashSet<_>>();
-    let role = if user.is_superadmin {
-        AppRole::Superadmin
-    } else if managed_ensemble_ids.is_empty() {
-        AppRole::User
-    } else {
-        AppRole::Admin
-    };
+    let editable_ensemble_ids = fetch_editable_ensemble_ids(&state.db_rw, &user.id)
+        .await?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let role = parse_global_role(&user.role)?;
 
     Ok(AuthContext {
         user,
         session,
         role,
         managed_ensemble_ids,
+        editable_ensemble_ids,
         access_token_exp,
     })
 }
@@ -1125,19 +1354,199 @@ async fn require_admin_context(
     headers: &HeaderMap,
 ) -> Result<AuthContext, AppError> {
     let auth = build_auth_context(state, headers).await?;
-    if !auth.is_admin() {
-        return Err(AppError::unauthorized("Admin access is required"));
+    if !auth.can_access_control_room() {
+        return Err(AppError::unauthorized("Privileged access is required"));
     }
     Ok(auth)
 }
 
-fn require_superadmin(auth: &AuthContext) -> Result<(), AppError> {
-    if auth.is_superadmin() {
+fn parse_global_role(value: &str) -> Result<AppRole, AppError> {
+    AppRole::from_str(value)
+        .ok_or_else(|| AppError::bad_request("Unknown global role configured for user"))
+}
+
+fn resolve_creatable_user_role(
+    auth: &AuthContext,
+    requested_role: Option<&str>,
+) -> Result<AppRole, AppError> {
+    let requested = requested_role
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("user");
+    let role = parse_global_role(requested)?;
+
+    match auth.role {
+        AppRole::Superadmin | AppRole::Admin => match role {
+            AppRole::Admin | AppRole::Manager | AppRole::Editor | AppRole::User => Ok(role),
+            AppRole::Superadmin => Err(AppError::bad_request(
+                "The seeded superadmin account cannot be created from the UI",
+            )),
+        },
+        AppRole::Manager => {
+            if role == AppRole::User {
+                Ok(role)
+            } else {
+                Err(AppError::unauthorized(
+                    "Managers can only create standard users",
+                ))
+            }
+        }
+        AppRole::Editor | AppRole::User => Err(AppError::unauthorized(
+            "You are not allowed to create users",
+        )),
+    }
+}
+
+fn ensure_can_generate_login_link_for_user(
+    auth: &AuthContext,
+    target_user: &UserRecord,
+) -> Result<(), AppError> {
+    match auth.role {
+        AppRole::Superadmin | AppRole::Admin => Ok(()),
+        AppRole::Manager => {
+            if target_user.created_by_user_id.as_deref() == Some(auth.user.id.as_str()) {
+                Ok(())
+            } else {
+                Err(AppError::unauthorized(
+                    "Managers can only create login links for users they created",
+                ))
+            }
+        }
+        AppRole::Editor | AppRole::User => Err(AppError::unauthorized(
+            "You are not allowed to create login links for other users",
+        )),
+    }
+}
+
+fn validate_target_membership_role(
+    auth: &AuthContext,
+    target_user: &UserRecord,
+    requested_role: &str,
+) -> Result<EnsembleRole, AppError> {
+    let target_role = parse_global_role(&target_user.role)?;
+    let membership_role = EnsembleRole::from_str(requested_role).ok_or_else(|| {
+        AppError::bad_request("Membership role must be 'manager', 'editor', or 'user'")
+    })?;
+
+    match target_role {
+        AppRole::Superadmin | AppRole::Admin => Err(AppError::bad_request(
+            "Admins and superadmins cannot be assigned per-ensemble memberships",
+        )),
+        AppRole::Manager => {
+            if auth.role == AppRole::Manager {
+                return Err(AppError::unauthorized(
+                    "Managers cannot add or update other managers on ensembles",
+                ));
+            }
+            Ok(membership_role)
+        }
+        AppRole::Editor => match membership_role {
+            EnsembleRole::Editor | EnsembleRole::User => Ok(membership_role),
+            EnsembleRole::Manager => Err(AppError::bad_request(
+                "Editors can only be assigned as editors or users on ensembles",
+            )),
+        },
+        AppRole::User => match membership_role {
+            EnsembleRole::User => Ok(membership_role),
+            EnsembleRole::Editor | EnsembleRole::Manager => Err(AppError::bad_request(
+                "Standard users can only be assigned as users on ensembles",
+            )),
+        },
+    }
+}
+
+fn ensure_can_remove_member_from_ensemble(
+    auth: &AuthContext,
+    target_user: &UserRecord,
+) -> Result<(), AppError> {
+    let target_role = parse_global_role(&target_user.role)?;
+    if auth.role == AppRole::Manager && target_role == AppRole::Manager {
+        return Err(AppError::unauthorized(
+            "Managers cannot remove other managers from ensembles",
+        ));
+    }
+    if matches!(target_role, AppRole::Superadmin | AppRole::Admin) {
+        return Err(AppError::bad_request(
+            "Admins and superadmins do not use per-ensemble memberships",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_can_upload_to_ensemble(auth: &AuthContext, ensemble_id: &str) -> Result<(), AppError> {
+    if auth.can_edit_ensemble_scores(ensemble_id) {
         Ok(())
     } else {
         Err(AppError::unauthorized(
-            "Only the superadmin can perform this action",
+            "You can only add scores to ensembles where you have editor access",
         ))
+    }
+}
+
+fn ensure_can_delete_ensemble(auth: &AuthContext, ensemble: &EnsembleRecord) -> Result<(), AppError> {
+    if auth.has_global_power()
+        || ensemble.created_by_user_id.as_deref() == Some(auth.user.id.as_str())
+        || auth.can_manage_ensemble(&ensemble.id)
+    {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized(
+            "You can only delete ensembles that you created or manage",
+        ))
+    }
+}
+
+fn ensure_can_delete_music(auth: &AuthContext, record: &MusicRecord) -> Result<(), AppError> {
+    if auth.has_global_power()
+        || record.owner_user_id.as_deref() == Some(auth.user.id.as_str())
+    {
+        Ok(())
+    } else {
+        Err(AppError::unauthorized(
+            "You can only delete scores that you own",
+        ))
+    }
+}
+
+fn ensure_can_delete_user(auth: &AuthContext, target_user: &UserRecord) -> Result<(), AppError> {
+    let target_role = parse_global_role(&target_user.role)?;
+    if target_user.id == auth.user.id {
+        return Err(AppError::bad_request("You cannot delete your own account"));
+    }
+
+    match auth.role {
+        AppRole::Superadmin => {
+            if target_role == AppRole::Superadmin {
+                Err(AppError::bad_request(
+                    "The seeded superadmin account cannot be removed",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        AppRole::Admin => {
+            if matches!(target_role, AppRole::Admin | AppRole::Superadmin) {
+                Err(AppError::unauthorized(
+                    "Admins cannot remove other admins or the superadmin",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        AppRole::Manager => {
+            if target_user.created_by_user_id.as_deref() == Some(auth.user.id.as_str())
+                && target_role == AppRole::User
+            {
+                Ok(())
+            } else {
+                Err(AppError::unauthorized(
+                    "Managers can only remove standard users they created",
+                ))
+            }
+        }
+        AppRole::Editor | AppRole::User => Err(AppError::unauthorized(
+            "You are not allowed to delete users",
+        )),
     }
 }
 
@@ -1146,14 +1555,23 @@ fn ensure_can_manage_ensemble(auth: &AuthContext, ensemble_id: &str) -> Result<(
         Ok(())
     } else {
         Err(AppError::unauthorized(
-            "You can only manage ensembles where you are an admin",
+            "You can only manage ensembles where you are a manager",
         ))
     }
 }
 
 async fn fetch_managed_ensemble_ids(db: &PgPool, user_id: &str) -> Result<Vec<String>, AppError> {
     Ok(sqlx::query_scalar::<_, String>(
-        "SELECT ensemble_id FROM user_ensemble_memberships WHERE user_id = $1 AND role = 'admin' ORDER BY ensemble_id ASC",
+        "SELECT ensemble_id FROM user_ensemble_memberships WHERE user_id = $1 AND role = 'manager' ORDER BY ensemble_id ASC",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?)
+}
+
+async fn fetch_editable_ensemble_ids(db: &PgPool, user_id: &str) -> Result<Vec<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT ensemble_id FROM user_ensemble_memberships WHERE user_id = $1 AND role IN ('manager', 'editor') ORDER BY ensemble_id ASC",
     )
     .bind(user_id)
     .fetch_all(db)
@@ -1165,13 +1583,8 @@ async fn user_record_to_response(
     record: UserRecord,
 ) -> Result<UserResponse, AppError> {
     let managed_ensemble_ids = fetch_managed_ensemble_ids(db, &record.id).await?;
-    let role = if record.is_superadmin {
-        AppRole::Superadmin
-    } else if managed_ensemble_ids.is_empty() {
-        AppRole::User
-    } else {
-        AppRole::Admin
-    };
+    let editable_ensemble_ids = fetch_editable_ensemble_ids(db, &record.id).await?;
+    let role = parse_global_role(&record.role)?;
 
     Ok(UserResponse {
         id: record.id,
@@ -1179,6 +1592,8 @@ async fn user_record_to_response(
         created_at: record.created_at,
         role: role.as_str().to_owned(),
         managed_ensemble_ids,
+        editable_ensemble_ids,
+        created_by_user_id: record.created_by_user_id,
     })
 }
 
@@ -1189,6 +1604,12 @@ fn auth_context_to_user_response(auth: &AuthContext) -> UserResponse {
         .cloned()
         .collect::<Vec<_>>();
     managed_ensemble_ids.sort();
+    let mut editable_ensemble_ids = auth
+        .editable_ensemble_ids
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    editable_ensemble_ids.sort();
 
     UserResponse {
         id: auth.user.id.clone(),
@@ -1196,15 +1617,24 @@ fn auth_context_to_user_response(auth: &AuthContext) -> UserResponse {
         created_at: auth.user.created_at.clone(),
         role: auth.role.as_str().to_owned(),
         managed_ensemble_ids,
+        editable_ensemble_ids,
+        created_by_user_id: auth.user.created_by_user_id.clone(),
     }
 }
 
-async fn can_manage_music(
+async fn can_view_music_in_control_room(
     db: &PgPool,
     auth: &AuthContext,
     music_id: &str,
 ) -> Result<bool, AppError> {
-    if auth.is_superadmin() {
+    if auth.has_global_power() {
+        return Ok(true);
+    }
+
+    let record = find_music_by_id(db, music_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+    if record.owner_user_id.as_deref() == Some(auth.user.id.as_str()) {
         return Ok(true);
     }
 
@@ -1215,7 +1645,22 @@ async fn can_manage_music(
 
     Ok(ensemble_ids
         .iter()
-        .all(|ensemble_id| auth.managed_ensemble_ids.contains(ensemble_id)))
+        .any(|ensemble_id| auth.editable_ensemble_ids.contains(ensemble_id)))
+}
+
+async fn can_manage_owned_music(
+    db: &PgPool,
+    auth: &AuthContext,
+    music_id: &str,
+) -> Result<bool, AppError> {
+    if auth.has_global_power() {
+        return Ok(true);
+    }
+
+    let record = find_music_by_id(db, music_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+    Ok(record.owner_user_id.as_deref() == Some(auth.user.id.as_str()))
 }
 
 async fn ensure_can_manage_music(
@@ -1223,11 +1668,11 @@ async fn ensure_can_manage_music(
     auth: &AuthContext,
     music_id: &str,
 ) -> Result<(), AppError> {
-    if can_manage_music(db, auth, music_id).await? {
+    if can_manage_owned_music(db, auth, music_id).await? {
         Ok(())
     } else {
         Err(AppError::unauthorized(
-            "You can only manage scores for ensembles you administer",
+            "You can only change score metadata for scores you own",
         ))
     }
 }
@@ -1252,8 +1697,40 @@ async fn ensure_can_manage_music_and_target_ensemble(
     music_id: &str,
     ensemble_id: &str,
 ) -> Result<(), AppError> {
-    ensure_can_manage_ensemble(auth, ensemble_id)?;
-    ensure_can_manage_music(db, auth, music_id).await
+    if auth.has_global_power() {
+        return Ok(());
+    }
+
+    match auth.role {
+        AppRole::Manager => {
+            ensure_can_manage_ensemble(auth, ensemble_id)?;
+            if can_view_music_in_control_room(db, auth, music_id).await? {
+                Ok(())
+            } else {
+                Err(AppError::unauthorized(
+                    "You can only manage scores that belong to ensembles you manage",
+                ))
+            }
+        }
+        AppRole::Editor => {
+            if !auth.can_edit_ensemble_scores(ensemble_id) {
+                return Err(AppError::unauthorized(
+                    "You can only manage scores for ensembles where you are an editor",
+                ));
+            }
+            if can_manage_owned_music(db, auth, music_id).await? {
+                Ok(())
+            } else {
+                Err(AppError::unauthorized(
+                    "Editors can only change scores they added themselves",
+                ))
+            }
+        }
+        AppRole::User => Err(AppError::unauthorized(
+            "You do not have access to manage scores",
+        )),
+        AppRole::Superadmin | AppRole::Admin => Ok(()),
+    }
 }
 
 async fn create_login_link(
@@ -1303,7 +1780,7 @@ async fn find_accessible_music_for_user(
 ) -> Result<Vec<(MusicRecord, String, String)>, AppError> {
     Ok(sqlx::query_as::<_, UserAccessibleMusicRow>(
         r#"
-            SELECT DISTINCT m.id, m.title, m.icon, m.icon_image_key, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, mel.ensemble_id, e.name AS ensemble_name
+            SELECT DISTINCT m.id, m.title, m.icon, m.icon_image_key, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, m.owner_user_id, mel.ensemble_id, e.name AS ensemble_name
         FROM musics m
         JOIN music_ensemble_links mel ON mel.music_id = m.id
         JOIN user_ensemble_memberships uem ON uem.ensemble_id = mel.ensemble_id
@@ -1341,6 +1818,7 @@ async fn find_accessible_music_for_user(
                 public_id: row.public_id,
                 quality_profile: row.quality_profile,
                 created_at: row.created_at,
+                owner_user_id: row.owner_user_id,
             },
             row.ensemble_id,
             row.ensemble_name,
@@ -1373,6 +1851,7 @@ struct UserAccessibleMusicRow {
     public_id: Option<String>,
     quality_profile: String,
     created_at: String,
+    owner_user_id: Option<String>,
     ensemble_id: String,
     ensemble_name: String,
 }
@@ -1433,7 +1912,7 @@ async fn admin_list_musics(
 
     let rows = sqlx::query_as::<_, MusicRecord>(
         r#"
-        SELECT id, title, icon, icon_image_key, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
+        SELECT id, title, icon, icon_image_key, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at, owner_user_id
         FROM musics
         ORDER BY created_at DESC
         "#,
@@ -1457,7 +1936,7 @@ async fn admin_list_musics(
 
     let mut visible_items = Vec::new();
     for record in rows {
-        if auth.is_superadmin() || can_manage_music(&state.db_rw, &auth, &record.id).await? {
+        if can_view_music_in_control_room(&state.db_rw, &auth, &record.id).await? {
             let total = totals.get(&record.id).copied().unwrap_or(0);
             let ensemble_ids = music_ensemble_ids.remove(&record.id).unwrap_or_default();
             let ensemble_names = music_ensemble_names.remove(&record.id).unwrap_or_default();
@@ -1553,7 +2032,7 @@ async fn admin_upload_music(
     {
         return Err(AppError::not_found("Ensemble not found"));
     }
-    ensure_can_manage_ensemble(&auth, &ensemble_id)?;
+    ensure_can_upload_to_ensemble(&auth, &ensemble_id)?;
 
     let music_id = Uuid::new_v4().to_string();
     let public_token = generate_public_token();
@@ -1628,8 +2107,8 @@ async fn admin_upload_music(
     let created_at = chrono::Utc::now().to_rfc3339();
     sqlx::query(
         r#"
-        INSERT INTO musics (id, title, icon, icon_image_key, filename, content_type, object_key, public_token, public_id, quality_profile, created_at, directory_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        INSERT INTO musics (id, title, icon, icon_image_key, filename, content_type, object_key, public_token, public_id, quality_profile, created_at, directory_id, owner_user_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         "#,
     )
     .bind(&music_id)
@@ -1644,6 +2123,7 @@ async fn admin_upload_music(
     .bind(quality_profile.as_str())
     .bind(&created_at)
     .bind(&ensemble_id)
+    .bind(&auth.user.id)
     .execute(&state.db_rw)
     .await?;
     sqlx::query("INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2)")
@@ -1713,6 +2193,7 @@ async fn admin_upload_music(
         public_id,
         quality_profile: quality_profile.as_str().to_owned(),
         created_at,
+        owner_user_id: Some(auth.user.id.clone()),
     };
 
     let stems_total = fetch_stems_total(&state.db_rw, &record.id).await;
@@ -2086,7 +2567,7 @@ async fn admin_move_music(
     if ensemble_id.is_empty() {
         return Err(AppError::bad_request("Choose a target ensemble"));
     }
-    ensure_can_manage_ensemble(&auth, ensemble_id)?;
+    ensure_can_upload_to_ensemble(&auth, ensemble_id)?;
     if find_ensemble_by_id(&state.db_rw, ensemble_id)
         .await?
         .is_none()
@@ -2133,15 +2614,24 @@ async fn admin_delete_music(
     let record = find_music_by_id(&state.db_rw, &id)
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
-    ensure_can_manage_music(&state.db_rw, &auth, &id).await?;
-    let stems = find_public_stems(&state.db_rw, &state.db_rw, &id).await?;
+    ensure_can_delete_music(&auth, &record)?;
+    delete_music_record_and_assets(&state, &id).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_music_record_and_assets(state: &AppState, music_id: &str) -> Result<(), AppError> {
+    let record = find_music_by_id(&state.db_rw, music_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+    let stems = find_public_stems(&state.db_rw, &state.db_rw, music_id).await?;
 
     sqlx::query("DELETE FROM stems WHERE music_id = $1")
-        .bind(&id)
+        .bind(music_id)
         .execute(&state.db_rw)
         .await?;
     sqlx::query("DELETE FROM musics WHERE id = $1")
-        .bind(&id)
+        .bind(music_id)
         .execute(&state.db_rw)
         .await?;
 
@@ -2165,7 +2655,7 @@ async fn admin_delete_music(
         }
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 async fn public_music(
@@ -2372,10 +2862,10 @@ async fn current_user_library(
     headers: HeaderMap,
 ) -> Result<Json<UserLibraryResponse>, AppError> {
     let auth = build_auth_context(&state, &headers).await?;
-    let music_entries = if auth.is_superadmin() {
+    let music_entries = if auth.has_global_power() {
         let rows = sqlx::query_as::<_, UserAccessibleMusicRow>(
             r#"
-                SELECT m.id, m.title, m.icon, m.icon_image_key, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, mel.ensemble_id, e.name AS ensemble_name
+                SELECT m.id, m.title, m.icon, m.icon_image_key, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, m.owner_user_id, mel.ensemble_id, e.name AS ensemble_name
             FROM musics m
             JOIN music_ensemble_links mel ON mel.music_id = m.id
             JOIN ensembles e ON e.id = mel.ensemble_id
@@ -2410,6 +2900,7 @@ async fn current_user_library(
                         public_id: row.public_id,
                         quality_profile: row.quality_profile,
                         created_at: row.created_at,
+                        owner_user_id: row.owner_user_id,
                     },
                     row.ensemble_id,
                     row.ensemble_name,
@@ -2496,7 +2987,7 @@ async fn ensure_public_id_available(
 async fn find_music_by_id(db: &PgPool, id: &str) -> Result<Option<MusicRecord>> {
     Ok(sqlx::query_as::<_, MusicRecord>(
         r#"
-        SELECT id, title, icon, icon_image_key, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
+        SELECT id, title, icon, icon_image_key, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at, owner_user_id
         FROM musics
         WHERE id = $1
         "#,
@@ -2509,7 +3000,7 @@ async fn find_music_by_id(db: &PgPool, id: &str) -> Result<Option<MusicRecord>> 
 async fn find_music_by_access_key(db: &PgPool, access_key: &str) -> Result<Option<MusicRecord>> {
     Ok(sqlx::query_as::<_, MusicRecord>(
         r#"
-        SELECT id, title, icon, icon_image_key, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at
+        SELECT id, title, icon, icon_image_key, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at, owner_user_id
         FROM musics
         WHERE public_token = $1 OR public_id = $2
         LIMIT 1
@@ -2574,6 +3065,7 @@ fn record_to_admin_response(
         stems_total_bytes,
         ensemble_ids,
         ensemble_names,
+        owner_user_id: record.owner_user_id,
     }
 }
 
@@ -2874,14 +3366,13 @@ async fn ensure_membership_entities_exist(
     db: &PgPool,
     ensemble_id: &str,
     user_id: &str,
-) -> Result<(), AppError> {
+) -> Result<UserRecord, AppError> {
     if find_ensemble_by_id(db, ensemble_id).await?.is_none() {
         return Err(AppError::not_found("Ensemble not found"));
     }
-    if find_user_by_id(db, user_id).await?.is_none() {
-        return Err(AppError::not_found("User not found"));
-    }
-    Ok(())
+    find_user_by_id(db, user_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("User not found"))
 }
 
 fn sanitize_filename(filename: &str) -> String {

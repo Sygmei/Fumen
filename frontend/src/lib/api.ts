@@ -22,21 +22,28 @@ export type AdminMusic = {
   stems_total_bytes: number
   ensemble_ids: string[]
   ensemble_names: string[]
+  owner_user_id: string | null
 }
 
 export type StemQualityProfile = 'standard' | 'small' | 'very-small' | 'tiny'
+
+export type GlobalRole = 'superadmin' | 'admin' | 'manager' | 'editor' | 'user'
+
+export type EnsembleRole = 'manager' | 'editor' | 'user'
 
 export type AppUser = {
   id: string
   username: string
   created_at: string
-  role: 'superadmin' | 'admin' | 'user'
+  role: GlobalRole
   managed_ensemble_ids: string[]
+  editable_ensemble_ids: string[]
+  created_by_user_id: string | null
 }
 
 export type EnsembleMember = {
   user_id: string
-  role: 'admin' | 'user'
+  role: EnsembleRole
 }
 
 export type Ensemble = {
@@ -45,6 +52,7 @@ export type Ensemble = {
   created_at: string
   members: EnsembleMember[]
   score_count: number
+  created_by_user_id: string | null
 }
 
 export type LoginLinkResponse = {
@@ -424,11 +432,21 @@ export async function listUsers(): Promise<AppUser[]> {
   })
 }
 
-export async function createUser(username: string): Promise<AppUser> {
+export async function createUser(
+  username: string,
+  role?: Exclude<GlobalRole, 'superadmin'>,
+): Promise<AppUser> {
   return requestJson<AppUser>('/admin/users', {
     method: 'POST',
     authenticated: true,
-    body: JSON.stringify({ username }),
+    body: JSON.stringify({ username, role: role ?? 'user' }),
+  })
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  await requestJson(`/admin/users/${id}`, {
+    method: 'DELETE',
+    authenticated: true,
   })
 }
 
@@ -455,10 +473,17 @@ export async function createEnsemble(name: string): Promise<Ensemble> {
   })
 }
 
+export async function deleteEnsemble(id: string): Promise<void> {
+  await requestJson(`/admin/ensembles/${id}`, {
+    method: 'DELETE',
+    authenticated: true,
+  })
+}
+
 export async function addUserToEnsemble(
   ensembleId: string,
   userId: string,
-  role: 'admin' | 'user',
+  role: EnsembleRole,
 ): Promise<void> {
   await requestJson(`/admin/ensembles/${ensembleId}/users/${userId}`, {
     method: 'POST',
