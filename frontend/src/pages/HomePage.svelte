@@ -2,6 +2,7 @@
     import ScoreIcon from "../components/ScoreIcon.svelte";
     import type { AppUser, UserLibraryEnsemble } from "../lib/api";
     import TopBar from "../components/TopBar.svelte";
+    import { QrCode } from '@lucide/svelte';
 
     let {
         routeKind,
@@ -191,45 +192,7 @@
                                 class="button landing-cta"
                                 onclick={() => onOpenScanner()}
                             >
-                                <svg
-                                    width="18"
-                                    height="18"
-                                    viewBox="0 0 18 18"
-                                    fill="none"
-                                    aria-hidden="true"
-                                >
-                                    <rect
-                                        x="1"
-                                        y="1"
-                                        width="5"
-                                        height="5"
-                                        rx="0.75"
-                                        stroke="currentColor"
-                                        stroke-width="1.5"
-                                    />
-                                    <rect
-                                        x="12"
-                                        y="1"
-                                        width="5"
-                                        height="5"
-                                        rx="0.75"
-                                        stroke="currentColor"
-                                        stroke-width="1.5"
-                                    />
-                                    <rect
-                                        x="1"
-                                        y="12"
-                                        width="5"
-                                        height="5"
-                                        rx="0.75"
-                                        stroke="currentColor"
-                                        stroke-width="1.5"
-                                    />
-                                    <path
-                                        d="M12 12h2v2h-2zM14 14h2v2h-2zM16 12h1v1h-1zM12 14h1v3h-1zM14 16h3v1h-3z"
-                                        fill="currentColor"
-                                    />
-                                </svg>
+                                <QrCode size={18} aria-hidden="true" />
                                 {connectionBusy
                                     ? "Opening camera..."
                                     : "Scan QR code"}

@@ -1,25 +1,31 @@
 <script lang="ts">
     import type { Snippet } from "svelte";
+    import { X } from "@lucide/svelte";
 
     type ModalSize = "small" | "medium" | "large" | "full";
 
     const {
         onClose,
         children,
-        header,
         footer,
+        title,
+        subtitle,
+        canClose = true,
         size = "small",
         cardClass = "",
-        labelledBy,
     }: {
         onClose: () => void;
-        children: Snippet;
-        header?: Snippet;
+        children?: Snippet;
         footer?: Snippet;
+        title?: string;
+        subtitle?: string;
+        canClose?: boolean;
         size?: ModalSize;
         cardClass?: string;
-        labelledBy?: string;
     } = $props();
+
+    const hasHeader = $derived(!!(title || subtitle));
+    const bodyless = $derived(!children);
 
     function handleBackdropClick(event: MouseEvent) {
         if (event.target === event.currentTarget) {
@@ -37,20 +43,37 @@
     onkeydown={(event) => event.key === "Escape" && onClose()}
 >
     <div
-        class={`modal-card modal-card--${size} ${header ? "modal-card--with-header" : ""} ${footer ? "modal-card--with-footer" : ""} ${cardClass}`.trim()}
+        class={`modal-card modal-card--${size} ${hasHeader ? "modal-card--with-header" : ""} ${footer ? "modal-card--with-footer" : ""} ${bodyless ? "modal-card--bodyless" : ""} ${cardClass}`.trim()}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={labelledBy}
+        aria-labelledby={hasHeader ? "modal-title" : undefined}
         tabindex="-1"
     >
-        {#if header}
+        {#if hasHeader}
             <div class="modal-header">
-                {@render header()}
+                <div class="card-header modal-card-header-row">
+                    <div>
+                        {#if title}<p class="meta-label">{title}</p>{/if}
+                        {#if subtitle}<h2 id="modal-title">{subtitle}</h2>{/if}
+                    </div>
+                    {#if canClose}
+                        <button
+                            class="button ghost admin-modal-close"
+                            type="button"
+                            aria-label="Close modal"
+                            onclick={onClose}
+                        >
+                            <X size={16} aria-hidden="true" />
+                        </button>
+                    {/if}
+                </div>
             </div>
         {/if}
+        {#if children}
         <div class="modal-main">
             {@render children()}
         </div>
+        {/if}
         {#if footer}
             <div class="modal-footer">
                 {@render footer()}
@@ -58,3 +81,9 @@
         {/if}
     </div>
 </div>
+
+<style>
+    .modal-card-header-row {
+        align-items: flex-start;
+    }
+</style>

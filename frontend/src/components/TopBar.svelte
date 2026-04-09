@@ -1,5 +1,6 @@
 <script lang="ts">
     import type { AppUser } from "../lib/api";
+    import { Menu, LayoutGrid, User, QrCode, House, LogOut } from '@lucide/svelte';
 
     let {
         breadcrumbs,
@@ -113,21 +114,7 @@
                     aria-label={mobileMenuAriaLabel}
                     title={mobileMenuAriaLabel}
                 >
-                    <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                    >
-                        <path d="M4 7h16" />
-                        <path d="M4 12h16" />
-                        <path d="M4 17h16" />
-                    </svg>
+                    <Menu size={18} aria-hidden="true" />
                 </button>
 
                 {#if mobileMenuOpen}
@@ -168,52 +155,7 @@
                 title="Admin panel"
                 aria-label="Admin panel"
             >
-                <!-- 2×2 grid icon -->
-                <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 18 18"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                    aria-hidden="true"
-                >
-                    <rect
-                        x="1"
-                        y="1"
-                        width="6"
-                        height="6"
-                        rx="1"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                    />
-                    <rect
-                        x="11"
-                        y="1"
-                        width="6"
-                        height="6"
-                        rx="1"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                    />
-                    <rect
-                        x="1"
-                        y="11"
-                        width="6"
-                        height="6"
-                        rx="1"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                    />
-                    <rect
-                        x="11"
-                        y="11"
-                        width="6"
-                        height="6"
-                        rx="1"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                    />
-                </svg>
+                <LayoutGrid size={18} aria-hidden="true" />
             </a>
         {/if}
 
@@ -228,28 +170,7 @@
                     title="User menu"
                 >
                     <!-- Person icon -->
-                    <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 18 18"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
-                        aria-hidden="true"
-                    >
-                        <circle
-                            cx="9"
-                            cy="5.5"
-                            r="2.5"
-                            stroke="currentColor"
-                            stroke-width="1.5"
-                        />
-                        <path
-                            d="M3 15.5c0-3.314 2.686-5.5 6-5.5s6 2.186 6 5.5"
-                            stroke="currentColor"
-                            stroke-width="1.5"
-                            stroke-linecap="round"
-                        />
-                    </svg>
+                    <User size={18} aria-hidden="true" />
                 </button>
 
                 {#if menuOpen}
@@ -276,66 +197,7 @@
                                 onclick={handleShowQr}
                             >
                                 <!-- QR icon -->
-                                <svg
-                                    width="15"
-                                    height="15"
-                                    viewBox="0 0 15 15"
-                                    fill="none"
-                                    aria-hidden="true"
-                                >
-                                    <rect
-                                        x="1"
-                                        y="1"
-                                        width="5"
-                                        height="5"
-                                        rx="0.5"
-                                        stroke="currentColor"
-                                        stroke-width="1.3"
-                                    />
-                                    <rect
-                                        x="9"
-                                        y="1"
-                                        width="5"
-                                        height="5"
-                                        rx="0.5"
-                                        stroke="currentColor"
-                                        stroke-width="1.3"
-                                    />
-                                    <rect
-                                        x="1"
-                                        y="9"
-                                        width="5"
-                                        height="5"
-                                        rx="0.5"
-                                        stroke="currentColor"
-                                        stroke-width="1.3"
-                                    />
-                                    <rect
-                                        x="2.5"
-                                        y="2.5"
-                                        width="2"
-                                        height="2"
-                                        fill="currentColor"
-                                    />
-                                    <rect
-                                        x="10.5"
-                                        y="2.5"
-                                        width="2"
-                                        height="2"
-                                        fill="currentColor"
-                                    />
-                                    <rect
-                                        x="2.5"
-                                        y="10.5"
-                                        width="2"
-                                        height="2"
-                                        fill="currentColor"
-                                    />
-                                    <path
-                                        d="M9 9h2v2H9zM11 11h2v2h-2zM13 9h1v1h-1zM9 11h1v3H9zM11 13h3v1h-3z"
-                                        fill="currentColor"
-                                    />
-                                </svg>
+                                <QrCode size={15} aria-hidden="true" />
                                 Log in on another device
                             </button>
                         {/if}
@@ -347,20 +209,7 @@
                                 onclick={closeMenu}
                             >
                                 <!-- House icon -->
-                                <svg
-                                    width="15"
-                                    height="15"
-                                    viewBox="0 0 15 15"
-                                    fill="none"
-                                    aria-hidden="true"
-                                >
-                                    <path
-                                        d="M1.5 6.5L7.5 1.5L13.5 6.5V13.5H9.5V9.5H5.5V13.5H1.5V6.5Z"
-                                        stroke="currentColor"
-                                        stroke-width="1.3"
-                                        stroke-linejoin="round"
-                                    />
-                                </svg>
+                                <House size={15} aria-hidden="true" />
                                 User homepage
                             </a>
                         {/if}
@@ -371,34 +220,7 @@
                                 onclick={handleLogout}
                             >
                                 <!-- Sign-out arrow icon -->
-                                <svg
-                                    width="15"
-                                    height="15"
-                                    viewBox="0 0 15 15"
-                                    fill="none"
-                                    aria-hidden="true"
-                                >
-                                    <path
-                                        d="M5.5 2.5H2.5V12.5H5.5"
-                                        stroke="currentColor"
-                                        stroke-width="1.3"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                    />
-                                    <path
-                                        d="M10.5 5L13.5 7.5L10.5 10"
-                                        stroke="currentColor"
-                                        stroke-width="1.3"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                    />
-                                    <path
-                                        d="M13.5 7.5H6.5"
-                                        stroke="currentColor"
-                                        stroke-width="1.3"
-                                        stroke-linecap="round"
-                                    />
-                                </svg>
+                                <LogOut size={15} aria-hidden="true" />
                                 Sign out
                             </button>
                         {/if}
@@ -550,7 +372,7 @@
         text-align: left;
     }
 
-    .topbar-dropdown-item svg {
+    .topbar-dropdown-item :global(svg) {
         flex-shrink: 0;
         opacity: 0.7;
     }

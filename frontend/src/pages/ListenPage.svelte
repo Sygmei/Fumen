@@ -6,6 +6,7 @@
     import { formatTime } from "../lib/utils";
     import Mixer from "../components/Mixer.svelte";
     import ScoreIcon from "../components/ScoreIcon.svelte";
+    import { Download, ChevronDown, Pause, Play, Square } from '@lucide/svelte';
 
     const { accessKey }: { accessKey: string } = $props();
 
@@ -373,32 +374,9 @@
                                 aria-expanded={downloadMenuOpen}
                                 disabled={!publicMusic}
                             >
-                                <svg
-                                    width="15"
-                                    height="15"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2.2"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    ><path d="M12 3v12M7 11l5 5 5-5" /><path
-                                        d="M4 20h16"
-                                    /></svg
-                                >
+                                <Download size={15} strokeWidth={2.2} />
                                 <span class="download-menu-label">Download</span>
-                                <svg
-                                    class="chevron"
-                                    width="12"
-                                    height="12"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2.5"
-                                    ><polyline
-                                        points="6 9 12 15 18 9"
-                                    /></svg
-                                    >
+                                <ChevronDown class="chevron" size={12} strokeWidth={2.5} />
                                 </button>
                             {#if downloadMenuOpen && publicMusic}
                                 <div class="download-dropdown">
@@ -477,33 +455,9 @@
                                 : "Play"}
                         >
                             {#if playbackState === "playing"}
-                                <svg
-                                    width="18"
-                                    height="18"
-                                    viewBox="0 0 24 24"
-                                    fill="currentColor"
-                                    ><rect
-                                        x="5"
-                                        y="4"
-                                        width="4"
-                                        height="16"
-                                        rx="0"
-                                    /><rect
-                                        x="15"
-                                        y="4"
-                                        width="4"
-                                        height="16"
-                                        rx="0"
-                                    /></svg
-                                >
+                                <Pause size={18} fill="currentColor" strokeWidth={0} />
                             {:else}
-                                <svg
-                                    width="18"
-                                    height="18"
-                                    viewBox="0 0 24 24"
-                                    fill="currentColor"
-                                    ><path d="M7 4.5 L7 19.5 L20 12 Z" /></svg
-                                >
+                                <Play size={18} fill="currentColor" strokeWidth={0} />
                             {/if}
                         </button>
                         <button
@@ -513,19 +467,7 @@
                                 midiLoading ||
                                 !stemPlaybackReady}
                             aria-label="Stop"
-                            ><svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="currentColor"
-                                ><rect
-                                    x="4"
-                                    y="4"
-                                    width="16"
-                                    height="16"
-                                    rx="0"
-                                /></svg
-                            ></button
+                            ><Square size={14} fill="currentColor" strokeWidth={0} /></button
                         >
                         <div class="playbar-progress">
                             <input

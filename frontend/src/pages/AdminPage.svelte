@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
     import {
         addMusicToEnsemble,
         addUserToEnsemble,
@@ -28,8 +28,10 @@
     import ScoreIcon from "../components/ScoreIcon.svelte";
     import CustomSelect from "../components/CustomSelect.svelte";
     import BaseModal from "../components/BaseModal.svelte";
+    import ConfirmModal from "../components/ConfirmModal.svelte";
     import { formatBytes, prettyDate, qualityProfileLabel } from "../lib/utils";
     import TopBar from "../components/TopBar.svelte";
+    import { Search, Plus, QrCode, Trash2, UserPlus, Music, Users, Pencil, Info, Download, ChevronDown } from '@lucide/svelte';
 
     function readAdminCache<T>(key: string): T[] {
         try {
@@ -119,18 +121,27 @@
         Record<string, ManagedMemberDraftRole>
     >({});
     let savingManagedMembers = $state(false);
+    let originalEnsembleScoreMusicIds = $state<string[]>([]);
+    let stagedEnsembleScoreMusicIds = $state<string[]>([]);
+    let savingEnsembleScores = $state(false);
     let ensemblePickerMode = $state<"upload" | "score" | "">("");
     let ensemblePickerMusicId = $state("");
     let ensemblePickerSearchQuery = $state("");
+    let stagedScoreEnsembleIds = $state<string[]>([]);
+    let savingScoreEnsembles = $state(false);
     let metadataMusicId = $state("");
     let metadataTitle = $state("");
     let metadataIcon = $state("");
     let metadataPublicId = $state("");
     let savingMetadataFor = $state("");
+    let infoMusicId = $state("");
     let retryingFor = $state("");
     let deletingMusicFor = $state("");
     let openDownloadMenuFor = $state("");
-    let updatingManagedEnsembleScore = $state("");
+    let confirmMessage = $state("");
+    let confirmLabel = $state("Delete");
+    let confirmAction = $state<(() => Promise<void>) | null>(null);
+    let confirmBusy = $state(false);
 
     const stemQualityOptions = STEM_QUALITY_PROFILES.map((option) => ({
         value: option.value,
@@ -272,15 +283,15 @@
 
     function createRoleIcon(role: Exclude<GlobalRole, "superadmin">) {
         if (role === "admin") {
-            return "🛡";
+            return "ðŸ›¡";
         }
         if (role === "manager") {
-            return "👥";
+            return "ðŸ‘¥";
         }
         if (role === "editor") {
-            return "✎";
+            return "âœŽ";
         }
-        return "•";
+        return "â€¢";
     }
 
     let createUserRoleOptions = $derived.by(() =>
@@ -308,12 +319,12 @@
 
     function ensembleRoleIcon(role: EnsembleRole) {
         if (role === "manager") {
-            return "👥";
+            return "ðŸ‘¥";
         }
         if (role === "editor") {
-            return "✎";
+            return "âœŽ";
         }
-        return "•";
+        return "â€¢";
     }
 
     function ensembleRoleDescription(role: EnsembleRole) {
@@ -524,15 +535,14 @@
     });
 
     let filteredManagedEnsembleScores = $derived.by(() => {
-        const ensemble = activeManagedScoreEnsemble;
-        if (!ensemble) {
+        if (!activeManagedScoreEnsemble) {
             return [];
         }
 
         const query = normalizeQuery(currentEnsembleScoreSearchQuery);
 
         return [...musics]
-            .filter((music) => musicHasEnsemble(music, ensemble.id))
+            .filter((music) => stagedEnsembleScoreMusicIds.includes(music.id))
             .sort((left, right) => left.title.localeCompare(right.title))
             .filter((music) =>
                 !query
@@ -549,15 +559,14 @@
     });
 
     let filteredAvailableEnsembleScores = $derived.by(() => {
-        const ensemble = activeManagedScoreEnsemble;
-        if (!ensemble) {
+        if (!activeManagedScoreEnsemble) {
             return [];
         }
 
         const query = normalizeQuery(addEnsembleScoreSearchQuery);
 
         return [...musics]
-            .filter((music) => !musicHasEnsemble(music, ensemble.id))
+            .filter((music) => !stagedEnsembleScoreMusicIds.includes(music.id))
             .sort((left, right) => left.title.localeCompare(right.title))
             .filter((music) =>
                 !query
@@ -585,6 +594,10 @@
 
     let activeMetadataMusic = $derived.by(
         () => musics.find((music) => music.id === metadataMusicId) ?? null,
+    );
+
+    let activeInfoMusic = $derived.by(
+        () => musics.find((music) => music.id === infoMusicId) ?? null,
     );
 
     let activeEnsemblePickerMusic = $derived.by(
@@ -930,13 +943,100 @@
         ensemblePickerMode = "score";
         ensemblePickerMusicId = music.id;
         ensemblePickerSearchQuery = "";
+        stagedScoreEnsembleIds = [...music.ensemble_ids];
         openDownloadMenuFor = "";
     }
 
     function closeEnsemblePickerModal() {
+        if (savingScoreEnsembles) return;
         ensemblePickerMode = "";
         ensemblePickerMusicId = "";
         ensemblePickerSearchQuery = "";
+        stagedScoreEnsembleIds = [];
+    }
+
+    function toggleStagedEnsembleForScore(ensembleId: string) {
+        if (stagedScoreEnsembleIds.includes(ensembleId)) {
+            stagedScoreEnsembleIds = stagedScoreEnsembleIds.filter((id) => id !== ensembleId);
+        } else {
+            stagedScoreEnsembleIds = [...stagedScoreEnsembleIds, ensembleId];
+        }
+    }
+
+    async function saveScoreEnsembles() {
+        if (!activeEnsemblePickerMusic) return;
+        const original = new Set(activeEnsemblePickerMusic.ensemble_ids);
+        const staged = new Set(stagedScoreEnsembleIds);
+        const toAdd = [...staged].filter((id) => !original.has(id));
+        const toRemove = [...original].filter((id) => !staged.has(id));
+        if (toAdd.length === 0 && toRemove.length === 0) {
+            closeEnsemblePickerModal();
+            return;
+        }
+        savingScoreEnsembles = true;
+        adminError = "";
+        try {
+            for (const id of toAdd) {
+                await addMusicToEnsemble(activeEnsemblePickerMusic.id, id);
+            }
+            for (const id of toRemove) {
+                await removeMusicFromEnsemble(activeEnsemblePickerMusic.id, id);
+            }
+            await refreshAdminData();
+            adminSuccess = "Score ensembles updated.";
+            ensemblePickerMode = "";
+            ensemblePickerMusicId = "";
+            ensemblePickerSearchQuery = "";
+            stagedScoreEnsembleIds = [];
+        } catch (error) {
+            adminError = error instanceof Error ? error.message : "Failed to update ensembles";
+        } finally {
+            savingScoreEnsembles = false;
+        }
+    }
+
+    function openScoreInfoModal(music: AdminMusic) {
+        infoMusicId = music.id;
+        openDownloadMenuFor = "";
+    }
+
+    function closeScoreInfoModal() {
+        infoMusicId = "";
+    }
+
+    function openConfirm(msg: string, label: string, action: () => Promise<void>) {
+        confirmMessage = msg;
+        confirmLabel = label;
+        confirmAction = action;
+    }
+
+    function closeConfirm() {
+        if (confirmBusy) return;
+        confirmMessage = "";
+        confirmAction = null;
+    }
+
+    async function executeConfirm() {
+        if (!confirmAction) return;
+        confirmBusy = true;
+        try {
+            await confirmAction();
+        } finally {
+            confirmBusy = false;
+            closeConfirm();
+        }
+    }
+
+    async function handleShowScoreQr(music: AdminMusic) {
+        const url = scoreLinkForCopy(music);
+        try {
+            await onShowCredential(
+                `Share link for ${music.title}`,
+                () => Promise.resolve({ connection_url: url, expires_at: "" }),
+            );
+        } catch (error) {
+            adminError = error instanceof Error ? error.message : "Failed to show QR";
+        }
     }
 
     function openManageMembersModal(ensemble: Ensemble) {
@@ -966,18 +1066,23 @@
         managingEnsembleScoresId = ensemble.id;
         currentEnsembleScoreSearchQuery = "";
         addEnsembleScoreSearchQuery = "";
-        updatingManagedEnsembleScore = "";
+        originalEnsembleScoreMusicIds = musics
+            .filter((m) => musicHasEnsemble(m, ensemble.id))
+            .map((m) => m.id);
+        stagedEnsembleScoreMusicIds = [...originalEnsembleScoreMusicIds];
+        savingEnsembleScores = false;
         adminError = "";
     }
 
     function closeManageScoresModal() {
-        if (updatingManagedEnsembleScore) {
+        if (savingEnsembleScores) {
             return;
         }
         managingEnsembleScoresId = "";
         currentEnsembleScoreSearchQuery = "";
         addEnsembleScoreSearchQuery = "";
-        updatingManagedEnsembleScore = "";
+        originalEnsembleScoreMusicIds = [];
+        stagedEnsembleScoreMusicIds = [];
     }
 
     function openScoreMetadataModal(music: AdminMusic) {
@@ -1027,34 +1132,53 @@
         }
     }
 
-    async function toggleManagedEnsembleScore(
-        musicId: string,
-        shouldAdd: boolean,
-    ) {
-        if (!managingEnsembleScoresId) {
+    function toggleStagedEnsembleScore(musicId: string, shouldAdd: boolean) {
+        if (shouldAdd) {
+            stagedEnsembleScoreMusicIds = [...stagedEnsembleScoreMusicIds, musicId];
+        } else {
+            stagedEnsembleScoreMusicIds = stagedEnsembleScoreMusicIds.filter((id) => id !== musicId);
+        }
+    }
+
+    function hasManagedScoreChanges(): boolean {
+        const orig = new Set(originalEnsembleScoreMusicIds);
+        const staged = new Set(stagedEnsembleScoreMusicIds);
+        if (orig.size !== staged.size) return true;
+        return [...staged].some((id) => !orig.has(id));
+    }
+
+    async function saveEnsembleScores() {
+        if (!managingEnsembleScoresId) return;
+        const orig = new Set(originalEnsembleScoreMusicIds);
+        const staged = new Set(stagedEnsembleScoreMusicIds);
+        const toAdd = [...staged].filter((id) => !orig.has(id));
+        const toRemove = [...orig].filter((id) => !staged.has(id));
+        if (toAdd.length === 0 && toRemove.length === 0) {
+            closeManageScoresModal();
             return;
         }
-
-        updatingManagedEnsembleScore = `${musicId}:${shouldAdd ? "add" : "remove"}`;
-
+        savingEnsembleScores = true;
+        adminError = "";
         try {
-            await toggleMusicEnsembleAssignment(
-                musicId,
-                managingEnsembleScoresId,
-                shouldAdd,
-            );
+            for (const id of toAdd) {
+                await addMusicToEnsemble(id, managingEnsembleScoresId);
+            }
+            for (const id of toRemove) {
+                await removeMusicFromEnsemble(id, managingEnsembleScoresId);
+            }
+            await refreshAdminData();
+            adminSuccess = "Ensemble scores updated.";
+            closeManageScoresModal();
+        } catch (error) {
+            adminError = error instanceof Error ? error.message : "Failed to update scores";
         } finally {
-            updatingManagedEnsembleScore = "";
+            savingEnsembleScores = false;
         }
     }
 
     async function handleUpload() {
         if (!selectedFile) {
             adminError = "Choose an .mscz file first.";
-            return;
-        }
-        if (uploadEnsembleIds.length === 0) {
-            adminError = "Choose at least one ensemble first.";
             return;
         }
 
@@ -1070,7 +1194,7 @@
                 iconFile: selectedIconFile,
                 publicId: uploadPublicId,
                 qualityProfile: uploadQualityProfile,
-                ensembleId: uploadEnsembleIds[0],
+                ensembleId: uploadEnsembleIds[0] ?? "",
             });
 
             for (const ensembleId of uploadEnsembleIds.slice(1)) {
@@ -1127,80 +1251,64 @@
         }
     }
 
-    async function handleDeleteMusic(musicId: string) {
-        if (!window.confirm("Delete this score permanently?")) {
-            return;
-        }
-
+    async function deleteMusicAccount(musicId: string) {
         deletingMusicFor = musicId;
         adminError = "";
         adminSuccess = "";
-
         try {
             await deleteMusic(musicId);
             musics = musics.filter((music) => music.id !== musicId);
             await refreshAdminData();
             adminSuccess = "Score deleted.";
         } catch (error) {
-            adminError =
-                error instanceof Error
-                    ? error.message
-                    : "Unable to delete score";
+            adminError = error instanceof Error ? error.message : "Unable to delete score";
         } finally {
             deletingMusicFor = "";
         }
     }
 
-    async function handleDeleteUser(user: AppUser) {
-        if (!window.confirm(`Delete ${user.username} permanently?`)) {
-            return;
-        }
+    function handleDeleteMusic(musicId: string) {
+        openConfirm("Delete this score permanently?", "Delete", () => deleteMusicAccount(musicId));
+    }
 
+    async function deleteUserAccount(user: AppUser) {
         deletingUserFor = user.id;
         adminError = "";
         adminSuccess = "";
-
         try {
             await deleteUser(user.id);
-            adminUsers = adminUsers.filter(
-                (candidate) => candidate.id !== user.id,
-            );
+            adminUsers = adminUsers.filter((candidate) => candidate.id !== user.id);
             await refreshAdminData();
             adminSuccess = `User ${user.username} deleted.`;
         } catch (error) {
-            adminError =
-                error instanceof Error
-                    ? error.message
-                    : "Unable to delete user";
+            adminError = error instanceof Error ? error.message : "Unable to delete user";
         } finally {
             deletingUserFor = "";
         }
     }
 
-    async function handleDeleteEnsemble(ensemble: Ensemble) {
-        if (!window.confirm(`Delete ensemble ${ensemble.name}?`)) {
-            return;
-        }
+    function handleDeleteUser(user: AppUser) {
+        openConfirm(`Delete ${user.username} permanently?`, "Delete", () => deleteUserAccount(user));
+    }
 
+    async function deleteEnsembleAccount(ensemble: Ensemble) {
         deletingEnsembleFor = ensemble.id;
         adminError = "";
         adminSuccess = "";
-
         try {
             await deleteEnsemble(ensemble.id);
-            ensembles = ensembles.filter(
-                (candidate) => candidate.id !== ensemble.id,
-            );
+            ensembles = ensembles.filter((candidate) => candidate.id !== ensemble.id);
             await refreshAdminData();
             adminSuccess = `Ensemble ${ensemble.name} deleted.`;
         } catch (error) {
-            adminError =
-                error instanceof Error
-                    ? error.message
-                    : "Unable to delete ensemble";
+            adminError = error instanceof Error ? error.message : "Unable to delete ensemble";
         } finally {
             deletingEnsembleFor = "";
         }
+    }
+
+    function handleDeleteEnsemble(ensemble: Ensemble) {
+        openConfirm(`Delete ensemble ${ensemble.name}?`, "Delete", () => deleteEnsembleAccount(ensemble));
     }
 
     async function handleRetryRender(musicId: string) {
@@ -1283,7 +1391,7 @@
     <section class="admin-login-shell">
         <div class="music-card auth-card admin-auth-card">
             <div>
-                <p class="eyebrow">Fumen • Admin</p>
+                <p class="eyebrow">Fumen â€¢ Admin</p>
                 <h1>Control room</h1>
                 <p class="lede">
                     Sign in as the seeded superadmin or another admin-enabled
@@ -1304,7 +1412,7 @@
     <section class="admin-login-shell">
         <div class="music-card auth-card admin-auth-card">
             <div>
-                <p class="eyebrow">Fumen • Admin</p>
+                <p class="eyebrow">Fumen â€¢ Admin</p>
                 <h1>Control room</h1>
                 <p class="lede">
                     {currentUser.username} is signed in, but this account does not
@@ -1378,20 +1486,7 @@
                                 <label class="field admin-user-search">
                                     <span class="sr-only">Search users</span>
                                     <div class="admin-user-search-input-wrap">
-                                        <svg
-                                            width="15"
-                                            height="15"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                            aria-hidden="true"
-                                        >
-                                            <circle cx="11" cy="11" r="7" />
-                                            <path d="m20 20-3.5-3.5" />
-                                        </svg>
+                                        <Search size={15} aria-hidden="true" />
                                         <input
                                             bind:value={userSearchQuery}
                                             placeholder="Search users"
@@ -1403,20 +1498,7 @@
                                         class="button admin-create-user-btn"
                                         onclick={openCreateUserModal}
                                     >
-                                        <svg
-                                            width="15"
-                                            height="15"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                            aria-hidden="true"
-                                        >
-                                            <path d="M12 5v14" />
-                                            <path d="M5 12h14" />
-                                        </svg>
+                                        <Plus size={15} aria-hidden="true" />
                                         Create user
                                     </button>
                                 {/if}
@@ -1429,7 +1511,7 @@
                             {:else if filteredAdminUsers.length === 0}
                                 <div class="music-card">
                                     <p class="hint">
-                                        No users match “{userSearchQuery.trim()}”.
+                                        No users match â€œ{userSearchQuery.trim()}â€.
                                     </p>
                                 </div>
                             {:else}
@@ -1468,31 +1550,7 @@
                                                     aria-label={`Show QR code for ${user.username}`}
                                                     title="Show QR code"
                                                 >
-                                                    <svg
-                                                        width="15"
-                                                        height="15"
-                                                        viewBox="0 0 24 24"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        stroke-width="2"
-                                                        stroke-linecap="round"
-                                                        stroke-linejoin="round"
-                                                        aria-hidden="true"
-                                                    >
-                                                        <path d="M3 3h7v7H3z" />
-                                                        <path
-                                                            d="M14 3h7v7h-7z"
-                                                        />
-                                                        <path
-                                                            d="M3 14h7v7H3z"
-                                                        />
-                                                        <path
-                                                            d="M14 14h3v3h-3z"
-                                                        />
-                                                        <path
-                                                            d="M18 14h3v7h-7v-3"
-                                                        />
-                                                    </svg>
+                                                    <QrCode size={15} aria-hidden="true" />
                                                 </button>
                                                 {#if canDeleteUserAccount(user)}
                                                     <button
@@ -1507,31 +1565,7 @@
                                                         aria-label={`Delete ${user.username}`}
                                                         title="Delete user"
                                                     >
-                                                        <svg
-                                                            width="15"
-                                                            height="15"
-                                                            viewBox="0 0 24 24"
-                                                            fill="none"
-                                                            stroke="currentColor"
-                                                            stroke-width="2"
-                                                            stroke-linecap="round"
-                                                            stroke-linejoin="round"
-                                                            aria-hidden="true"
-                                                        >
-                                                            <path d="M3 6h18" />
-                                                            <path
-                                                                d="M8 6V4h8v2"
-                                                            />
-                                                            <path
-                                                                d="M19 6l-1 14H6L5 6"
-                                                            />
-                                                            <path
-                                                                d="M10 11v6"
-                                                            />
-                                                            <path
-                                                                d="M14 11v6"
-                                                            />
-                                                        </svg>
+                                                        <Trash2 size={16} aria-hidden="true" />
                                                     </button>
                                                 {/if}
                                             </div>
@@ -1552,20 +1586,7 @@
                                     <span class="sr-only">Search ensembles</span
                                     >
                                     <div class="admin-user-search-input-wrap">
-                                        <svg
-                                            width="15"
-                                            height="15"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                            aria-hidden="true"
-                                        >
-                                            <circle cx="11" cy="11" r="7" />
-                                            <path d="m20 20-3.5-3.5" />
-                                        </svg>
+                                        <Search size={15} aria-hidden="true" />
                                         <input
                                             bind:value={ensembleSearchQuery}
                                             placeholder="Search ensembles"
@@ -1578,20 +1599,7 @@
                                         type="button"
                                         onclick={openCreateEnsembleModal}
                                     >
-                                        <svg
-                                            width="15"
-                                            height="15"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                            aria-hidden="true"
-                                        >
-                                            <path d="M12 5v14" />
-                                            <path d="M5 12h14" />
-                                        </svg>
+                                        <Plus size={15} aria-hidden="true" />
                                         Create ensemble
                                     </button>
                                 {/if}
@@ -1620,27 +1628,7 @@
                                                     class="admin-user-avatar admin-ensemble-avatar"
                                                     aria-hidden="true"
                                                 >
-                                                    <svg
-                                                        width="16"
-                                                        height="16"
-                                                        viewBox="0 0 24 24"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        stroke-width="2"
-                                                        stroke-linecap="round"
-                                                        stroke-linejoin="round"
-                                                    >
-                                                        <path
-                                                            d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"
-                                                        />
-                                                        <circle
-                                                            cx="8.5"
-                                                            cy="7"
-                                                            r="3"
-                                                        />
-                                                        <path d="M20 8v6" />
-                                                        <path d="M23 11h-6" />
-                                                    </svg>
+                                                    <Users size={16} aria-hidden="true" />
                                                 </div>
                                                 <div
                                                     class="admin-user-copy admin-ensemble-copy"
@@ -1664,31 +1652,7 @@
                                                         ensemble,
                                                     )}
                                                 >
-                                                    <svg
-                                                        width="16"
-                                                        height="16"
-                                                        viewBox="0 0 24 24"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        stroke-width="2"
-                                                        stroke-linecap="round"
-                                                        stroke-linejoin="round"
-                                                        aria-hidden="true"
-                                                    >
-                                                        <path
-                                                            d="M9 18V5l12-2v13"
-                                                        />
-                                                        <circle
-                                                            cx="6"
-                                                            cy="18"
-                                                            r="3"
-                                                        />
-                                                        <circle
-                                                            cx="18"
-                                                            cy="16"
-                                                            r="3"
-                                                        />
-                                                    </svg>
+                                                    <Music size={16} aria-hidden="true" />
                                                     <span
                                                         class="admin-action-badge"
                                                         aria-hidden="true"
@@ -1708,27 +1672,7 @@
                                                         ensemble,
                                                     )}
                                                 >
-                                                    <svg
-                                                        width="16"
-                                                        height="16"
-                                                        viewBox="0 0 24 24"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        stroke-width="2"
-                                                        stroke-linecap="round"
-                                                        stroke-linejoin="round"
-                                                    >
-                                                        <path
-                                                            d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"
-                                                        />
-                                                        <circle
-                                                            cx="8.5"
-                                                            cy="7"
-                                                            r="3"
-                                                        />
-                                                        <path d="M20 8v6" />
-                                                        <path d="M23 11h-6" />
-                                                    </svg>
+                                                    <UserPlus size={16} aria-hidden="true" />
                                                     <span
                                                         class="admin-action-badge"
                                                         aria-hidden="true"
@@ -1748,30 +1692,7 @@
                                                         aria-label={`Delete ${ensemble.name}`}
                                                         title="Delete ensemble"
                                                     >
-                                                        <svg
-                                                            width="16"
-                                                            height="16"
-                                                            viewBox="0 0 24 24"
-                                                            fill="none"
-                                                            stroke="currentColor"
-                                                            stroke-width="2"
-                                                            stroke-linecap="round"
-                                                            stroke-linejoin="round"
-                                                        >
-                                                            <path d="M3 6h18" />
-                                                            <path
-                                                                d="M8 6V4h8v2"
-                                                            />
-                                                            <path
-                                                                d="M19 6l-1 14H6L5 6"
-                                                            />
-                                                            <path
-                                                                d="M10 11v6"
-                                                            />
-                                                            <path
-                                                                d="M14 11v6"
-                                                            />
-                                                        </svg>
+                                                        <Trash2 size={16} aria-hidden="true" />
                                                     </button>
                                                 {/if}
                                             </div>
@@ -1791,20 +1712,7 @@
                                 <label class="field admin-user-search">
                                     <span class="sr-only">Search scores</span>
                                     <div class="admin-user-search-input-wrap">
-                                        <svg
-                                            width="15"
-                                            height="15"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            stroke-width="2"
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                            aria-hidden="true"
-                                        >
-                                            <circle cx="11" cy="11" r="7" />
-                                            <path d="m20 20-3.5-3.5" />
-                                        </svg>
+                                        <Search size={15} aria-hidden="true" />
                                         <input
                                             bind:value={scoreSearchQuery}
                                             placeholder="Search scores"
@@ -1816,20 +1724,7 @@
                                     type="button"
                                     onclick={openCreateScoreModal}
                                 >
-                                    <svg
-                                        width="15"
-                                        height="15"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        aria-hidden="true"
-                                    >
-                                        <path d="M12 5v14" />
-                                        <path d="M5 12h14" />
-                                    </svg>
+                                    <Plus size={15} aria-hidden="true" />
                                     Add a score
                                 </button>
                             </div>
@@ -1849,6 +1744,7 @@
                                     {#each filteredMusics as music}
                                         <article
                                             class="music-card admin-score-card"
+                                            class:download-open={openDownloadMenuFor === music.id}
                                         >
                                             <div class="admin-score-header">
                                                 <h3 class="admin-score-title">
@@ -1877,35 +1773,9 @@
                                                         aria-expanded={openDownloadMenuFor ===
                                                             music.id}
                                                     >
-                                                        <svg
-                                                            width="15"
-                                                            height="15"
-                                                            viewBox="0 0 24 24"
-                                                            fill="none"
-                                                            stroke="currentColor"
-                                                            stroke-width="2.2"
-                                                            stroke-linecap="round"
-                                                            stroke-linejoin="round"
-                                                        >
-                                                            <path
-                                                                d="M12 3v12M7 11l5 5 5-5"
-                                                            />
-                                                            <path d="M4 20h16" />
-                                                        </svg>
+                                                        <Download size={15} strokeWidth={2.2} />
                                                         <span>Download</span>
-                                                        <svg
-                                                            class="chevron"
-                                                            width="12"
-                                                            height="12"
-                                                            viewBox="0 0 24 24"
-                                                            fill="none"
-                                                            stroke="currentColor"
-                                                            stroke-width="2.5"
-                                                        >
-                                                            <polyline
-                                                                points="6 9 12 15 18 9"
-                                                            />
-                                                        </svg>
+                                                        <ChevronDown class="chevron" size={12} strokeWidth={2.5} />
                                                     </button>
                                                     {#if openDownloadMenuFor === music.id}
                                                         <div
@@ -1920,21 +1790,7 @@
                                                                     (openDownloadMenuFor =
                                                                         "")}
                                                             >
-                                                                <svg
-                                                                    width="18"
-                                                                    height="18"
-                                                                    viewBox="0 0 24 24"
-                                                                    fill="none"
-                                                                    stroke="currentColor"
-                                                                    stroke-width="2.2"
-                                                                    stroke-linecap="round"
-                                                                    stroke-linejoin="round"
-                                                                    aria-hidden="true"
-                                                                >
-                                                                    <path d="M12 3v12" />
-                                                                    <path d="M7 11l5 5 5-5" />
-                                                                    <path d="M4 20h16" />
-                                                                </svg>
+                                                                <Download size={18} strokeWidth={2.2} aria-hidden="true" />
                                                                 <span>Download MuseScore</span>
                                                             </a>
                                                             {#if music.midi_download_url}
@@ -1947,21 +1803,7 @@
                                                                         (openDownloadMenuFor =
                                                                             "")}
                                                                 >
-                                                                    <svg
-                                                                        width="18"
-                                                                        height="18"
-                                                                        viewBox="0 0 24 24"
-                                                                        fill="none"
-                                                                        stroke="currentColor"
-                                                                        stroke-width="2.2"
-                                                                        stroke-linecap="round"
-                                                                        stroke-linejoin="round"
-                                                                        aria-hidden="true"
-                                                                    >
-                                                                        <path d="M9 18V5l12-2v13" />
-                                                                        <circle cx="6" cy="18" r="3" />
-                                                                        <circle cx="18" cy="16" r="3" />
-                                                                    </svg>
+                                                                    <Music size={18} strokeWidth={2.2} aria-hidden="true" />
                                                                     <span>Download MIDI</span>
                                                                 </a>
                                                             {/if}
@@ -1983,29 +1825,7 @@
                                                         aria-label={`Manage ensembles for ${music.title}`}
                                                         title="Manage ensembles"
                                                     >
-                                                        <svg
-                                                            width="16"
-                                                            height="16"
-                                                            viewBox="0 0 24 24"
-                                                            fill="none"
-                                                            stroke="currentColor"
-                                                            stroke-width="2"
-                                                            stroke-linecap="round"
-                                                            stroke-linejoin="round"
-                                                        >
-                                                            <path
-                                                                d="M4 19a8 8 0 0 1 16 0"
-                                                            />
-                                                            <circle
-                                                                cx="12"
-                                                                cy="8"
-                                                                r="4"
-                                                            />
-                                                            <path d="M20 6v6" />
-                                                            <path
-                                                                d="M23 9h-6"
-                                                            />
-                                                        </svg>
+                                                        <Users size={16} aria-hidden="true" />
                                                         <span
                                                             class="admin-action-badge"
                                                             aria-hidden="true"
@@ -2025,85 +1845,29 @@
                                                         aria-label={`Edit metadata for ${music.title}`}
                                                         title="Edit metadata"
                                                     >
-                                                        <svg
-                                                            width="16"
-                                                            height="16"
-                                                            viewBox="0 0 24 24"
-                                                            fill="none"
-                                                            stroke="currentColor"
-                                                            stroke-width="2"
-                                                            stroke-linecap="round"
-                                                            stroke-linejoin="round"
-                                                        >
-                                                            <path
-                                                                d="M12 20h9"
-                                                            />
-                                                            <path
-                                                                d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"
-                                                            />
-                                                        </svg>
+                                                        <Pencil size={16} aria-hidden="true" />
                                                     </button>
                                                 {/if}
                                                 <button
                                                     class="button secondary admin-user-action"
                                                     type="button"
-                                                    onclick={() =>
-                                                        void copyText(
-                                                            scoreLinkForCopy(
-                                                                music,
-                                                            ),
-                                                            "Score link copied.",
-                                                        )}
-                                                    aria-label={`Copy link for ${music.title}`}
-                                                    title="Copy score link"
+                                                    onclick={() => void handleShowScoreQr(music)}
+                                                    aria-label={`Share QR for ${music.title}`}
+                                                    title="Share QR code"
                                                 >
-                                                    <svg
-                                                        width="16"
-                                                        height="16"
-                                                        viewBox="0 0 24 24"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        stroke-width="2"
-                                                        stroke-linecap="round"
-                                                        stroke-linejoin="round"
-                                                    >
-                                                        <path
-                                                            d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L10.6 5.3"
-                                                        />
-                                                        <path
-                                                            d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 1 0 7.07 7.07l2.12-2.12"
-                                                        />
-                                                    </svg>
+                                                    <QrCode size={16} aria-hidden="true" />
                                                 </button>
                                                 <button
                                                     class="button secondary admin-user-action"
                                                     type="button"
                                                     onclick={() =>
-                                                        openScoreMetadataModal(
+                                                        openScoreInfoModal(
                                                             music,
                                                         )}
                                                     aria-label={`View metadata for ${music.title}`}
                                                     title="View metadata"
                                                 >
-                                                    <svg
-                                                        width="16"
-                                                        height="16"
-                                                        viewBox="0 0 24 24"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        stroke-width="2"
-                                                        stroke-linecap="round"
-                                                        stroke-linejoin="round"
-                                                        aria-hidden="true"
-                                                    >
-                                                        <circle
-                                                            cx="12"
-                                                            cy="12"
-                                                            r="9"
-                                                        />
-                                                        <path d="M12 10v6" />
-                                                        <path d="M12 7h.01" />
-                                                    </svg>
+                                                    <Info size={16} aria-hidden="true" />
                                                 </button>
                                                 {#if canDeleteScore(music)}
                                                     <button
@@ -2118,24 +1882,7 @@
                                                                 music.id,
                                                             )}
                                                     >
-                                                        <svg
-                                                            width="16"
-                                                            height="16"
-                                                            viewBox="0 0 24 24"
-                                                            fill="none"
-                                                            stroke="currentColor"
-                                                            stroke-width="2"
-                                                            stroke-linecap="round"
-                                                            stroke-linejoin="round"
-                                                        >
-                                                            <path d="M3 6h18" />
-                                                            <path d="M8 6V4h8v2" />
-                                                            <path
-                                                                d="M19 6l-1 14H6L5 6"
-                                                            />
-                                                            <path d="M10 11v6" />
-                                                            <path d="M14 11v6" />
-                                                        </svg>
+                                                        <Trash2 size={16} aria-hidden="true" />
                                                     </button>
                                                 {/if}
                                             </div>
@@ -2152,41 +1899,21 @@
 {/if}
 
 {#if showCreateUserModal}
-    {#snippet createUserHeader()}
-        <div class="card-header admin-user-modal-header">
-            <div>
-                <p class="meta-label">Create</p>
-                <h3 id="create-user-title">New account</h3>
-            </div>
-            <button
-                class="button ghost admin-modal-close"
-                type="button"
-                aria-label="Close create user modal"
-                onclick={closeCreateUserModal}
-            >
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M18 6 6 18" />
-                    <path d="m6 6 12 12" />
-                </svg>
+    {#snippet createUserFooter()}
+        <div class="actions admin-user-modal-actions">
+            <button class="button ghost" type="button" disabled={creatingUser} onclick={closeCreateUserModal}>Cancel</button>
+            <button class="button" type="button" disabled={creatingUser} onclick={() => void handleCreateUser()}>
+                {creatingUser ? "Creating..." : "Create user"}
             </button>
         </div>
     {/snippet}
     <BaseModal
         onClose={closeCreateUserModal}
-        size="small"
+        size="medium"
         cardClass="admin-user-modal"
-        labelledBy="create-user-title"
-        header={createUserHeader}
+        title="Create"
+        subtitle="New account"
+        footer={createUserFooter}
     >
         <p class="subtle">
             Create a username-only account, assign its global role, then
@@ -2211,63 +1938,25 @@
             bind:value={newUserRole}
             options={createUserRoleOptions}
         />
-        <div class="actions admin-user-modal-actions">
-            <button
-                class="button ghost"
-                type="button"
-                disabled={creatingUser}
-                onclick={closeCreateUserModal}
-            >
-                Cancel
-            </button>
-            <button
-                class="button"
-                type="button"
-                disabled={creatingUser}
-                onclick={() => void handleCreateUser()}
-            >
-                {creatingUser ? "Creating..." : "Create user"}
-            </button>
-        </div>
     </BaseModal>
 {/if}
 
 {#if showCreateEnsembleModal}
-    {#snippet createEnsembleHeader()}
-        <div class="card-header admin-user-modal-header">
-            <div>
-                <p class="meta-label">Create</p>
-                <h3 id="create-ensemble-title">New ensemble</h3>
-            </div>
-            <button
-                class="button ghost admin-modal-close"
-                type="button"
-                aria-label="Close create ensemble modal"
-                onclick={closeCreateEnsembleModal}
-            >
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M18 6 6 18" />
-                    <path d="m6 6 12 12" />
-                </svg>
+    {#snippet createEnsembleFooter()}
+        <div class="actions admin-user-modal-actions">
+            <button class="button ghost" type="button" disabled={creatingEnsemble} onclick={closeCreateEnsembleModal}>Cancel</button>
+            <button class="button" type="button" disabled={creatingEnsemble} onclick={() => void handleCreateEnsemble()}>
+                {creatingEnsemble ? "Creating..." : "Create ensemble"}
             </button>
         </div>
     {/snippet}
     <BaseModal
         onClose={closeCreateEnsembleModal}
-        size="small"
+        size="medium"
         cardClass="admin-user-modal"
-        labelledBy="create-ensemble-title"
-        header={createEnsembleHeader}
+        title="Create"
+        subtitle="New ensemble"
+        footer={createEnsembleFooter}
     >
         <label class="field">
             <span>Ensemble name</span>
@@ -2283,57 +1972,10 @@
                 }}
             />
         </label>
-        <div class="actions admin-user-modal-actions">
-            <button
-                class="button ghost"
-                type="button"
-                disabled={creatingEnsemble}
-                onclick={closeCreateEnsembleModal}
-            >
-                Cancel
-            </button>
-            <button
-                class="button"
-                type="button"
-                disabled={creatingEnsemble}
-                onclick={() => void handleCreateEnsemble()}
-            >
-                {creatingEnsemble ? "Creating..." : "Create ensemble"}
-            </button>
-        </div>
     </BaseModal>
 {/if}
 
 {#if showCreateScoreModal}
-    {#snippet uploadScoreHeader()}
-        <div class="card-header admin-user-modal-header">
-            <div>
-                <p class="meta-label">Upload</p>
-                <h3 id="create-score-title">Add a MuseScore score</h3>
-            </div>
-            <button
-                class="button ghost admin-modal-close"
-                type="button"
-                aria-label="Close add score modal"
-                onclick={closeCreateScoreModal}
-            >
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M18 6 6 18" />
-                    <path d="m6 6 12 12" />
-                </svg>
-            </button>
-        </div>
-    {/snippet}
     {#snippet uploadScoreFooter()}
         <div class="actions admin-user-modal-actions">
             <button
@@ -2358,8 +2000,8 @@
         onClose={closeCreateScoreModal}
         size="large"
         cardClass="admin-score-modal"
-        labelledBy="create-score-title"
-        header={uploadScoreHeader}
+        title="Upload"
+        subtitle="Add a MuseScore score"
         footer={uploadScoreFooter}
     >
         <div class="upload-grid admin-score-modal-grid">
@@ -2418,22 +2060,7 @@
             type="button"
             onclick={openUploadEnsembleModal}
         >
-            <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-            >
-                <path d="M4 19a8 8 0 0 1 16 0" />
-                <circle cx="12" cy="8" r="4" />
-                <path d="M20 6v6" />
-                <path d="M23 9h-6" />
-            </svg>
+            <Users size={16} aria-hidden="true" />
             {uploadEnsembleIds.length > 0
                 ? `Selected ensembles (${uploadEnsembleIds.length})`
                 : "Choose ensembles"}
@@ -2442,32 +2069,23 @@
 {/if}
 
 {#if activeManagedEnsemble}
-    {#snippet manageMembersHeader()}
-        <div class="card-header admin-user-modal-header">
-            <div>
-                <p class="meta-label">Members</p>
-                <h3 id="manage-ensemble-title">{activeManagedEnsemble.name}</h3>
-            </div>
+    {#snippet manageMembersFooter()}
+        <div class="actions admin-user-modal-actions">
             <button
-                class="button ghost admin-modal-close"
+                class="button ghost"
                 type="button"
-                aria-label="Close members modal"
+                disabled={savingManagedMembers}
                 onclick={closeManageMembersModal}
             >
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M18 6 6 18" />
-                    <path d="m6 6 12 12" />
-                </svg>
+                Cancel
+            </button>
+            <button
+                class="button"
+                type="button"
+                disabled={savingManagedMembers || !hasManagedMemberChanges()}
+                onclick={() => void saveManagedEnsembleChanges()}
+            >
+                {savingManagedMembers ? "Saving..." : "Save changes"}
             </button>
         </div>
     {/snippet}
@@ -2475,8 +2093,9 @@
         onClose={closeManageMembersModal}
         size="full"
         cardClass="admin-split-modal"
-        labelledBy="manage-ensemble-title"
-        header={manageMembersHeader}
+        title="Members"
+        subtitle={activeManagedEnsemble.name}
+        footer={manageMembersFooter}
     >
         <div class="admin-split-pane">
             <section class="admin-split-column">
@@ -2490,20 +2109,7 @@
                     <label class="field admin-user-search admin-split-search">
                         <span class="sr-only">Search current members</span>
                         <div class="admin-user-search-input-wrap">
-                            <svg
-                                width="15"
-                                height="15"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                aria-hidden="true"
-                            >
-                                <circle cx="11" cy="11" r="7" />
-                                <path d="m20 20-3.5-3.5" />
-                            </svg>
+                            <Search size={15} aria-hidden="true" />
                             <input
                                 bind:value={currentMemberSearchQuery}
                                 placeholder="Search current members"
@@ -2573,20 +2179,7 @@
                     <label class="field admin-user-search admin-split-search">
                         <span class="sr-only">Search available users</span>
                         <div class="admin-user-search-input-wrap">
-                            <svg
-                                width="15"
-                                height="15"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                aria-hidden="true"
-                            >
-                                <circle cx="11" cy="11" r="7" />
-                                <path d="m20 20-3.5-3.5" />
-                            </svg>
+                            <Search size={15} aria-hidden="true" />
                             <input
                                 bind:value={addMemberSearchQuery}
                                 placeholder="Search available users"
@@ -2646,56 +2239,27 @@
                 </div>
             </section>
         </div>
-        <div class="actions admin-split-modal-actions">
+    </BaseModal>
+{/if}
+
+{#if activeManagedScoreEnsemble}
+    {#snippet manageScoresFooter()}
+        <div class="actions admin-user-modal-actions">
             <button
                 class="button ghost"
                 type="button"
-                disabled={savingManagedMembers}
-                onclick={closeManageMembersModal}
+                disabled={savingEnsembleScores}
+                onclick={closeManageScoresModal}
             >
                 Cancel
             </button>
             <button
                 class="button"
                 type="button"
-                disabled={savingManagedMembers || !hasManagedMemberChanges()}
-                onclick={() => void saveManagedEnsembleChanges()}
+                disabled={savingEnsembleScores || !hasManagedScoreChanges()}
+                onclick={() => void saveEnsembleScores()}
             >
-                {savingManagedMembers ? "Saving..." : "Save changes"}
-            </button>
-        </div>
-    </BaseModal>
-{/if}
-
-{#if activeManagedScoreEnsemble}
-    {#snippet manageScoresHeader()}
-        <div class="card-header admin-user-modal-header admin-compact-modal-header">
-            <div>
-                <p class="meta-label">Scores</p>
-                <h3 id="manage-ensemble-scores-title">
-                    {activeManagedScoreEnsemble.name}
-                </h3>
-            </div>
-            <button
-                class="button ghost admin-modal-close"
-                type="button"
-                aria-label="Close scores modal"
-                onclick={closeManageScoresModal}
-            >
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M18 6 6 18" />
-                    <path d="m6 6 12 12" />
-                </svg>
+                {savingEnsembleScores ? "Saving..." : "Save changes"}
             </button>
         </div>
     {/snippet}
@@ -2703,8 +2267,9 @@
         onClose={closeManageScoresModal}
         size="full"
         cardClass="admin-split-modal"
-        labelledBy="manage-ensemble-scores-title"
-        header={manageScoresHeader}
+        title="Scores"
+        subtitle={activeManagedScoreEnsemble.name}
+        footer={manageScoresFooter}
     >
         <div class="admin-split-pane">
             <section class="admin-split-column">
@@ -2718,20 +2283,7 @@
                     <label class="field admin-user-search admin-split-search">
                         <span class="sr-only">Search current scores</span>
                         <div class="admin-user-search-input-wrap">
-                            <svg
-                                width="15"
-                                height="15"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                aria-hidden="true"
-                            >
-                                <circle cx="11" cy="11" r="7" />
-                                <path d="m20 20-3.5-3.5" />
-                            </svg>
+                            <Search size={15} aria-hidden="true" />
                             <input
                                 bind:value={currentEnsembleScoreSearchQuery}
                                 placeholder="Search current scores"
@@ -2757,12 +2309,11 @@
                                     <button
                                         class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
                                         type="button"
-                                        disabled={updatingManagedEnsembleScore ===
-                                            `${music.id}:remove`}
+                                        disabled={savingEnsembleScores}
                                         aria-label={`Remove ${music.title}`}
                                         title={`Remove ${music.title}`}
                                         onclick={() =>
-                                            void toggleManagedEnsembleScore(
+                                            toggleStagedEnsembleScore(
                                                 music.id,
                                                 false,
                                             )}
@@ -2786,20 +2337,7 @@
                     <label class="field admin-user-search admin-split-search">
                         <span class="sr-only">Search available scores</span>
                         <div class="admin-user-search-input-wrap">
-                            <svg
-                                width="15"
-                                height="15"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                aria-hidden="true"
-                            >
-                                <circle cx="11" cy="11" r="7" />
-                                <path d="m20 20-3.5-3.5" />
-                            </svg>
+                            <Search size={15} aria-hidden="true" />
                             <input
                                 bind:value={addEnsembleScoreSearchQuery}
                                 placeholder="Search available scores"
@@ -2825,12 +2363,11 @@
                                     <button
                                         class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
                                         type="button"
-                                        disabled={updatingManagedEnsembleScore ===
-                                            `${music.id}:add`}
+                                        disabled={savingEnsembleScores}
                                         aria-label={`Add ${music.title}`}
                                         title={`Add ${music.title}`}
                                         onclick={() =>
-                                            void toggleManagedEnsembleScore(
+                                            toggleStagedEnsembleScore(
                                                 music.id,
                                                 true,
                                             )}
@@ -2848,63 +2385,30 @@
 {/if}
 
 {#if ensemblePickerMode}
-    {#snippet ensemblePickerHeader()}
-        <div class="card-header admin-user-modal-header">
-            <div>
-                <p class="meta-label">Ensembles</p>
-                <h3 id="ensemble-selector-title">
-                    {ensemblePickerMode === "upload"
-                        ? "Choose ensembles for the new score"
-                        : `Manage ensembles for ${activeEnsemblePickerMusic?.title ?? "score"}`}
-                </h3>
+    {#snippet ensemblePickerFooter()}
+        {#if ensemblePickerMode === "score"}
+            <div class="actions admin-user-modal-actions">
+                <button class="button ghost" type="button" disabled={savingScoreEnsembles} onclick={closeEnsemblePickerModal}>Cancel</button>
+                <button class="button" type="button" disabled={savingScoreEnsembles} onclick={() => void saveScoreEnsembles()}>
+                    {savingScoreEnsembles ? "Saving..." : "Save changes"}
+                </button>
             </div>
-            <button
-                class="button ghost admin-modal-close"
-                type="button"
-                aria-label="Close ensemble selector"
-                onclick={closeEnsemblePickerModal}
-            >
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M18 6 6 18" />
-                    <path d="m6 6 12 12" />
-                </svg>
-            </button>
-        </div>
+        {/if}
     {/snippet}
     <BaseModal
         onClose={closeEnsemblePickerModal}
         size="medium"
         cardClass="admin-selector-modal"
-        labelledBy="ensemble-selector-title"
-        header={ensemblePickerHeader}
+        title="Ensembles"
+        subtitle={ensemblePickerMode === 'upload'
+            ? 'Choose ensembles for the new score'
+            : `Manage ensembles for ${activeEnsemblePickerMusic?.title ?? 'score'}`}
+        footer={ensemblePickerFooter}
     >
         <label class="field admin-user-search">
             <span class="sr-only">Search ensembles</span>
             <div class="admin-user-search-input-wrap">
-                <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <circle cx="11" cy="11" r="7" />
-                    <path d="m20 20-3.5-3.5" />
-                </svg>
+                <Search size={15} aria-hidden="true" />
                 <input
                     bind:value={ensemblePickerSearchQuery}
                     placeholder="Search ensembles"
@@ -2938,18 +2442,8 @@
                         {:else if activeEnsemblePickerMusic}
                             <input
                                 type="checkbox"
-                                checked={musicHasEnsemble(
-                                    activeEnsemblePickerMusic,
-                                    ensemble.id,
-                                )}
-                                onchange={(event) =>
-                                    void toggleMusicEnsembleAssignment(
-                                        activeEnsemblePickerMusic.id,
-                                        ensemble.id,
-                                        (
-                                            event.currentTarget as HTMLInputElement
-                                        ).checked,
-                                    )}
+                                checked={stagedScoreEnsembleIds.includes(ensemble.id)}
+                                onchange={() => toggleStagedEnsembleForScore(ensemble.id)}
                             />
                         {/if}
                     </label>
@@ -2960,41 +2454,33 @@
 {/if}
 
 {#if activeMetadataMusic}
-    {#snippet metadataHeader()}
-        <div class="card-header admin-user-modal-header">
-            <div>
-                <p class="meta-label">Metadata</p>
-                <h3 id="score-metadata-title">Edit score</h3>
-            </div>
+    {#snippet editScoreFooter()}
+        <div class="actions admin-user-modal-actions">
             <button
-                class="button ghost admin-modal-close"
+                class="button ghost"
                 type="button"
-                aria-label="Close score metadata modal"
+                disabled={!!savingMetadataFor}
                 onclick={closeScoreMetadataModal}
             >
-                <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M18 6 6 18" />
-                    <path d="m6 6 12 12" />
-                </svg>
+                Cancel
+            </button>
+            <button
+                class="button"
+                type="button"
+                disabled={!!savingMetadataFor}
+                onclick={() => void handleSaveScoreMetadata()}
+            >
+                {savingMetadataFor ? "Saving..." : "Save changes"}
             </button>
         </div>
     {/snippet}
     <BaseModal
         onClose={closeScoreMetadataModal}
-        size="large"
+        size="medium"
         cardClass="admin-score-modal"
-        labelledBy="score-metadata-title"
-        header={metadataHeader}
+        title="Edit score"
+        subtitle={metadataTitle}
+        footer={editScoreFooter}
     >
         <div class="upload-grid admin-score-modal-grid">
             <label class="field">
@@ -3016,15 +2502,28 @@
                     placeholder="example: moonlight-sonata"
                 />
             </label>
+        </div>
+    </BaseModal>
+{/if}
+
+{#if activeInfoMusic}
+    <BaseModal
+        onClose={closeScoreInfoModal}
+        size="large"
+        cardClass="admin-score-modal"
+        title="Score info"
+        subtitle={activeInfoMusic.title}
+    >
+        <div class="upload-grid admin-score-modal-grid">
             <label class="field">
                 <span>MSCZ filename</span>
-                <input value={activeMetadataMusic.filename} readonly />
+                <input value={activeInfoMusic.filename} readonly />
             </label>
             <label class="field">
                 <span>Stem quality</span>
                 <input
                     value={qualityProfileLabel(
-                        activeMetadataMusic.quality_profile,
+                        activeInfoMusic.quality_profile,
                     )}
                     readonly
                 />
@@ -3032,7 +2531,7 @@
             <label class="field admin-score-modal-full">
                 <span>Ensembles</span>
                 <input
-                    value={activeMetadataMusic.ensemble_names.join(", ") ||
+                    value={activeInfoMusic.ensemble_names.join(", ") ||
                         "No ensemble"}
                     readonly
                 />
@@ -3040,50 +2539,50 @@
             <label class="field">
                 <span>Stem files size</span>
                 <input
-                    value={`${formatBytes(activeMetadataMusic.stems_total_bytes)} total`}
+                    value={`${formatBytes(activeInfoMusic.stems_total_bytes)} total`}
                     readonly
                 />
             </label>
             <label class="field">
                 <span>Uploaded</span>
                 <input
-                    value={prettyDate(activeMetadataMusic.created_at)}
+                    value={prettyDate(activeInfoMusic.created_at)}
                     readonly
                 />
             </label>
             <label class="field">
                 <span>Stems status</span>
-                <input value={activeMetadataMusic.stems_status} readonly />
+                <input value={activeInfoMusic.stems_status} readonly />
             </label>
             <label class="field">
                 <span>Audio status</span>
-                <input value={activeMetadataMusic.audio_status} readonly />
+                <input value={activeInfoMusic.audio_status} readonly />
             </label>
             <label class="field">
                 <span>MIDI status</span>
-                <input value={activeMetadataMusic.midi_status} readonly />
+                <input value={activeInfoMusic.midi_status} readonly />
             </label>
         </div>
-        {#if activeMetadataMusic.audio_error}
-            <p class="hint">{activeMetadataMusic.audio_error}</p>
+        {#if activeInfoMusic.audio_error}
+            <p class="hint">{activeInfoMusic.audio_error}</p>
         {/if}
-        {#if activeMetadataMusic.stems_error}
-            <p class="hint">{activeMetadataMusic.stems_error}</p>
+        {#if activeInfoMusic.stems_error}
+            <p class="hint">{activeInfoMusic.stems_error}</p>
         {/if}
-        {#if activeMetadataMusic.midi_error}
-            <p class="hint">{activeMetadataMusic.midi_error}</p>
+        {#if activeInfoMusic.midi_error}
+            <p class="hint">{activeInfoMusic.midi_error}</p>
         {/if}
         <div class="admin-score-links">
             <a
-                href={activeMetadataMusic.public_url}
+                href={activeInfoMusic.public_url}
                 target="_blank"
                 rel="noreferrer"
             >
                 Random link
             </a>
-            {#if activeMetadataMusic.public_id_url}
+            {#if activeInfoMusic.public_id_url}
                 <a
-                    href={activeMetadataMusic.public_id_url}
+                    href={activeInfoMusic.public_id_url}
                     target="_blank"
                     rel="noreferrer"
                 >
@@ -3091,39 +2590,29 @@
                 </a>
             {/if}
         </div>
-        <div class="actions admin-user-modal-actions">
-            {#if activeMetadataMusic.stems_status !== "ready" && canEditOwnedScore(
-                activeMetadataMusic,
-            )}
+        {#if activeInfoMusic.stems_status !== "ready" && canEditOwnedScore(activeInfoMusic)}
+            <div class="actions admin-user-modal-actions">
                 <button
                     class="button ghost"
                     type="button"
-                    disabled={retryingFor === activeMetadataMusic.id ||
-                        !!savingMetadataFor}
-                    onclick={() =>
-                        void handleRetryRender(activeMetadataMusic.id)}
+                    disabled={retryingFor === activeInfoMusic.id}
+                    onclick={() => void handleRetryRender(activeInfoMusic.id)}
                 >
-                    {retryingFor === activeMetadataMusic.id
+                    {retryingFor === activeInfoMusic.id
                         ? "Retrying render..."
                         : "Retry render"}
                 </button>
-            {/if}
-            <button
-                class="button ghost"
-                type="button"
-                disabled={!!savingMetadataFor}
-                onclick={closeScoreMetadataModal}
-            >
-                Cancel
-            </button>
-            <button
-                class="button"
-                type="button"
-                disabled={!!savingMetadataFor}
-                onclick={() => void handleSaveScoreMetadata()}
-            >
-                {savingMetadataFor ? "Saving..." : "Save changes"}
-            </button>
-        </div>
+            </div>
+        {/if}
     </BaseModal>
+{/if}
+
+{#if confirmAction}
+    <ConfirmModal
+        title={confirmMessage}
+        confirmLabel={confirmLabel}
+        busy={confirmBusy}
+        onConfirm={executeConfirm}
+        onClose={closeConfirm}
+    />
 {/if}
