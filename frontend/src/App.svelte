@@ -189,7 +189,6 @@
       // Ignore errors caused by the page unloading — never touch stored tokens.
       if (isPageUnloading()) return;
       if (error instanceof Error && error.name === "AbortError") return;
-      clearUserSession();
       userError =
         error instanceof Error
           ? error.message
@@ -199,12 +198,15 @@
     }
   }
 
-  function clearUserSession() {
+  function clearUserState() {
     refreshToken = "";
     currentUser = null;
     userSessionExpiresAt = null;
     userLibrary = [];
     clearAuth();
+  }
+
+  function clearStoredSession() {
     window.localStorage.removeItem("refresh-token");
     window.localStorage.removeItem("access-token");
     window.localStorage.removeItem("cached-user");
@@ -214,6 +216,11 @@
     window.localStorage.removeItem("cached-admin-ensembles");
   }
 
+  function clearUserSession() {
+    clearUserState();
+    clearStoredSession();
+  }
+
   function persistUserSession(
     newRefreshToken: string,
     newAccessToken: string,
@@ -221,7 +228,6 @@
     expiresAt: string | null,
   ) {
     if (!newRefreshToken) {
-      clearUserSession();
       userError = "Sign-in failed: server did not return a session token.";
       return;
     }
@@ -255,7 +261,6 @@
         navigate("/", true);
       }
     } catch (error) {
-      clearUserSession();
       userError =
         error instanceof Error
           ? error.message

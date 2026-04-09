@@ -2372,6 +2372,7 @@ async fn current_user_library(
     headers: HeaderMap,
 ) -> Result<Json<UserLibraryResponse>, AppError> {
     let auth = build_auth_context(&state, &headers).await?;
+    let ensemble_names = fetch_ensemble_summaries(&state.db_rw).await?;
     let music_entries = if auth.is_superadmin() {
         let rows = sqlx::query_as::<_, UserAccessibleMusicRow>(
             r#"
@@ -2420,7 +2421,28 @@ async fn current_user_library(
         find_accessible_music_for_user(&state.db_rw, &auth.user.id).await?
     };
 
-    let mut ensembles: Vec<UserLibraryEnsembleResponse> = Vec::new();
+    let mut ensembles: Vec<UserLibraryEnsembleResponse> = if auth.is_superadmin() {
+        Vec::new()
+    } else {
+        let mut user_ensembles = fetch_user_ensemble_memberships(&state.db_rw)
+            .await?
+            .into_iter()
+            .filter(|membership| membership.user_id == auth.user.id)
+            .filter_map(|membership| {
+                ensemble_names
+                    .get(&membership.ensemble_id)
+                    .cloned()
+                    .map(|name| UserLibraryEnsembleResponse {
+                        id: membership.ensemble_id,
+                        name,
+                        scores: Vec::new(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        user_ensembles.sort_by(|left, right| left.name.cmp(&right.name));
+        user_ensembles
+    };
+
     for (music, ensemble_id, ensemble_name) in music_entries {
         let public_id_url = music
             .public_id

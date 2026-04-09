@@ -159,6 +159,16 @@ type RuntimeConfig = {
   apiBaseUrl?: string
 }
 
+export class ApiError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 const runtimeConfig = (
   globalThis as typeof globalThis & {
     __FUMEN_CONFIG__?: RuntimeConfig
@@ -267,9 +277,13 @@ async function getAccessToken(): Promise<string> {
     } catch (err) {
       // Don't clear auth if the request was aborted (e.g. page unload).
       if (_isPageUnloading || (err instanceof Error && err.name === 'AbortError')) throw err
-      clearAuth()
-      _onSessionExpired?.()
-      throw new Error('Session expired. Please sign in again.')
+      if (err instanceof ApiError && err.status === 401) {
+        clearAuth()
+        _onSessionExpired?.()
+        throw new Error('Session expired. Please sign in again.')
+      }
+
+      throw err
     } finally {
       _refreshPromise = null
     }
@@ -365,7 +379,7 @@ async function requestJson<T>(path: string, options: JsonOptions = {}): Promise<
       // Ignore JSON parsing errors and keep the fallback message.
     }
 
-    throw new Error(message)
+    throw new ApiError(message, response.status)
   }
 
   if (response.status === 204) {
@@ -404,7 +418,7 @@ async function requestBlob(path: string, options: JsonOptions = {}): Promise<Blo
       // Ignore JSON parsing errors and keep the fallback message.
     }
 
-    throw new Error(message)
+    throw new ApiError(message, response.status)
   }
 
   return response.blob()
