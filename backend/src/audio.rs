@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use crate::models::DrumMapEntry;
+use crate::schemas::DrumMapEntry;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use midly::{MetaMessage, MidiMessage, Smf, TrackEventKind};
@@ -8,7 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use tokio::process::Command;
 use zip::ZipArchive;
 

@@ -30,9 +30,7 @@
     } = $props();
 
     function canAccessAdmin() {
-        return (
-            currentUser?.role === "admin" || currentUser?.role === "superadmin"
-        );
+        return currentUser?.role !== undefined && currentUser.role !== "user";
     }
 
     function ensembleAccent(name: string) {
@@ -106,7 +104,8 @@
                             <p class="meta-label">Library</p>
                             <h2>Your ensembles</h2>
                             <p class="lede">
-                                Jump between ensembles and open any score in one click.
+                                Jump between ensembles and open any score in one
+                                click.
                             </p>
                         </div>
                     </div>
@@ -134,15 +133,20 @@
                                             <div class="ensemble-summary-copy">
                                                 <h3>{ensemble.name}</h3>
                                                 <p class="subtle">
-                                                    {scoreLabel(ensemble.scores.length)}
+                                                    {scoreLabel(
+                                                        ensemble.scores.length,
+                                                    )}
                                                 </p>
                                             </div>
                                         </div>
-                                        <span class="ensemble-summary-icon" aria-hidden="true"
-                                            ></span
-                                        >
+                                        <span
+                                            class="ensemble-summary-icon"
+                                            aria-hidden="true"
+                                        ></span>
                                     </summary>
-                                    <div class="score-link-list library-score-grid">
+                                    <div
+                                        class="score-link-list library-score-grid"
+                                    >
                                         {#each ensemble.scores as score}
                                             <a
                                                 class="score-link-row"
@@ -219,7 +223,9 @@
                                         fill="currentColor"
                                     />
                                 </svg>
-                                {connectionBusy ? "Opening camera..." : "Scan QR code"}
+                                {connectionBusy
+                                    ? "Opening camera..."
+                                    : "Scan QR code"}
                             </button>
                             <p class="landing-note">
                                 Best on mobile. Camera access opens in a secure
@@ -229,17 +235,15 @@
                     </div>
                     <div class="landing-orbit" aria-hidden="true">
                         <div class="landing-orbit-ring"></div>
-                        <div class="landing-orbit-ring landing-orbit-ring-alt"></div>
+                        <div
+                            class="landing-orbit-ring landing-orbit-ring-alt"
+                        ></div>
                         <div class="landing-orbit-core">
                             <span>Fumen</span>
                             <strong>Scan to enter</strong>
                         </div>
-                        <div class="landing-chip landing-chip-a">
-                            Orchestra
-                        </div>
-                        <div class="landing-chip landing-chip-b">
-                            Library
-                        </div>
+                        <div class="landing-chip landing-chip-a">Orchestra</div>
+                        <div class="landing-chip landing-chip-b">Library</div>
                         <div class="landing-chip landing-chip-c">
                             Live score
                         </div>

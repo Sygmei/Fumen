@@ -26,6 +26,8 @@ struct CliUserRecord {
     username: String,
     created_at: String,
     is_superadmin: bool,
+    role: String,
+    created_by_user_id: Option<String>,
 }
 
 #[tokio::main]
@@ -75,7 +77,9 @@ async fn ensure_cli_schema(db: &PgPool) -> Result<()> {
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL,
-            is_superadmin BOOLEAN NOT NULL DEFAULT FALSE
+            is_superadmin BOOLEAN NOT NULL DEFAULT FALSE,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
         )
         "#,
     )
@@ -102,18 +106,29 @@ async fn ensure_cli_schema(db: &PgPool) -> Result<()> {
     )
     .execute(db)
     .await?;
+    sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'")
+        .execute(db)
+        .await?;
+    sqlx::query(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL",
+    )
+    .execute(db)
+    .await?;
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS users_single_superadmin_idx ON users (is_superadmin) WHERE is_superadmin = TRUE",
     )
     .execute(db)
     .await?;
+    sqlx::query("UPDATE users SET role = 'superadmin' WHERE is_superadmin = TRUE")
+        .execute(db)
+        .await?;
 
     Ok(())
 }
 
 async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<CliUserRecord> {
     if let Some(existing) = sqlx::query_as::<_, CliUserRecord>(
-        "SELECT id, username, created_at, is_superadmin FROM users WHERE is_superadmin = TRUE LIMIT 1",
+        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users WHERE role = 'superadmin' OR is_superadmin = TRUE LIMIT 1",
     )
     .fetch_optional(db)
     .await?
@@ -141,15 +156,19 @@ async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<CliUs
         username,
         created_at: utc_now_string(),
         is_superadmin: true,
+        role: "superadmin".to_owned(),
+        created_by_user_id: None,
     };
 
     sqlx::query(
-        "INSERT INTO users (id, username, created_at, is_superadmin) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO users (id, username, created_at, is_superadmin, role, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(&record.id)
     .bind(&record.username)
     .bind(&record.created_at)
     .bind(record.is_superadmin)
+    .bind(&record.role)
+    .bind(&record.created_by_user_id)
     .execute(db)
     .await?;
 
@@ -159,7 +178,7 @@ async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<CliUs
 async fn find_user_by_lookup(db: &PgPool, lookup: &str) -> Result<Option<CliUserRecord>> {
     Ok(sqlx::query_as::<_, CliUserRecord>(
         r#"
-        SELECT id, username, created_at, is_superadmin
+        SELECT id, username, created_at, is_superadmin, role, created_by_user_id
         FROM users
         WHERE username = $1 OR id = $1
         ORDER BY CASE WHEN username = $1 THEN 0 ELSE 1 END

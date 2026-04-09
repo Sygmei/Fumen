@@ -1,12 +1,20 @@
 <script lang="ts">
     import type { Snippet } from "svelte";
 
+    type ModalSize = "small" | "medium" | "large" | "full";
+
     const {
         onClose,
         children,
+        size = "small",
+        cardClass = "",
+        labelledBy,
     }: {
         onClose: () => void;
         children: Snippet;
+        size?: ModalSize;
+        cardClass?: string;
+        labelledBy?: string;
     } = $props();
 
     function handleBackdropClick(event: MouseEvent) {
@@ -24,7 +32,13 @@
     onclick={handleBackdropClick}
     onkeydown={(event) => event.key === "Escape" && onClose()}
 >
-    <div class="modal-card" role="dialog" aria-modal="true" tabindex="-1">
+    <div
+        class={`modal-card modal-card--${size} ${cardClass}`.trim()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        tabindex="-1"
+    >
         {@render children()}
     </div>
 </div>
