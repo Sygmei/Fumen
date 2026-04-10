@@ -1928,6 +1928,20 @@ h3 {
    size matching the container width.  CSS scaling would distort the instrument
    name margins, causing them to overlap note content. */
 
+/* Tailwind preflight (@layer base) sets img { height: auto; max-width: 100% }
+   which collapses the OSMD cursor: it is a 10×1 data-URL image that relies on
+   the HTML height attribute to stretch to the full system height.
+   `revert-layer` inside @layer base tells the cascade to skip the base layer
+   entirely for these images and fall back to the UA stylesheet, which honors
+   the HTML presentational height/width attributes. */
+@layer base {
+  img[id^="cursorImg-"] {
+    height: revert-layer;
+    max-width: revert-layer;
+    width: revert-layer;
+  }
+}
+
 /* ─── Mixer Panel (dark zone) ────────────────────────────────────────────── */
 .mixer-panel {
   display: grid;
