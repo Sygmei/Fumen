@@ -51,7 +51,7 @@
     >
         {#if hasHeader}
             <div class="modal-header">
-                <div class="card-header modal-card-header-row">
+                <div class="card-header items-start">
                     <div>
                         {#if title}<p class="meta-label">{title}</p>{/if}
                         {#if subtitle}<h2 id="modal-title">{subtitle}</h2>{/if}
@@ -82,8 +82,3 @@
     </div>
 </div>
 
-<style>
-    .modal-card-header-row {
-        align-items: flex-start;
-    }
-</style>
