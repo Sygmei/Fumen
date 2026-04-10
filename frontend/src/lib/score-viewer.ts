@@ -38,12 +38,15 @@ export class ScoreViewer {
   private currentSystemIdx = -1
   private container: HTMLElement
   private _clickHandler: ((e: MouseEvent) => void) | null = null
+  private readonly zoom: number
 
   /** Called when the user clicks on the score. Argument is seconds into the piece. */
   onClickSeek: ((seconds: number) => void) | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth
+    this.zoom = viewportWidth <= 840 ? 0.26 : 0.35
   }
 
   async load(musicXmlUrl: string): Promise<void> {
@@ -76,7 +79,7 @@ export class ScoreViewer {
         drawComposer: false,
         drawCursors: true,
         followCursor: false,
-        zoom: 0.35,
+        zoom: this.zoom,
       } as Record<string, unknown>,
     )
 
@@ -96,11 +99,11 @@ export class ScoreViewer {
         if (fullName) (part as any).abbreviationStr = fullName
       } catch { /* ignore */ }
     }
-    this.osmd.zoom = 0.35
+    this.osmd.zoom = this.zoom
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (typeof (this.osmd as any).setOptions === 'function') {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(this.osmd as any).setOptions({ zoom: 0.35 })
+      ;(this.osmd as any).setOptions({ zoom: this.zoom })
     }
     console.log('[ScoreViewer] zoom set to', this.osmd.zoom)
 
