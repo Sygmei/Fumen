@@ -27,12 +27,14 @@
     let mixerTracks = $state<StemTrack[]>([]);
     let midiLoading = $state(false);
     let midiPlayerError = $state("");
+    let stemLoadProgress = $state(0);
     let playbackState = $state<"stopped" | "playing" | "paused">("stopped");
     let playbackPosition = $state(0);
     let playbackDuration = $state(0);
     let pct = $derived(
         playbackDuration > 0 ? (playbackPosition / playbackDuration) * 100 : 0,
     );
+    let loadPct = $derived(stemLoadProgress * 100);
     let playbackFrame = $state<number | null>(null);
     let globalVolume = $state(1.0);
     let trackLevels = $state<Record<string, number>>({});
@@ -136,6 +138,7 @@
         midiLoading = true;
         midiPlayerError = "";
         stemPlaybackReady = false;
+        stemLoadProgress = 0;
 
         try {
             const stems = await fetchStems(key);
@@ -153,6 +156,7 @@
                     fullStemUrl: stem.full_stem_url,
                     durationSeconds: stem.duration_seconds,
                 })),
+                (progress) => { stemLoadProgress = progress; },
             );
             stemPlayer.setLevelMultiplier(15);
             stemPlaybackReady = stemPlayer.isReadyToPlay();
@@ -481,7 +485,7 @@
                                 disabled={mixerTracks.length === 0 ||
                                     midiLoading ||
                                     !stemPlaybackReady}
-                                style="--pct: {pct}%"
+                                style="--pct: {pct}%; --load-pct: {loadPct}%"
                                 aria-label="Playback position"
                             />
                         </div>

@@ -1821,14 +1821,22 @@ h3 {
   height: 4px;
   border-radius: 0;
   background: linear-gradient(to right,
+      #e03d1e 0%,
       #e03d1e var(--pct, 0%),
-      rgba(255, 255, 255, 0.12) var(--pct, 0%));
+      rgba(255, 255, 255, 0.32) var(--pct, 0%),
+      rgba(255, 255, 255, 0.32) var(--load-pct, 0%),
+      rgba(255, 255, 255, 0.12) var(--load-pct, 0%),
+      rgba(255, 255, 255, 0.12) 100%);
 }
 
 .playbar-track::-moz-range-track {
   height: 4px;
   border-radius: 0;
-  background: rgba(255, 255, 255, 0.12);
+  background: linear-gradient(to right,
+      rgba(255, 255, 255, 0.32) 0%,
+      rgba(255, 255, 255, 0.32) var(--load-pct, 0%),
+      rgba(255, 255, 255, 0.12) var(--load-pct, 0%),
+      rgba(255, 255, 255, 0.12) 100%);
 }
 
 .playbar-track::-moz-range-progress {

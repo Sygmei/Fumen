@@ -21,20 +21,22 @@ type StemSource = {
 
 type InternalTrack = {
   meta: StemSource
-  element: HTMLAudioElement
-  source: MediaElementAudioSourceNode
+  buffer: AudioBuffer
   gain: GainNode
   analyser: AnalyserNode
   analyserData: Uint8Array<ArrayBuffer>
+  // Created fresh on every play(); null when paused/stopped.
+  // AudioBufferSourceNode cannot be reused after stop().
+  sourceNode: AudioBufferSourceNode | null
   volume: number
   muted: boolean
 }
 
 export class StemMixerPlayer {
-  private static readonly SEEK_TOLERANCE_SECONDS = 0.03
-  private static readonly STALL_THRESHOLD_SECONDS = 1.0
-  private static readonly SOFT_SYNC_THRESHOLD_SECONDS = 0.05
-  private static readonly PLAYBACK_RATE_CORRECTION = 0.02
+  // Small lookahead so all source nodes are scheduled before the start time
+  // arrives.  50 ms is imperceptible but gives the browser enough runway.
+  private static readonly START_LOOKAHEAD_SECONDS = 0.05
+
   private context: AudioContext | null = null
   private tracks = new Map<string, InternalTrack>()
   private _duration = 0
@@ -42,51 +44,98 @@ export class StemMixerPlayer {
   private _isPlaying = false
   private _playbackOffset = 0
   private _isReadyToPlay = false
-  // AudioContext time recorded when play() transitions to playing.
-  // Used as master clock so getCurrentTime() doesn't depend on any
-  // individual HTMLAudioElement.currentTime (which has ~100ms jitter).
+  // The AudioContext.currentTime value at which playback was scheduled to
+  // begin (i.e. START_LOOKAHEAD_SECONDS in the future from the moment play()
+  // ran).  Used as the single authoritative clock; no per-track clocks exist.
   private _contextTimeAtStart = 0
 
-  async loadStems(stems: StemSource[]): Promise<LoadedStems> {
+  async loadStems(stems: StemSource[], onProgress?: (progress: number) => void): Promise<LoadedStems> {
     await this.dispose()
 
     this.context = new AudioContext()
-    this._duration = stems.reduce((max, stem) => Math.max(max, stem.durationSeconds), 0)
+    this._duration = stems.reduce((max, s) => Math.max(max, s.durationSeconds), 0)
     this._isReadyToPlay = false
-    const readinessTasks: Array<Promise<void>> = []
 
-    for (const stem of stems) {
-      const element = new Audio()
-      element.preload = 'auto'
-      element.crossOrigin = 'anonymous'
-      element.src = stem.fullStemUrl
+    // Per-stem byte counters for progress reporting.
+    type StemBytes = { loaded: number; total: number }
+    const stemBytes = new Map<string, StemBytes>(stems.map((s) => [s.id, { loaded: 0, total: 0 }]))
 
-      const source = this.context.createMediaElementSource(element)
-      const gain = this.context.createGain()
+    const reportProgress = () => {
+      if (!onProgress) return
+      const all = [...stemBytes.values()]
+      const totalBytes = all.reduce((s, p) => s + p.total, 0)
+      const loadedBytes = all.reduce((s, p) => s + p.loaded, 0)
+      if (totalBytes > 0) {
+        onProgress(Math.min(1, loadedBytes / totalBytes))
+      } else {
+        // No Content-Length headers — report by count of fully-loaded stems.
+        const done = all.filter((p) => p.loaded > 0 && p.loaded === p.total).length
+        onProgress(done / stems.length)
+      }
+    }
+
+    // Fetch and decode all stems in parallel.  AudioBufferSourceNode requires
+    // the full decoded PCM in memory; in exchange we get sample-accurate start
+    // and zero per-element clock skew.
+    await Promise.all(stems.map(async (stem) => {
+      const response = await fetch(stem.fullStemUrl)
+      if (!response.ok) {
+        throw new Error(`Failed to fetch stem "${stem.name}": HTTP ${response.status}`)
+      }
+
+      const contentLength = Number(response.headers.get('Content-Length') ?? '0')
+      stemBytes.set(stem.id, { loaded: 0, total: contentLength })
+      reportProgress()
+
+      // Stream the response body so we can count bytes as they arrive.
+      let arrayBuffer: ArrayBuffer
+      if (response.body && contentLength > 0) {
+        const reader = response.body.getReader()
+        const chunks: Uint8Array[] = []
+        let received = 0
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          chunks.push(value)
+          received += value.byteLength
+          stemBytes.set(stem.id, { loaded: received, total: contentLength })
+          reportProgress()
+        }
+        arrayBuffer = await new Blob(chunks).arrayBuffer()
+      } else {
+        // Fallback: no streaming (no Content-Length or no body stream).
+        arrayBuffer = await response.arrayBuffer()
+        const size = arrayBuffer.byteLength
+        stemBytes.set(stem.id, { loaded: size, total: size })
+        reportProgress()
+      }
+
+      // decodeAudioData runs in a worker thread; multiple parallel calls are fine.
+      const buffer = await this.context!.decodeAudioData(arrayBuffer)
+
+      const gain = this.context!.createGain()
       gain.gain.value = 1
-      const analyser = this.context.createAnalyser()
+      const analyser = this.context!.createAnalyser()
       analyser.fftSize = 1024
       analyser.smoothingTimeConstant = 0.6
 
-      source.connect(gain)
+      // gain -> analyser -> destination stays wired for the lifetime of the
+      // AudioContext.  The transient sourceNode plugs into gain on each play().
       gain.connect(analyser)
-      analyser.connect(this.context.destination)
+      analyser.connect(this.context!.destination)
 
       this.tracks.set(stem.id, {
         meta: stem,
-        element,
-        source,
+        buffer,
         gain,
         analyser,
         analyserData: new Uint8Array(analyser.fftSize) as Uint8Array<ArrayBuffer>,
+        sourceNode: null,
         volume: 1,
         muted: false,
       })
+    }))
 
-      readinessTasks.push(this.prepareTrackForPlayback(element, 0, stem.fullStemUrl))
-    }
-
-    await Promise.all(readinessTasks)
     this._isReadyToPlay = true
 
     return {
@@ -107,40 +156,40 @@ export class StemMixerPlayer {
       await this.context.resume()
     }
 
-    const seekTime = this._playbackOffset
-    console.log(`[StemMixer] play() offset=${seekTime.toFixed(3)} tracks=${this.tracks.size}`)
-    await Promise.all(
-      [...this.tracks.values()].map((track) =>
-        this.prepareTrackForPlayback(track.element, seekTime, track.meta.fullStemUrl),
-      ),
-    )
-    console.log(`[StemMixer] play() all tracks prepared, starting...`)
+    // Schedule every track to start at exactly the same AudioContext time.
+    // AudioBufferSourceNode.start(when, offset) is sample-accurate: all tracks
+    // begin on the same audio-engine clock tick regardless of JS event-loop
+    // timing, eliminating any inter-track drift at the source.
+    const startAt = this.context.currentTime + StemMixerPlayer.START_LOOKAHEAD_SECONDS
+    const offset = Math.max(0, Math.min(this._playbackOffset, this._duration))
 
-    // Latch the AudioContext clock BEFORE firing play() so the master clock
-    // starts counting from the same moment we initiate all tracks. Latching
-    // after Promise.all would make the clock lag behind already-playing elements.
-    this._contextTimeAtStart = this.context.currentTime
+    for (const track of this.tracks.values()) {
+      this._releaseSourceNode(track)
 
-    const starts = [...this.tracks.values()].map(async (track) => {
-      try {
-        await track.element.play()
-      } catch (error) {
-        throw error instanceof Error ? error : new Error('Unable to start stem playback')
+      if (offset >= track.buffer.duration) {
+        // Track is shorter than the seek position -- nothing to schedule.
+        // Silence flows naturally through the persistent gain/analyser chain.
+        continue
       }
-    })
 
-    await Promise.all(starts)
+      const sourceNode = this.context.createBufferSource()
+      sourceNode.buffer = track.buffer
+      sourceNode.connect(track.gain)
+      sourceNode.start(startAt, offset)
+      track.sourceNode = sourceNode
+    }
+
+    this._contextTimeAtStart = startAt
     this._isPlaying = true
   }
 
   pause(): void {
     if (!this._isPlaying) return
     this._playbackOffset = this.getCurrentTime()
-    this._contextTimeAtStart = 0
     this._isPlaying = false
+    this._contextTimeAtStart = 0
     for (const track of this.tracks.values()) {
-      track.element.playbackRate = 1.0
-      track.element.pause()
+      this._releaseSourceNode(track)
     }
   }
 
@@ -149,28 +198,23 @@ export class StemMixerPlayer {
     this._playbackOffset = 0
     this._contextTimeAtStart = 0
     for (const track of this.tracks.values()) {
-      track.element.playbackRate = 1.0
-      track.element.pause()
-      track.element.currentTime = 0
+      this._releaseSourceNode(track)
     }
   }
 
   seek(seconds: number): void {
-    const clamped = Math.max(0, Math.min(seconds, this._duration))
-    this._playbackOffset = clamped
-    this._contextTimeAtStart = 0  // reset; play() will latch a new value
-    for (const track of this.tracks.values()) {
-      const cappedTime = Math.min(clamped, this.maxSeekTimeForTrack(track))
-      if (Math.abs(track.element.currentTime - cappedTime) > StemMixerPlayer.SEEK_TOLERANCE_SECONDS) {
-        track.element.currentTime = cappedTime
-      }
-    }
+    // Seeking is synchronous and instant -- no buffering delay, no async events.
+    // The new offset is picked up by the next play() call.
+    this._playbackOffset = Math.max(0, Math.min(seconds, this._duration))
+    this._contextTimeAtStart = 0
   }
 
   getCurrentTime(): number {
     if (!this._isPlaying || !this.context || this._contextTimeAtStart === 0) {
       return this._playbackOffset
     }
+    // All source nodes share the same AudioContext clock so this formula is
+    // exact -- no re-anchoring, no polling of individual element positions.
     const elapsed = this.context.currentTime - this._contextTimeAtStart
     return Math.min(this._playbackOffset + elapsed, this._duration)
   }
@@ -188,40 +232,8 @@ export class StemMixerPlayer {
   }
 
   synchronizePlayback(): void {
-    if (!this._isPlaying || !this.context) return
-
-    // Use the AudioContext clock as the authoritative position.
-    // Three tiers of correction to avoid audible glitches:
-    //   > STALL_THRESHOLD   → hard seek (track stalled, network hiccup)
-    //   > SOFT_SYNC_THRESHOLD → adjust playbackRate ±2% to nudge without clicks
-    //   within tolerance    → restore playbackRate to 1.0
-    const expectedTime = this.getCurrentTime()
-
-    for (const track of this.tracks.values()) {
-      if (track.element.paused || track.element.ended || track.element.seeking) continue
-      if (track.element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) continue
-
-      const cappedExpected = Math.min(expectedTime, this.maxSeekTimeForTrack(track))
-      // positive drift → track is ahead of master clock
-      // negative drift → track is behind master clock
-      const drift = track.element.currentTime - cappedExpected
-      const absDrift = Math.abs(drift)
-
-      if (absDrift > StemMixerPlayer.STALL_THRESHOLD_SECONDS) {
-        // Large drift: hard seek (track genuinely stalled)
-        track.element.currentTime = cappedExpected
-        track.element.playbackRate = 1.0
-      } else if (absDrift > StemMixerPlayer.SOFT_SYNC_THRESHOLD_SECONDS) {
-        // Small drift: nudge with playbackRate to avoid audible click.
-        // Behind → speed up; Ahead → slow down.
-        track.element.playbackRate = drift < 0
-          ? 1.0 + StemMixerPlayer.PLAYBACK_RATE_CORRECTION
-          : 1.0 - StemMixerPlayer.PLAYBACK_RATE_CORRECTION
-      } else {
-        // Within tolerance: restore normal rate.
-        track.element.playbackRate = 1.0
-      }
-    }
+    // AudioBufferSourceNode is sample-accurate -- all tracks share one clock.
+    // No drift correction is necessary or possible.  Kept for API compatibility.
   }
 
   getLevel(trackId: string): number {
@@ -265,10 +277,7 @@ export class StemMixerPlayer {
     this._contextTimeAtStart = 0
 
     for (const track of this.tracks.values()) {
-      track.element.pause()
-      track.element.removeAttribute('src')
-      track.element.load()
-      track.source.disconnect()
+      this._releaseSourceNode(track)
       track.gain.disconnect()
       track.analyser.disconnect()
     }
@@ -282,123 +291,14 @@ export class StemMixerPlayer {
     }
   }
 
+  private _releaseSourceNode(track: InternalTrack): void {
+    if (!track.sourceNode) return
+    try { track.sourceNode.stop() } catch { /* already stopped or never started */ }
+    track.sourceNode.disconnect()
+    track.sourceNode = null
+  }
+
   private _applyTrackGain(track: InternalTrack): void {
     track.gain.gain.value = track.muted ? 0 : track.volume
   }
-
-  private async prepareTrackForPlayback(
-    element: HTMLAudioElement,
-    seekTime: number,
-    stemUrl: string,
-  ): Promise<void> {
-    const label = stemUrl.split('/').pop() ?? stemUrl
-
-    console.log(`[prep:${label}] start seekTime=${seekTime.toFixed(3)} readyState=${element.readyState} seeking=${element.seeking} currentTime=${element.currentTime.toFixed(3)}`)
-    await waitForLoadedMetadata(element, stemUrl)
-    const maxTime = Number.isFinite(element.duration) ? element.duration : Infinity
-    console.log(`[prep:${label}] metadata ok duration=${element.duration?.toFixed(3)} readyState=${element.readyState}`)
-
-    // Track ends before the seek target — no content to buffer here, skip entirely.
-    if (seekTime >= maxTime) {
-      console.log(`[prep:${label}] past track end, skipping`)
-      return
-    }
-
-    const cappedTime = Math.max(0, Math.min(seekTime, maxTime))
-    const needsSeek = element.seeking || Math.abs(element.currentTime - cappedTime) > StemMixerPlayer.SEEK_TOLERANCE_SECONDS
-    console.log(`[prep:${label}] needsSeek=${needsSeek} capped=${cappedTime.toFixed(3)}`)
-    if (needsSeek) {
-      console.log(`[prep:${label}] awaiting seeked...`)
-      await seekMediaElement(element, cappedTime, stemUrl)
-      console.log(`[prep:${label}] seeked done, readyState=${element.readyState} currentTime=${element.currentTime.toFixed(3)}`)
-      return
-    }
-
-    // No seek needed. Only wait for canPlay on initial load when there's no data yet.
-    // Tracks already positioned (readyState >= HAVE_CURRENT_DATA) are ready to play.
-    if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      console.log(`[prep:${label}] awaiting canPlay...`)
-      await waitForCanPlay(element, stemUrl)
-      console.log(`[prep:${label}] canPlay done, readyState=${element.readyState}`)
-    }
-  }
-
-  private maxSeekTimeForTrack(track: InternalTrack): number {
-    const measured = Number.isFinite(track.element.duration) ? track.element.duration : 0
-    const fallback = track.meta.durationSeconds
-    const duration = Math.max(measured, fallback, 0)
-    return duration
-  }
-
-
-}
-
-async function waitForLoadedMetadata(
-  element: HTMLAudioElement,
-  stemUrl: string,
-): Promise<void> {
-  if (element.readyState >= HTMLMediaElement.HAVE_METADATA && Number.isFinite(element.duration)) {
-    return
-  }
-
-  await waitForMediaEvent(element, 'loadedmetadata', stemUrl)
-}
-
-async function waitForCanPlay(element: HTMLAudioElement, stemUrl: string): Promise<void> {
-  if (element.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA && !element.seeking) {
-    return
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      element.removeEventListener('canplay', handleReady)
-      element.removeEventListener('canplaythrough', handleReady)
-      element.removeEventListener('error', handleError)
-    }
-    const handleReady = () => { cleanup(); resolve() }
-    const handleError = () => { cleanup(); reject(new Error(`Unable to stream stem: ${stemUrl}`)) }
-    element.addEventListener('canplay', handleReady, { once: true })
-    element.addEventListener('canplaythrough', handleReady, { once: true })
-    element.addEventListener('error', handleError, { once: true })
-  })
-}
-
-async function seekMediaElement(
-  element: HTMLAudioElement,
-  time: number,
-  stemUrl: string,
-): Promise<void> {
-  if (!Number.isFinite(time)) {
-    return
-  }
-
-  const seeked = waitForMediaEvent(element, 'seeked', stemUrl)
-  element.currentTime = time
-  await seeked
-}
-
-function waitForMediaEvent(
-  element: HTMLAudioElement,
-  eventName: keyof HTMLMediaElementEventMap,
-  stemUrl: string,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      element.removeEventListener(eventName, handleReady)
-      element.removeEventListener('error', handleError)
-    }
-
-    const handleReady = () => {
-      cleanup()
-      resolve()
-    }
-
-    const handleError = () => {
-      cleanup()
-      reject(new Error(`Unable to stream stem: ${stemUrl}`))
-    }
-
-    element.addEventListener(eventName, handleReady, { once: true })
-    element.addEventListener('error', handleError, { once: true })
-  })
 }
