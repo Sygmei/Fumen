@@ -9,6 +9,8 @@
         link,
         expiresAt,
         onClose,
+        eyebrow = "Temporary access",
+        linkLabel = "Connection link",
     }: {
         title: string;
         qrDataUrl: string;
@@ -16,6 +18,8 @@
         link: string;
         expiresAt: string;
         onClose: () => void;
+        eyebrow?: string;
+        linkLabel?: string;
     } = $props();
 
     function placeholderCell(index: number) {
@@ -32,7 +36,7 @@
     }
 </script>
 
-<BaseModal {onClose} size="large" title="Temporary access" subtitle={title}>
+<BaseModal {onClose} size="large" title={eyebrow} subtitle={title}>
     {#if qrDataUrl}
         <img class="qr-preview" src={qrDataUrl} alt={title} />
     {:else if isLoading}
@@ -56,7 +60,7 @@
         {/if}
     </p>
     <div class="field">
-        <span>Connection link</span>
+        <span>{linkLabel}</span>
         <input
             value={link}
             readonly

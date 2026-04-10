@@ -16,6 +16,7 @@
         onLogout,
         onShowQr,
         onOpenScanner,
+        onMyAccount,
     }: {
         routeKind: string;
         currentUser: AppUser | null;
@@ -28,6 +29,7 @@
         onLogout: () => Promise<void>;
         onShowQr: () => Promise<void>;
         onOpenScanner: () => void;
+        onMyAccount?: () => void;
     } = $props();
 
     function canAccessAdmin() {
@@ -79,6 +81,7 @@
             adminHref={canAccessAdmin() ? "/admin" : undefined}
             onShowQr={() => void onShowQr()}
             onLogout={() => void onLogout()}
+            {onMyAccount}
         />
         <section
             class="content-panel home-grid"

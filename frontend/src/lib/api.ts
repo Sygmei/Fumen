@@ -34,6 +34,8 @@ export type EnsembleRole = 'manager' | 'editor' | 'user'
 export type AppUser = {
   id: string
   username: string
+  display_name: string | null
+  avatar_url: string | null
   created_at: string
   role: GlobalRole
   managed_ensemble_ids: string[]
@@ -319,6 +321,10 @@ function resolveBackendAssetUrl(url: string | null | undefined): string | null {
   return new URL(url, API_BASE_ORIGIN).toString()
 }
 
+function normalizeAppUser(user: AppUser): AppUser {
+  return { ...user, avatar_url: resolveBackendAssetUrl(user.avatar_url) }
+}
+
 function normalizeAdminMusic(music: AdminMusic): AdminMusic {
   return {
     ...music,
@@ -441,9 +447,10 @@ export async function listMusics(): Promise<AdminMusic[]> {
 }
 
 export async function listUsers(): Promise<AppUser[]> {
-  return requestJson<AppUser[]>('/admin/users', {
+  const users = await requestJson<AppUser[]>('/admin/users', {
     authenticated: true,
   })
+  return users.map(normalizeAppUser)
 }
 
 export async function createUser(
@@ -462,6 +469,29 @@ export async function deleteUser(id: string): Promise<void> {
     method: 'DELETE',
     authenticated: true,
   })
+}
+
+export async function adminUpdateUser(
+  id: string,
+  payload: {
+    role?: Exclude<GlobalRole, 'superadmin'>
+    displayName?: string | null
+    avatarFile?: File | null
+    clearAvatar?: boolean
+  },
+): Promise<AppUser> {
+  const form = new FormData()
+  if (payload.role !== undefined) form.append('role', payload.role)
+  if (payload.displayName !== undefined)
+    form.append('display_name', payload.displayName ?? '')
+  if (payload.clearAvatar) form.append('clear_avatar', '1')
+  if (payload.avatarFile) form.append('avatar_file', payload.avatarFile)
+  const user = await requestJson<AppUser>(`/admin/users/${id}`, {
+    method: 'PATCH',
+    authenticated: true,
+    body: form,
+  })
+  return normalizeAppUser(user)
 }
 
 export async function createAdminUserLoginLink(
@@ -580,21 +610,19 @@ export async function updateMusicMetadata(
     title: string
     publicId: string
     icon?: string
+    iconFile?: File | null
   },
 ): Promise<AdminMusic> {
+  const body = new FormData()
+  body.append('title', payload.title.trim())
+  body.append('public_id', payload.publicId.trim())
+  if (payload.icon !== undefined) body.append('icon', payload.icon.trim())
+  if (payload.iconFile) body.append('icon_file', payload.iconFile)
+
   const music = await requestJson<AdminMusic>(`/admin/musics/${id}`, {
     method: 'PATCH',
     authenticated: true,
-    body: JSON.stringify({
-      title: payload.title.trim(),
-      public_id: payload.publicId.trim() ? payload.publicId.trim() : null,
-      icon:
-        payload.icon !== undefined
-          ? payload.icon.trim()
-            ? payload.icon.trim()
-            : null
-          : null,
-    }),
+    body,
   })
 
   return normalizeAdminMusic(music)
@@ -611,10 +639,11 @@ export async function fetchStems(accessKey: string): Promise<Stem[]> {
 }
 
 export async function exchangeLoginToken(token: string): Promise<AuthTokenResponse> {
-  return requestJson<AuthTokenResponse>('/auth/exchange', {
+  const resp = await requestJson<AuthTokenResponse>('/auth/exchange', {
     method: 'POST',
     body: JSON.stringify({ token }),
   })
+  return { ...resp, user: normalizeAppUser(resp.user) }
 }
 
 export async function moveMusic(
@@ -638,9 +667,28 @@ export async function deleteMusic(id: string): Promise<void> {
 }
 
 export async function fetchCurrentUser(): Promise<CurrentUserResponse> {
-  return requestJson<CurrentUserResponse>('/me', {
+  const resp = await requestJson<CurrentUserResponse>('/me', {
     authenticated: true,
   })
+  return { ...resp, user: normalizeAppUser(resp.user) }
+}
+
+export async function updateMyProfile(payload: {
+  displayName?: string | null
+  avatarFile?: File | null
+  clearAvatar?: boolean
+}): Promise<CurrentUserResponse> {
+  const form = new FormData()
+  if (payload.displayName !== undefined)
+    form.append('display_name', payload.displayName ?? '')
+  if (payload.clearAvatar) form.append('clear_avatar', '1')
+  if (payload.avatarFile) form.append('avatar_file', payload.avatarFile)
+  const resp = await requestJson<CurrentUserResponse>('/me/profile', {
+    method: 'PATCH',
+    authenticated: true,
+    body: form,
+  })
+  return { ...resp, user: normalizeAppUser(resp.user) }
 }
 
 export async function fetchUserLibrary(): Promise<UserLibraryResponse> {
@@ -655,6 +703,38 @@ export async function createMyLoginLink(): Promise<LoginLinkResponse> {
   return requestJson<LoginLinkResponse>('/me/login-link', {
     method: 'POST',
     authenticated: true,
+  })
+}
+
+export async function compressImageToJpeg(
+  file: File,
+  size = 256,
+  quality = 0.88,
+): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      const ctx = canvas.getContext('2d')!
+      // Centre-crop the image to a square
+      const srcSize = Math.min(img.naturalWidth, img.naturalHeight)
+      const sx = (img.naturalWidth - srcSize) / 2
+      const sy = (img.naturalHeight - srcSize) / 2
+      ctx.drawImage(img, sx, sy, srcSize, srcSize, 0, 0, size, size)
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { reject(new Error('Canvas toBlob returned null')); return }
+          resolve(new File([blob], 'avatar.jpg', { type: 'image/jpeg' }))
+        },
+        'image/jpeg',
+        quality,
+      )
+      URL.revokeObjectURL(img.src)
+    }
+    img.onerror = () => reject(new Error('Failed to load image'))
+    img.src = URL.createObjectURL(file)
   })
 }
 

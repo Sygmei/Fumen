@@ -24,6 +24,7 @@
   import HomePage from "./pages/HomePage.svelte";
   import CredentialModal from "./components/CredentialModal.svelte";
   import ScannerModal from "./components/ScannerModal.svelte";
+  import AccountModal from "./components/AccountModal.svelte";
   import { parseJwtSub } from "./lib/utils";
   (QrScanner as unknown as { WORKER_PATH: string }).WORKER_PATH = qrWorkerUrl;
 
@@ -93,11 +94,19 @@
   let credentialExpiresAt = $state("");
   let credentialQrDataUrl = $state("");
   let credentialQrLoading = $state(false);
+  let credentialEyebrow = $state("Temporary access");
+  let credentialLinkLabel = $state("Connection link");
 
   let scannerOpen = $state(false);
   let scannerError = $state("");
   let scannerVideo = $state<HTMLVideoElement | null>(null);
   let qrScanner: QrScanner | null = null;
+
+  let accountModalOpen = $state(false);
+
+  function handleMyAccount() {
+    accountModalOpen = true;
+  }
 
   onMount(() => {
     const handlePopState = () => {
@@ -372,8 +381,11 @@
   async function showCredentialModal(
     title: string,
     loadLink: () => Promise<LoginLinkResponse>,
+    options?: { eyebrow?: string; linkLabel?: string },
   ) {
     credentialModalTitle = title;
+    credentialEyebrow = options?.eyebrow ?? "Temporary access";
+    credentialLinkLabel = options?.linkLabel ?? "Connection link";
     credentialModalOpen = true;
     credentialQrLoading = true;
     credentialQrDataUrl = "";
@@ -472,6 +484,7 @@
       preloadedUsername={storedUsername}
       onShowCredential={showCredentialModal}
       onLogout={logoutUser}
+      onMyAccount={handleMyAccount}
     />
   </main>
 {:else}
@@ -487,12 +500,15 @@
     onLogout={logoutUser}
     onShowQr={handleShowMyQr}
     onOpenScanner={openScanner}
+    onMyAccount={handleMyAccount}
   />
 {/if}
 
 {#if credentialModalOpen}
   <CredentialModal
     title={credentialModalTitle}
+    eyebrow={credentialEyebrow}
+    linkLabel={credentialLinkLabel}
     qrDataUrl={credentialQrDataUrl}
     isLoading={credentialQrLoading}
     link={credentialLink}
@@ -512,5 +528,17 @@
     error={scannerError}
     onClose={closeScanner}
     bind:videoEl={scannerVideo}
+  />
+{/if}
+
+{#if accountModalOpen && currentUser}
+  <AccountModal
+    {currentUser}
+    onClose={() => { accountModalOpen = false; }}
+    onSaved={(user) => {
+      currentUser = user;
+      accountModalOpen = false;
+      window.localStorage.setItem("cached-user", JSON.stringify(user));
+    }}
   />
 {/if}

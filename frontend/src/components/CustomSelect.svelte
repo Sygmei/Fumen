@@ -1,5 +1,6 @@
 <script lang="ts">
     import { tick } from "svelte";
+    import type { Component } from "svelte";
     import { portal } from "../lib/portal";
     import { ChevronDown, Check } from '@lucide/svelte';
 
@@ -8,6 +9,7 @@
         label: string;
         description?: string;
         icon?: string;
+        iconComponent?: Component<{ size?: number; strokeWidth?: number }>;
         tone?: string;
     };
 
@@ -228,7 +230,11 @@
             class={`custom-select-trigger-icon ${toneClass(selectedOption)}`}
             aria-hidden="true"
         >
-            {selectedOption?.icon ?? "•"}
+            {#if selectedOption?.iconComponent}
+                <selectedOption.iconComponent size={18} strokeWidth={2} />
+            {:else}
+                {selectedOption?.icon ?? ""}
+            {/if}
         </span>
         <span class="custom-select-trigger-copy">
             <strong>{selectedOption?.label ?? placeholder}</strong>
@@ -274,7 +280,11 @@
                             class={`custom-select-option-icon ${toneClass(option)}`}
                             aria-hidden="true"
                         >
-                            {option.icon ?? "•"}
+                            {#if option.iconComponent}
+                                <option.iconComponent size={18} strokeWidth={2} />
+                            {:else}
+                                {option.icon ?? ""}
+                            {/if}
                         </span>
                         <span class="custom-select-option-copy">
                             <strong>{option.label}</strong>
@@ -302,19 +312,10 @@
         position: relative;
         display: grid;
         gap: 8px;
-        --custom-select-trigger-bg: linear-gradient(
-                135deg,
-                rgba(255, 255, 255, 0.97),
-                rgba(244, 247, 252, 0.94)
-            ),
-            var(--surface-alt);
+        --custom-select-trigger-bg: var(--surface-alt);
         --custom-select-panel-bg: rgba(255, 252, 250, 0.97);
         --custom-select-hover-bg: rgba(255, 255, 255, 0.82);
-        --custom-select-selected-bg: linear-gradient(
-            135deg,
-            rgba(255, 255, 255, 0.96),
-            color-mix(in srgb, var(--accent) 8%, white 92%)
-        );
+        --custom-select-selected-bg: color-mix(in srgb, var(--accent) 6%, white 94%);
         --custom-select-border: color-mix(
             in srgb,
             var(--border) 84%,
@@ -327,11 +328,7 @@
 
     @media (prefers-color-scheme: dark) {
         .custom-select {
-            --custom-select-trigger-bg: linear-gradient(
-                135deg,
-                color-mix(in srgb, var(--surface) 88%, black 12%),
-                color-mix(in srgb, var(--surface-alt) 92%, black 8%)
-            );
+            --custom-select-trigger-bg: color-mix(in srgb, var(--surface) 88%, black 12%);
             --custom-select-panel-bg: color-mix(
                 in srgb,
                 var(--surface-dark-2) 88%,
@@ -342,14 +339,10 @@
                 var(--surface-dark-3) 88%,
                 white 12%
             );
-            --custom-select-selected-bg: linear-gradient(
-                135deg,
-                color-mix(
-                    in srgb,
-                    var(--surface-dark-2) 80%,
-                    var(--accent) 20%
-                ),
-                color-mix(in srgb, var(--surface-dark-3) 90%, black 10%)
+            --custom-select-selected-bg: color-mix(
+                in srgb,
+                var(--surface-dark-2) 80%,
+                var(--accent) 20%
             );
             --custom-select-border: color-mix(
                 in srgb,
@@ -438,31 +431,19 @@
     .custom-select-trigger-icon.tone-admin,
     .custom-select-option-icon.tone-admin {
         color: #184fae;
-        background: linear-gradient(
-            135deg,
-            rgba(210, 229, 255, 0.98),
-            rgba(238, 245, 255, 0.9)
-        );
+        background: rgba(210, 229, 255, 0.8);
     }
 
     .custom-select-trigger-icon.tone-manager,
     .custom-select-option-icon.tone-manager {
         color: #0e7b68;
-        background: linear-gradient(
-            135deg,
-            rgba(201, 247, 234, 0.98),
-            rgba(238, 255, 248, 0.92)
-        );
+        background: rgba(201, 247, 234, 0.8);
     }
 
     .custom-select-trigger-icon.tone-editor,
     .custom-select-option-icon.tone-editor {
         color: #9a4a07;
-        background: linear-gradient(
-            135deg,
-            rgba(255, 227, 198, 0.98),
-            rgba(255, 244, 231, 0.92)
-        );
+        background: rgba(255, 227, 198, 0.8);
     }
 
     .custom-select-trigger-copy,

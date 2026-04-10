@@ -330,6 +330,10 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
     .await?;
     ensure_user_column(db, "is_superadmin", "BOOLEAN NOT NULL DEFAULT FALSE").await?;
     ensure_user_column(db, "role", "TEXT NOT NULL DEFAULT 'user'").await?;
+    ensure_user_column(db, "display_name", "TEXT").await?;
+    ensure_user_column(db, "avatar_image_key", "TEXT").await?;
+    ensure_user_column(db, "display_name", "TEXT").await?;
+    ensure_user_column(db, "avatar_image_key", "TEXT").await?;
     ensure_user_column(
         db,
         "created_by_user_id",
@@ -432,7 +436,7 @@ async fn backfill_music_ensemble_links(db: &PgPool) -> Result<()> {
 
 async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<UserRecord> {
     if let Some(existing) = sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users WHERE role = 'superadmin' OR is_superadmin = TRUE LIMIT 1",
+        "SELECT id, username, display_name, avatar_image_key, created_at, is_superadmin, role, created_by_user_id FROM users WHERE role = 'superadmin' OR is_superadmin = TRUE LIMIT 1",
     )
     .fetch_optional(db)
     .await?
@@ -459,6 +463,8 @@ async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<UserR
     let record = UserRecord {
         id: Uuid::new_v4().to_string(),
         username,
+        display_name: None,
+        avatar_image_key: None,
         created_at: utc_now_string(),
         is_superadmin: true,
         role: AppRole::Superadmin.as_str().to_owned(),

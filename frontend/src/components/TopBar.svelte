@@ -1,12 +1,13 @@
 <script lang="ts">
     import type { AppUser } from "../lib/api";
-    import { Menu, LayoutGrid, User, QrCode, House, LogOut } from '@lucide/svelte';
+    import { Menu, LayoutGrid, User, QrCode, House, LogOut, UserCog } from '@lucide/svelte';
 
     let {
         breadcrumbs,
         currentUser,
         onLogout,
         onShowQr,
+        onMyAccount,
         adminHref,
         userHomeHref,
         mobileMenuItems = [],
@@ -19,6 +20,8 @@
         onLogout?: () => void;
         /** If set, "Log in on another device" appears in the user menu */
         onShowQr?: () => void;
+        /** If set, "My account" appears in the user menu */
+        onMyAccount?: () => void;
         /** If set, an admin-panel icon link appears */
         adminHref?: string;
         /** If set, "User homepage" appears in the user menu */
@@ -61,6 +64,11 @@
     function handleShowQr() {
         closeMenu();
         onShowQr?.();
+    }
+
+    function handleMyAccount() {
+        closeMenu();
+        onMyAccount?.();
     }
 
     function handleMobileMenuSelect(id: string) {
@@ -159,18 +167,21 @@
             </a>
         {/if}
 
-        {#if currentUser && (onLogout || onShowQr || userHomeHref)}
+        {#if currentUser && (onLogout || onShowQr || onMyAccount || userHomeHref)}
             <div class="topbar-menu-wrap">
                 <button
-                    class="topbar-icon-btn"
+                    class="topbar-icon-btn topbar-user-btn"
                     onclick={toggleMenu}
                     aria-haspopup="true"
                     aria-expanded={menuOpen}
                     aria-label="User menu"
                     title="User menu"
                 >
-                    <!-- Person icon -->
-                    <User size={18} aria-hidden="true" />
+                    {#if currentUser.avatar_url}
+                        <img src={currentUser.avatar_url} alt="" class="topbar-avatar-img" />
+                    {:else}
+                        <User size={18} aria-hidden="true" />
+                    {/if}
                 </button>
 
                 {#if menuOpen}
@@ -184,12 +195,22 @@
                         <div class="topbar-dropdown-user">
                             <span class="meta-label">Signed in as</span>
                             <div class="topbar-dropdown-userline">
-                                <strong>{currentUser.username}</strong>
+                                <strong>{currentUser.display_name ?? currentUser.username}</strong>
                                 <span class="topbar-role-badge">
                                     {currentUser.role}
                                 </span>
                             </div>
                         </div>
+                        {#if onMyAccount}
+                            <button
+                                class="topbar-dropdown-item"
+                                role="menuitem"
+                                onclick={handleMyAccount}
+                            >
+                                <UserCog size={15} aria-hidden="true" />
+                                My account
+                            </button>
+                        {/if}
                         {#if onShowQr}
                             <button
                                 class="topbar-dropdown-item"
@@ -255,6 +276,20 @@
         background: var(--surface);
         color: var(--text);
         border-color: var(--border-strong);
+    }
+
+    .topbar-user-btn {
+        padding: 0;
+        overflow: hidden;
+        border-radius: 50%;
+    }
+
+    .topbar-avatar-img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 50%;
+        display: block;
     }
 
     .topbar-menu-wrap {

@@ -807,7 +807,7 @@ h3 {
 }
 
 .admin-account-card {
-  grid-template-columns: minmax(0, 1fr) 76px;
+  grid-template-columns: minmax(0, 1fr) 118px;
 }
 
 .admin-user-row-main {
@@ -832,6 +832,95 @@ h3 {
   font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
   font-size: 0.9rem;
   font-weight: 800;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.admin-user-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.admin-user-handle {
+  font-size: 0.8em;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.edit-user-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 24px;
+}
+
+.edit-user-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.edit-user-avatar-preview {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+
+.edit-user-avatar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edit-user-avatar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.edit-user-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edit-user-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.admin-input {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  font-size: 14px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+
+.admin-input:focus {
+  border-color: var(--accent);
+}
+
+.admin-error {
+  color: var(--color-error, #ef4444);
+  font-size: 13px;
+  margin: 0;
+}
+
+.modal-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px;
 }
 
 .admin-user-copy {
@@ -993,10 +1082,10 @@ h3 {
 
 .admin-account-card .admin-user-actions {
   display: grid;
-  grid-template-columns: repeat(2, 34px);
+  grid-template-columns: repeat(3, 34px);
   gap: 8px;
-  width: 76px;
-  min-width: 76px;
+  width: 118px;
+  min-width: 118px;
 }
 
 .admin-ensemble-card .admin-user-copy {
@@ -1426,15 +1515,15 @@ h3 {
   }
 
   .admin-account-card {
-    grid-template-columns: minmax(0, 1fr) 76px;
+    grid-template-columns: minmax(0, 1fr) 118px;
   }
 
   .admin-account-card .admin-user-actions {
     display: grid;
-    grid-template-columns: repeat(2, 34px);
+    grid-template-columns: repeat(3, 34px);
     gap: 8px;
-    width: 76px;
-    min-width: 76px;
+    width: 118px;
+    min-width: 118px;
     justify-content: end;
     align-self: center;
   }
@@ -3292,8 +3381,7 @@ h3 {
 }
 
 .modal-header {
-  min-height: 88px;
-  padding: 28px 28px 18px;
+  padding: 20px 28px;
   box-sizing: border-box;
   z-index: 6;
   background:
@@ -3318,8 +3406,7 @@ h3 {
 .modal-footer {
   display: flex;
   align-items: center;
-  min-height: 88px;
-  padding: 18px 28px;
+  padding: 16px 28px;
   box-sizing: border-box;
   z-index: 6;
   background:

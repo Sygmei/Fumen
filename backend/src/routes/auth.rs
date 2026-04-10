@@ -67,7 +67,7 @@ async fn exchange_login_token(
         refresh_token,
         access_token,
         access_token_expires_at: auth::exp_to_timestamp(access_token_exp),
-        user: auth::user_record_to_response(&state.db_rw, user).await?,
+        user: auth::user_record_to_response(&state.db_rw, &state.storage, user).await?,
     }))
 }
 

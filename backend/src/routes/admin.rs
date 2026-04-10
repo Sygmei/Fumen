@@ -2,7 +2,7 @@ use crate::models::{EnsembleRecord, MusicRecord, UserRecord};
 use crate::schemas::{
     AdminEnsembleResponse, AdminMusicResponse, CreateEnsembleRequest, CreateUserRequest,
     EnsembleMemberResponse, LoginLinkResponse, MoveMusicRequest, UpdateEnsembleMemberRequest,
-    UpdateMusicRequest, UserResponse,
+    UserResponse,
 };
 use crate::services::{auth, music};
 use crate::{
@@ -27,7 +27,10 @@ pub(super) fn routes() -> Router<AppState> {
             "/admin/users",
             get(admin_list_users).post(admin_create_user),
         )
-        .route("/admin/users/{id}", delete(admin_delete_user))
+        .route(
+            "/admin/users/{id}",
+            patch(admin_update_user).delete(admin_delete_user),
+        )
         .route(
             "/admin/users/{id}/login-link",
             post(admin_create_user_login_link),
@@ -67,14 +70,14 @@ async fn admin_list_users(
     }
 
     let rows = sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users ORDER BY username ASC",
+        "SELECT id, username, display_name, avatar_image_key, created_at, is_superadmin, role, created_by_user_id FROM users ORDER BY username ASC",
     )
     .fetch_all(&state.db_rw)
     .await?;
 
     let mut users = Vec::with_capacity(rows.len());
     for row in rows {
-        users.push(auth::user_record_to_response(&state.db_rw, row).await?);
+        users.push(auth::user_record_to_response(&state.db_rw, &state.storage, row).await?);
     }
 
     Ok(Json(users))
@@ -104,6 +107,8 @@ async fn admin_create_user(
     let record = UserRecord {
         id: Uuid::new_v4().to_string(),
         username,
+        display_name: None,
+        avatar_image_key: None,
         created_at: utc_now_string(),
         is_superadmin: requested_role == AppRole::Superadmin,
         role: requested_role.as_str().to_owned(),
@@ -122,7 +127,7 @@ async fn admin_create_user(
     .execute(&state.db_rw)
     .await?;
 
-    Ok(Json(auth::user_record_to_response(&state.db_rw, record).await?))
+    Ok(Json(auth::user_record_to_response(&state.db_rw, &state.storage, record).await?))
 }
 
 async fn admin_create_user_login_link(
@@ -159,6 +164,141 @@ async fn admin_delete_user(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn admin_update_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Json<UserResponse>, AppError> {
+    let auth_context = auth::require_admin_context(&state, &headers).await?;
+
+    let existing = auth::find_user_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("User not found"))?;
+
+    // Only admin/superadmin can edit users; managers have no edit power
+    if !auth_context.has_global_power() {
+        return Err(AppError::unauthorized(
+            "Only admins and superadmins can edit user profiles",
+        ));
+    }
+
+    // Cannot edit the superadmin account (unless you are the superadmin editing themselves)
+    let existing_role = auth::parse_global_role(&existing.role)?;
+    if existing_role == AppRole::Superadmin && existing.id != auth_context.user.id {
+        return Err(AppError::bad_request(
+            "The superadmin account cannot be modified via this endpoint",
+        ));
+    }
+
+    let mut form_display_name: Option<String> = None;
+    let mut form_role: Option<String> = None;
+    let mut avatar_file: Option<(String, bytes::Bytes)> = None;
+    let mut clear_avatar = false;
+
+    while let Some(field) = multipart.next_field().await? {
+        match field.name() {
+            Some("display_name") => {
+                let v = field.text().await?.trim().to_owned();
+                form_display_name = Some(v);
+            }
+            Some("role") => {
+                form_role = Some(field.text().await?.trim().to_owned());
+            }
+            Some("clear_avatar") => {
+                let v = field.text().await?;
+                clear_avatar = v.trim() == "1" || v.trim().eq_ignore_ascii_case("true");
+            }
+            Some("avatar_file") => {
+                let content_type = field
+                    .content_type()
+                    .map(|s| s.to_owned())
+                    .unwrap_or_else(|| "image/jpeg".to_owned());
+                avatar_file = Some((content_type, field.bytes().await?));
+            }
+            _ => {}
+        }
+    }
+
+    // Resolve new role
+    let new_role = if let Some(ref role_str) = form_role {
+        let requested = auth::parse_global_role(role_str)?;
+        // Only superadmin can promote to admin; admin can manage manager/editor/user
+        match auth_context.role {
+            AppRole::Superadmin => {
+                if requested == AppRole::Superadmin {
+                    return Err(AppError::bad_request(
+                        "Cannot assign the superadmin role via this endpoint",
+                    ));
+                }
+                requested
+            }
+            AppRole::Admin => match requested {
+                AppRole::Admin | AppRole::Manager | AppRole::Editor | AppRole::User => requested,
+                AppRole::Superadmin => {
+                    return Err(AppError::bad_request(
+                        "Admins cannot promote users to admin or superadmin",
+                    ));
+                }
+            },
+            _ => {
+                return Err(AppError::unauthorized(
+                    "Only admins and superadmins can change roles",
+                ));
+            }
+        }
+    } else {
+        existing_role
+    };
+
+    // Resolve display name
+    let new_display_name: Option<String> = if let Some(ref v) = form_display_name {
+        if v.is_empty() { None } else { Some(v.clone()) }
+    } else {
+        existing.display_name.clone()
+    };
+
+    // Resolve avatar
+    let new_avatar_key = if clear_avatar {
+        None
+    } else if let Some((content_type, avatar_bytes)) = avatar_file {
+        if !avatar_bytes.is_empty() {
+            let ext = match content_type.as_str() {
+                "image/png" => "png",
+                "image/gif" => "gif",
+                "image/webp" => "webp",
+                _ => "jpg",
+            };
+            let key = format!("avatars/{}.{}", id, ext);
+            state.storage.upload_bytes(&key, avatar_bytes, &content_type).await?;
+            Some(key)
+        } else {
+            existing.avatar_image_key.clone()
+        }
+    } else {
+        existing.avatar_image_key.clone()
+    };
+
+    sqlx::query(
+        "UPDATE users SET display_name = $1, role = $2, is_superadmin = $3, avatar_image_key = $4 WHERE id = $5",
+    )
+    .bind(&new_display_name)
+    .bind(new_role.as_str())
+    .bind(new_role == AppRole::Superadmin)
+    .bind(&new_avatar_key)
+    .bind(&id)
+    .execute(&state.db_rw)
+    .await?;
+
+    let updated = auth::find_user_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("User not found"))?;
+
+    Ok(Json(
+        auth::user_record_to_response(&state.db_rw, &state.storage, updated).await?,
+    ))
 }
 
 async fn admin_list_ensembles(
@@ -777,7 +917,7 @@ async fn admin_update_music(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(payload): Json<UpdateMusicRequest>,
+    mut multipart: Multipart,
 ) -> Result<Json<AdminMusicResponse>, AppError> {
     let auth_context = auth::require_admin_context(&state, &headers).await?;
 
@@ -786,7 +926,30 @@ async fn admin_update_music(
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     music::ensure_can_manage_music(&state.db_rw, &auth_context, &id).await?;
 
-    let title = match payload.title {
+    let mut form_title: Option<String> = None;
+    let mut form_icon: Option<String> = None;
+    let mut form_public_id: Option<String> = None;
+    let mut icon_file: Option<(String, Bytes)> = None;
+
+    while let Some(field) = multipart.next_field().await? {
+        match field.name() {
+            Some("title") => form_title = Some(field.text().await?.trim().to_owned()),
+            Some("icon") => form_icon = Some(field.text().await?.trim().to_owned()),
+            Some("public_id") => form_public_id = Some(field.text().await?.trim().to_owned()),
+            Some("icon_file") => {
+                icon_file = Some((
+                    field
+                        .content_type()
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| "image/jpeg".to_owned()),
+                    field.bytes().await?,
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    let title = match form_title {
         Some(value) => {
             let trimmed = value.trim();
             if trimmed.is_empty() {
@@ -796,18 +959,41 @@ async fn admin_update_music(
         }
         None => existing.title,
     };
-    let public_id = normalize_public_id(payload.public_id.as_deref())?;
-    let icon = normalize_music_icon(payload.icon.as_deref())?;
+    let public_id = normalize_public_id(form_public_id.as_deref())?;
+    let icon = normalize_music_icon(form_icon.as_deref())?;
     music::ensure_public_id_available(&state.db_rw, public_id.as_deref(), Some(&id)).await?;
 
-    let update_result =
-        sqlx::query("UPDATE musics SET title = $1, public_id = $2, icon = $3 WHERE id = $4")
-            .bind(&title)
-            .bind(&public_id)
-            .bind(&icon)
-            .bind(&id)
-            .execute(&state.db_rw)
-            .await?;
+    let icon_image_key: Option<String> = if let Some((icon_content_type, icon_bytes)) = icon_file {
+        if !icon_bytes.is_empty() {
+            let ext = match icon_content_type.as_str() {
+                "image/png" => "png",
+                "image/gif" => "gif",
+                "image/webp" => "webp",
+                _ => "jpg",
+            };
+            let icon_key = format!("scores/{id}/icon.{ext}");
+            state
+                .storage
+                .upload_bytes(&icon_key, icon_bytes, &icon_content_type)
+                .await?;
+            Some(icon_key)
+        } else {
+            existing.icon_image_key.clone()
+        }
+    } else {
+        existing.icon_image_key.clone()
+    };
+
+    let update_result = sqlx::query(
+        "UPDATE musics SET title = $1, public_id = $2, icon = $3, icon_image_key = $4 WHERE id = $5",
+    )
+    .bind(&title)
+    .bind(&public_id)
+    .bind(&icon)
+    .bind(&icon_image_key)
+    .bind(&id)
+    .execute(&state.db_rw)
+    .await?;
 
     if update_result.rows_affected() == 0 {
         return Err(AppError::not_found("Music not found"));

@@ -2,6 +2,7 @@
     import {
         addMusicToEnsemble,
         addUserToEnsemble,
+        adminUpdateUser,
         createAdminUserLoginLink,
         createEnsemble,
         createUser,
@@ -17,6 +18,7 @@
         STEM_QUALITY_PROFILES,
         updateMusicMetadata,
         uploadMusic,
+        compressImageToJpeg,
         type AdminMusic,
         type AppUser,
         type Ensemble,
@@ -31,7 +33,7 @@
     import ConfirmModal from "../components/ConfirmModal.svelte";
     import { formatBytes, prettyDate, qualityProfileLabel } from "../lib/utils";
     import TopBar from "../components/TopBar.svelte";
-    import { Search, Plus, QrCode, Trash2, UserPlus, Music, Users, Pencil, Info, Download, ChevronDown } from '@lucide/svelte';
+    import { Search, Plus, QrCode, Trash2, UserPlus, Music, Users, Pencil, Info, Download, ChevronDown, Shield, User } from '@lucide/svelte';
 
     function readAdminCache<T>(key: string): T[] {
         try {
@@ -53,6 +55,7 @@
         preloadedUsername,
         onShowCredential,
         onLogout,
+        onMyAccount,
     }: {
         currentUser: AppUser | null;
         userLoading: boolean;
@@ -61,8 +64,10 @@
         onShowCredential: (
             title: string,
             loadLink: () => Promise<LoginLinkResponse>,
+            options?: { eyebrow?: string; linkLabel?: string },
         ) => Promise<void>;
         onLogout: () => Promise<void>;
+        onMyAccount?: () => void;
     } = $props();
 
     type AdminSection = "users" | "ensembles" | "scores";
@@ -97,6 +102,16 @@
     let showCreateUserModal = $state(false);
     let creatingUser = $state(false);
     let deletingUserFor = $state("");
+
+    // Edit user modal state
+    let editingUser = $state<AppUser | null>(null);
+    let editingDisplayName = $state("");
+    let editingRole = $state<Exclude<GlobalRole, "superadmin">>("user");
+    let editingAvatarFile = $state<File | null>(null);
+    let editingAvatarPreview = $state<string | null>(null);
+    let editingClearAvatar = $state(false);
+    let savingEditUser = $state(false);
+    let editUserError = $state("");
     let ensembleSearchQuery = $state("");
     let newEnsembleName = $state("");
     let showCreateEnsembleModal = $state(false);
@@ -132,6 +147,7 @@
     let metadataMusicId = $state("");
     let metadataTitle = $state("");
     let metadataIcon = $state("");
+    let metadataIconFile = $state<File | null>(null);
     let metadataPublicId = $state("");
     let savingMetadataFor = $state("");
     let infoMusicId = $state("");
@@ -281,17 +297,11 @@
         return "User";
     }
 
-    function createRoleIcon(role: Exclude<GlobalRole, "superadmin">) {
-        if (role === "admin") {
-            return "ðŸ›¡";
-        }
-        if (role === "manager") {
-            return "ðŸ‘¥";
-        }
-        if (role === "editor") {
-            return "âœŽ";
-        }
-        return "â€¢";
+    function createRoleIconComponent(role: Exclude<GlobalRole, "superadmin">) {
+        if (role === "admin") return Shield;
+        if (role === "manager") return Users;
+        if (role === "editor") return Pencil;
+        return User;
     }
 
     let createUserRoleOptions = $derived.by(() =>
@@ -299,10 +309,20 @@
             value: role,
             label: createRoleLabel(role),
             description: createRoleDescription(role),
-            icon: createRoleIcon(role),
+            iconComponent: createRoleIconComponent(role),
             tone: role,
         })),
     );
+
+    function editUserRoleOptions(targetUser: AppUser) {
+        return allowedCreateRoles().map((role) => ({
+            value: role,
+            label: createRoleLabel(role),
+            description: createRoleDescription(role),
+            iconComponent: createRoleIconComponent(role),
+            tone: role,
+        }));
+    }
 
     function createRoleDescription(role: Exclude<GlobalRole, "superadmin">) {
         if (role === "admin") {
@@ -317,14 +337,10 @@
         return "Can sign in and listen to scores they can access.";
     }
 
-    function ensembleRoleIcon(role: EnsembleRole) {
-        if (role === "manager") {
-            return "ðŸ‘¥";
-        }
-        if (role === "editor") {
-            return "âœŽ";
-        }
-        return "â€¢";
+    function ensembleRoleIconComponent(role: EnsembleRole) {
+        if (role === "manager") return Users;
+        if (role === "editor") return Pencil;
+        return User;
     }
 
     function ensembleRoleDescription(role: EnsembleRole) {
@@ -342,7 +358,7 @@
             value: role,
             label: memberRoleLabel(role),
             description: ensembleRoleDescription(role),
-            icon: ensembleRoleIcon(role),
+            iconComponent: ensembleRoleIconComponent(role),
             tone: role,
         }));
     }
@@ -1033,6 +1049,7 @@
             await onShowCredential(
                 `Share link for ${music.title}`,
                 () => Promise.resolve({ connection_url: url, expires_at: "" }),
+                { eyebrow: "Share score", linkLabel: "Share link" },
             );
         } catch (error) {
             adminError = error instanceof Error ? error.message : "Failed to show QR";
@@ -1089,6 +1106,7 @@
         metadataMusicId = music.id;
         metadataTitle = music.title;
         metadataIcon = music.icon ?? "";
+        metadataIconFile = null;
         metadataPublicId = music.public_id ?? "";
         adminError = "";
         openDownloadMenuFor = "";
@@ -1101,6 +1119,7 @@
         metadataMusicId = "";
         metadataTitle = "";
         metadataIcon = "";
+        metadataIconFile = null;
         metadataPublicId = "";
     }
 
@@ -1235,6 +1254,7 @@
                 title: metadataTitle,
                 publicId: metadataPublicId,
                 icon: metadataIcon,
+                iconFile: metadataIconFile,
             });
             musics = musics.map((music) =>
                 music.id === metadataMusicId ? updated : music,
@@ -1289,6 +1309,69 @@
 
     function handleDeleteUser(user: AppUser) {
         openConfirm(`Delete ${user.username} permanently?`, "Delete", () => deleteUserAccount(user));
+    }
+
+    const MAX_AVATAR_BYTES = 1 * 1024 * 1024;
+
+    function openUserEditModal(user: AppUser) {
+        editingUser = user;
+        editingDisplayName = user.display_name ?? "";
+        editingRole = (user.role === "superadmin" ? "admin" : user.role) as Exclude<GlobalRole, "superadmin">;
+        editingAvatarFile = null;
+        editingAvatarPreview = user.avatar_url;
+        editingClearAvatar = false;
+        editUserError = "";
+    }
+
+    function closeUserEditModal() {
+        editingUser = null;
+        editingAvatarFile = null;
+        editingAvatarPreview = null;
+    }
+
+    async function handleEditAvatarChange(event: Event) {
+        const input = event.currentTarget as HTMLInputElement;
+        const file = input.files?.[0];
+        if (!file) return;
+        if (file.size > MAX_AVATAR_BYTES) {
+            editUserError = "Image must be under 1 MB.";
+            input.value = "";
+            return;
+        }
+        editUserError = "";
+        const compressed = await compressImageToJpeg(file, 256);
+        editingAvatarFile = compressed;
+        editingClearAvatar = false;
+        const reader = new FileReader();
+        reader.onload = () => { editingAvatarPreview = reader.result as string; };
+        reader.readAsDataURL(compressed);
+    }
+
+    function handleEditRemoveAvatar() {
+        editingAvatarFile = null;
+        editingClearAvatar = true;
+        editingAvatarPreview = null;
+    }
+
+    async function handleSaveUserEdit() {
+        if (!editingUser) return;
+        savingEditUser = true;
+        editUserError = "";
+        try {
+            const updated = await adminUpdateUser(editingUser.id, {
+                role: editingRole,
+                displayName: editingDisplayName.trim() || null,
+                avatarFile: editingAvatarFile,
+                clearAvatar: editingClearAvatar,
+            });
+            adminUsers = adminUsers.map((u) => u.id === updated.id ? updated : u);
+            closeUserEditModal();
+            adminSuccess = `User ${updated.username} updated.`;
+        } catch (error) {
+            editUserError = error instanceof Error ? error.message : "Failed to save.";
+        } finally {
+            savingEditUser = false;
+        }
     }
 
     async function deleteEnsembleAccount(ensemble: Ensemble) {
@@ -1436,6 +1519,7 @@
             {currentUser}
             userHomeHref="/"
             onLogout={() => void onLogout()}
+            {onMyAccount}
             mobileMenuItems={mobileAdminSectionItems()}
             mobileMenuActiveId={adminSection}
             mobileMenuAriaLabel="Admin sections"
@@ -1525,12 +1609,20 @@
                                                     class="admin-user-avatar"
                                                     aria-hidden="true"
                                                 >
-                                                    {user.username
-                                                        .slice(0, 1)
-                                                        .toUpperCase()}
+                                                    {#if user.avatar_url}
+                                                        <img src={user.avatar_url} alt="" class="admin-user-avatar-img" />
+                                                    {:else}
+                                                        {user.username.slice(0, 1).toUpperCase()}
+                                                    {/if}
                                                 </div>
                                                 <div class="admin-user-copy">
-                                                    <h3>{user.username}</h3>
+                                                    <h3>
+                                                        {#if user.display_name}
+                                                            {user.display_name} — <span class="admin-user-handle">@{user.username}</span>
+                                                        {:else}
+                                                            @{user.username}
+                                                        {/if}
+                                                    </h3>
                                                     <p
                                                         class="admin-user-role-pill"
                                                     >
@@ -1541,6 +1633,17 @@
                                             <div
                                                 class="actions admin-user-actions"
                                             >
+                                                {#if canDeleteUserAccount(user) || isSuperadmin()}
+                                                    <button
+                                                        class="button secondary admin-user-action"
+                                                        type="button"
+                                                        onclick={() => openUserEditModal(user)}
+                                                        aria-label={`Edit ${user.username}`}
+                                                        title="Edit user"
+                                                    >
+                                                        <Pencil size={15} aria-hidden="true" />
+                                                    </button>
+                                                {/if}
                                                 <button
                                                     class="button secondary admin-user-action"
                                                     onclick={() =>
@@ -1753,7 +1856,7 @@
                                                         icon={music.icon}
                                                         imageUrl={music.icon_image_url}
                                                     />
-                                                    <span>{music.title}</span>
+                                                    <a href={music.public_url} target="_blank" rel="noreferrer">{music.title}</a>
                                                 </h3>
                                                 <div
                                                     class="download-menu admin-score-download-menu"
@@ -2487,12 +2590,16 @@
                 <span>Title</span>
                 <input bind:value={metadataTitle} />
             </label>
-            <label class="field">
-                <span>Score icon</span>
+            <label class="field file-field admin-score-file-field">
+                <span>Icon image</span>
                 <input
-                    bind:value={metadataIcon}
-                    maxlength="2"
-                    placeholder="Optional emoji or 2-char mark"
+                    id="metadata-icon-file-input"
+                    type="file"
+                    accept="image/*"
+                    onchange={(event) => {
+                        const target = event.currentTarget as HTMLInputElement;
+                        metadataIconFile = target.files?.[0] ?? null;
+                    }}
                 />
             </label>
             <label class="field admin-score-modal-full">
@@ -2615,4 +2722,93 @@
         onConfirm={executeConfirm}
         onClose={closeConfirm}
     />
+{/if}
+
+{#if editingUser}
+    <BaseModal
+        title="Edit user"
+        subtitle={editingUser.display_name ?? editingUser.username}
+        size="medium"
+        onClose={closeUserEditModal}
+    >
+        {#snippet children()}
+            <form
+                class="edit-user-form"
+                onsubmit={(e) => { e.preventDefault(); void handleSaveUserEdit(); }}
+            >
+                <div class="edit-user-avatar-row">
+                    <div class="edit-user-avatar-preview admin-user-avatar">
+                        {#if editingAvatarPreview}
+                            <img src={editingAvatarPreview} alt="" class="admin-user-avatar-img" />
+                        {:else}
+                            {editingUser.username.slice(0, 1).toUpperCase()}
+                        {/if}
+                    </div>
+                    <div class="edit-user-avatar-actions">
+                        <label class="button secondary small edit-user-avatar-btn">
+                            <Pencil size={13} aria-hidden="true" />
+                            {editingAvatarPreview ? "Change photo" : "Upload photo"}
+                            <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,image/gif"
+                                onchange={handleEditAvatarChange}
+                                style="display:none"
+                            />
+                        </label>
+                        {#if editingAvatarPreview}
+                            <button
+                                type="button"
+                                class="button ghost small"
+                                onclick={handleEditRemoveAvatar}
+                            >Remove</button>
+                        {/if}
+                    </div>
+                </div>
+
+                <div class="edit-user-field">
+                    <label class="edit-user-label" for="edit-display-name">Display name</label>
+                    <input
+                        id="edit-display-name"
+                        class="admin-input"
+                        type="text"
+                        placeholder={editingUser.username}
+                        bind:value={editingDisplayName}
+                        maxlength={80}
+                    />
+                </div>
+
+                {#if canDeleteUserAccount(editingUser) || isSuperadmin()}
+                    <div class="edit-user-field">
+                        <label class="edit-user-label" for="edit-role">Role</label>
+                        <CustomSelect
+                            id="edit-role"
+                            value={editingRole}
+                            options={editUserRoleOptions(editingUser)}
+                            onchange={(v) => { editingRole = v as Exclude<GlobalRole, "superadmin">; }}
+                        />
+                    </div>
+                {/if}
+
+                {#if editUserError}
+                    <p class="admin-error">{editUserError}</p>
+                {/if}
+            </form>
+        {/snippet}
+        {#snippet footer()}
+            <div class="actions admin-user-modal-actions">
+                <button
+                    class="button ghost"
+                    type="button"
+                    onclick={closeUserEditModal}
+                    disabled={savingEditUser}
+                >Cancel</button>
+                <button
+                    class="button"
+                    type="button"
+                    onclick={() => void handleSaveUserEdit()}
+                    disabled={savingEditUser}
+                >{savingEditUser ? "Saving…" : "Save"}</button>
+            </div>
+        {/snippet}
+    </BaseModal>
 {/if}

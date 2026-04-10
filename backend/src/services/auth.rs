@@ -1,6 +1,7 @@
 use crate::config::AppConfig;
 use crate::models::{EnsembleRecord, MusicRecord, UserRecord, UserSessionRecord};
 use crate::schemas::{LoginLinkResponse, UserResponse};
+use crate::storage::Storage;
 use crate::{
     ACCESS_TOKEN_TTL_SECONDS, AppError, AppRole, AppState, AuthContext, EnsembleRole,
     LOGIN_LINK_TTL_MINUTES, format_timestamp, generate_auth_token,
@@ -27,7 +28,7 @@ struct AccessTokenClaims {
 
 pub(crate) async fn find_user_by_id(db: &PgPool, id: &str) -> Result<Option<UserRecord>, AppError> {
     Ok(sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users WHERE id = $1",
+        "SELECT id, username, display_name, avatar_image_key, created_at, is_superadmin, role, created_by_user_id FROM users WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(db)
@@ -39,7 +40,7 @@ pub(crate) async fn find_user_by_username(
     username: &str,
 ) -> Result<Option<UserRecord>, AppError> {
     Ok(sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users WHERE username = $1",
+        "SELECT id, username, display_name, avatar_image_key, created_at, is_superadmin, role, created_by_user_id FROM users WHERE username = $1",
     )
     .bind(username)
     .fetch_optional(db)
@@ -391,6 +392,7 @@ pub(crate) async fn fetch_all_ensemble_ids(
 
 pub(crate) async fn user_record_to_response(
     db: &PgPool,
+    storage: &Storage,
     record: UserRecord,
 ) -> Result<UserResponse, AppError> {
     let role = parse_global_role(&record.role)?;
@@ -403,10 +405,21 @@ pub(crate) async fn user_record_to_response(
             fetch_editable_ensemble_ids(db, &record.id).await?,
         )
     };
+    let avatar_url = record
+        .avatar_image_key
+        .as_deref()
+        .and_then(|key| storage.public_url(key))
+        .or_else(|| {
+            record.avatar_image_key.as_ref().map(|_| {
+                format!("/api/users/{}/avatar", record.id)
+            })
+        });
 
     Ok(UserResponse {
         id: record.id,
         username: record.username,
+        display_name: record.display_name,
+        avatar_url,
         created_at: record.created_at,
         role: role.as_str().to_owned(),
         managed_ensemble_ids,
@@ -415,7 +428,7 @@ pub(crate) async fn user_record_to_response(
     })
 }
 
-pub(crate) fn auth_context_to_user_response(auth: &AuthContext) -> UserResponse {
+pub(crate) fn auth_context_to_user_response(auth: &AuthContext, storage: &Storage) -> UserResponse {
     let mut managed_ensemble_ids = auth
         .managed_ensemble_ids
         .iter()
@@ -428,10 +441,20 @@ pub(crate) fn auth_context_to_user_response(auth: &AuthContext) -> UserResponse 
         .cloned()
         .collect::<Vec<_>>();
     editable_ensemble_ids.sort();
+    let avatar_url = auth.user.avatar_image_key
+        .as_deref()
+        .and_then(|key| storage.public_url(key))
+        .or_else(|| {
+            auth.user.avatar_image_key.as_ref().map(|_| {
+                format!("/api/users/{}/avatar", auth.user.id)
+            })
+        });
 
     UserResponse {
         id: auth.user.id.clone(),
         username: auth.user.username.clone(),
+        display_name: auth.user.display_name.clone(),
+        avatar_url,
         created_at: auth.user.created_at.clone(),
         role: auth.role.as_str().to_owned(),
         managed_ensemble_ids,

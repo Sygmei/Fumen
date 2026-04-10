@@ -38,13 +38,6 @@ pub struct RefreshTokenRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UpdateMusicRequest {
-    pub title: Option<String>,
-    pub public_id: Option<String>,
-    pub icon: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct MoveMusicRequest {
     pub ensemble_id: String,
 }
@@ -113,6 +106,8 @@ pub struct PublicMusicResponse {
 pub struct UserResponse {
     pub id: String,
     pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
     pub created_at: String,
     pub role: String,
     pub managed_ensemble_ids: Vec<String>,

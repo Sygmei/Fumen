@@ -43,6 +43,8 @@ pub struct StemRecord {
 pub struct UserRecord {
     pub id: String,
     pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_image_key: Option<String>,
     pub created_at: String,
     pub is_superadmin: bool,
     pub role: String,
