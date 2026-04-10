@@ -57,6 +57,15 @@ impl Storage {
         content_type: &str,
         content_encoding: Option<&str>,
     ) -> Result<()> {
+        tracing::info!(
+            storage_key = key,
+            bytes = bytes.len(),
+            content_type,
+            content_encoding = content_encoding.unwrap_or(""),
+            backend = if self.is_s3() { "s3" } else { "local" },
+            "storage upload starting"
+        );
+
         match &self.backend {
             StorageBackend::Local { root } => {
                 let path = path_for_key(root, key);
@@ -66,6 +75,7 @@ impl Storage {
 
                 fs::write(path, bytes).await?;
                 let _ = (content_type, content_encoding);
+                tracing::info!(storage_key = key, backend = "local", "storage upload finished");
                 Ok(())
             }
             StorageBackend::S3 { bucket, client, .. } => {
@@ -80,6 +90,7 @@ impl Storage {
                     request = request.content_encoding(content_encoding);
                 }
                 request.send().await?;
+                tracing::info!(storage_key = key, bucket, backend = "s3", "storage upload finished");
                 Ok(())
             }
         }

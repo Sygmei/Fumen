@@ -583,7 +583,9 @@ async fn admin_upload_music(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<AdminMusicResponse>, AppError> {
+    tracing::info!("score upload request received");
     let auth_context = auth::require_admin_context(&state, &headers).await?;
+    tracing::info!(user_id = %auth_context.user.id, username = %auth_context.user.username, "score upload authorized");
 
     let mut title: Option<String> = None;
     let mut icon: Option<String> = None;
@@ -594,17 +596,20 @@ async fn admin_upload_music(
     let mut upload: Option<(String, String, Bytes)> = None;
 
     while let Some(field) = multipart.next_field().await? {
-        match field.name() {
+        let field_name = field.name().map(str::to_owned);
+        tracing::info!(field = field_name.as_deref().unwrap_or("<unnamed>"), "score upload field received");
+
+        match field_name.as_deref() {
             Some("title") => title = Some(field.text().await?.trim().to_owned()),
             Some("icon") => icon = Some(field.text().await?.trim().to_owned()),
             Some("icon_file") => {
-                icon_file = Some((
-                    field
-                        .content_type()
-                        .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| "image/jpeg".to_owned()),
-                    field.bytes().await?,
-                ));
+                let content_type = field
+                    .content_type()
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| "image/jpeg".to_owned());
+                let icon_bytes = field.bytes().await?;
+                tracing::info!(bytes = icon_bytes.len(), content_type = %content_type, "score upload icon parsed");
+                icon_file = Some((content_type, icon_bytes));
             }
             Some("public_id") => requested_public_id = Some(field.text().await?.trim().to_owned()),
             Some("quality_profile") => {
@@ -619,11 +624,15 @@ async fn admin_upload_music(
                     .content_type()
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| "application/octet-stream".to_owned());
-                upload = Some((filename, content_type, field.bytes().await?));
+                let file_bytes = field.bytes().await?;
+                tracing::info!(filename = %filename, bytes = file_bytes.len(), content_type = %content_type, "score upload file parsed");
+                upload = Some((filename, content_type, file_bytes));
             }
             _ => {}
         }
     }
+
+    tracing::info!("score upload multipart parsing completed");
 
     let (filename, content_type, bytes) =
         upload.ok_or_else(|| AppError::bad_request("Please attach an .mscz file"))?;
@@ -648,6 +657,7 @@ async fn admin_upload_music(
         return Err(AppError::not_found("Ensemble not found"));
     }
     auth::ensure_can_upload_to_ensemble(&auth_context, &ensemble_id)?;
+    tracing::info!(ensemble_id = %ensemble_id, quality_profile = %quality_profile.as_str(), filename = %filename, bytes = bytes.len(), "score upload validated");
 
     let music_id = Uuid::new_v4().to_string();
     let public_token = generate_public_token();
@@ -657,10 +667,12 @@ async fn admin_upload_music(
     let safe_filename = sanitize_filename(&filename);
     let object_key = format!("scores/{music_id}/{safe_filename}");
 
+    tracing::info!(music_id = %music_id, storage_key = %object_key, "score upload storing source file");
     state
         .storage
         .upload_bytes(&object_key, bytes.clone(), &content_type)
         .await?;
+    tracing::info!(music_id = %music_id, storage_key = %object_key, "score upload stored source file");
 
     let icon_image_key: Option<String> = if let Some((icon_content_type, icon_bytes)) = icon_file {
         let ext = match icon_content_type.as_str() {
@@ -670,10 +682,12 @@ async fn admin_upload_music(
             _ => "jpg",
         };
         let icon_key = format!("scores/{music_id}/icon.{ext}");
+        tracing::info!(music_id = %music_id, storage_key = %icon_key, bytes = icon_bytes.len(), content_type = %icon_content_type, "score upload storing icon file");
         state
             .storage
             .upload_bytes(&icon_key, icon_bytes, &icon_content_type)
             .await?;
+        tracing::info!(music_id = %music_id, storage_key = %icon_key, "score upload stored icon file");
         Some(icon_key)
     } else {
         None
@@ -681,8 +695,11 @@ async fn admin_upload_music(
 
     let temp_dir = tempfile::tempdir()?;
     let temp_input_path = temp_dir.path().join(&safe_filename);
+    tracing::info!(music_id = %music_id, path = %temp_input_path.display(), "score upload writing temporary input file");
     fs::write(&temp_input_path, &bytes).await?;
+    tracing::info!(music_id = %music_id, path = %temp_input_path.display(), "score upload wrote temporary input file");
 
+    tracing::info!(music_id = %music_id, "score upload starting conversion pipeline");
     let (audio_outcome, midi_outcome, musicxml_outcome) = tokio::try_join!(
         async {
             audio::generate_audio(&state.config, &temp_input_path, temp_dir.path())

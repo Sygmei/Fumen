@@ -193,6 +193,7 @@ impl From<std::io::Error> for AppError {
 
 impl From<MultipartError> for AppError {
     fn from(error: MultipartError) -> Self {
+        tracing::warn!(error = %error, "multipart request failed");
         Self::new(StatusCode::BAD_REQUEST, error.to_string())
     }
 }
