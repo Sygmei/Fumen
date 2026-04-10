@@ -397,11 +397,35 @@ h3 {
 }
 
 .public-listen-shell .score-title-bar {
+  display: flex;
+  align-items: center;
+  min-height: 54px;
+  padding-block: 0;
   padding-inline: 0;
+  border-bottom-color: var(--border-strong);
+  background: linear-gradient(90deg, rgba(196, 43, 13, 0.12), transparent 26%), var(--surface);
 }
 
 .public-listen-shell .score-title-row {
-  padding-inline: clamp(20px, 3vw, 30px);
+  width: 100%;
+  min-height: 54px;
+  margin-bottom: 0;
+  gap: 20px;
+  padding-inline: 28px;
+}
+
+.public-listen-shell .score-title-row h2 {
+  gap: 10px;
+  font-size: clamp(1.2rem, 2vw, 1.55rem);
+}
+
+.public-listen-shell .listen-home-mark {
+  width: 39px;
+  height: 39px;
+}
+
+.public-listen-shell .download-menu-btn {
+  min-height: 34px;
 }
 
 .public-listen-shell .score-scroll-area {
@@ -2749,16 +2773,16 @@ h3 {
 .listen-score-icon {
   display: inline-grid;
   place-items: center;
-  width: 3rem;
-  min-width: 3rem;
-  height: 3rem;
+  width: 2.6rem;
+  min-width: 2.6rem;
+  height: 2.6rem;
   aspect-ratio: 1 / 1;
-  padding: 0.42rem;
+  padding: 0.34rem;
   border-radius: 0;
   background: rgb(0 0 0 / 50%);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 10%);
   color: var(--text-on-dark);
-  font-size: 1.28rem;
+  font-size: 1.08rem;
   line-height: 1;
   overflow: hidden;
   flex-shrink: 0;
@@ -3107,6 +3131,7 @@ h3 {
 }
 
 .modal-card--bodyless {
+  gap: 0;
   min-height: 0;
   height: fit-content;
 }
@@ -3149,6 +3174,13 @@ h3 {
   width: min(calc(100vw - 48px), 1380px);
   min-height: min(90vh, 1040px);
   max-height: min(90vh, 1040px);
+}
+
+.modal-card--bodyless.modal-card--small,
+.modal-card--bodyless.modal-card--medium,
+.modal-card--bodyless.modal-card--large,
+.modal-card--bodyless.modal-card--full {
+  min-height: 0;
 }
 
 .qr-preview {
