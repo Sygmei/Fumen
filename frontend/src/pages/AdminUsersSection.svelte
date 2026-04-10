@@ -11,6 +11,7 @@
     import BaseModal from "../components/BaseModal.svelte";
     import CustomSelect from "../components/CustomSelect.svelte";
     import ConfirmModal from "../components/ConfirmModal.svelte";
+    import AdminRecordCard from "../components/AdminRecordCard.svelte";
     import { Search, Plus, QrCode, Trash2, Pencil, Shield, Users, User } from "@lucide/svelte";
     import {
         canManageUsers,
@@ -333,38 +334,38 @@
                 <p class="hint">No users match "{userSearchQuery.trim()}".</p>
             </div>
         {:else}
-            <div
-                class="grid grid-cols-3 gap-2 items-start content-start max-[1360px]:grid-cols-2 max-[760px]:grid-cols-1"
-            >
-                {#each filteredUsers as user}
-                    <article class="music-card admin-user-row admin-account-card">
-                        <div class="admin-user-row-main">
-                            <div class="admin-user-avatar" aria-hidden="true">
-                                {#if user.avatar_url}
-                                    <img
-                                        src={user.avatar_url}
-                                        alt=""
-                                        class="admin-user-avatar-img"
-                                    />
+            <div class="admin-user-scroll-area">
+                <div
+                    class="admin-user-list grid grid-cols-3 gap-2 items-start content-start max-[1360px]:grid-cols-2 max-[760px]:grid-cols-1"
+                >
+                    {#each filteredUsers as user}
+                        {#snippet userAvatar()}
+                            {#if user.avatar_url}
+                                <img
+                                    src={user.avatar_url}
+                                    alt=""
+                                    class="admin-user-avatar-img"
+                                />
+                            {:else}
+                                {user.username.slice(0, 1).toUpperCase()}
+                            {/if}
+                        {/snippet}
+
+                        {#snippet userMain()}
+                            <h3>
+                                {#if user.display_name}
+                                    {user.display_name} — <span
+                                        class="admin-user-handle"
+                                        >@{user.username}</span
+                                    >
                                 {:else}
-                                    {user.username.slice(0, 1).toUpperCase()}
+                                    @{user.username}
                                 {/if}
-                            </div>
-                            <div class="admin-user-copy">
-                                <h3>
-                                    {#if user.display_name}
-                                        {user.display_name} — <span
-                                            class="admin-user-handle"
-                                            >@{user.username}</span
-                                        >
-                                    {:else}
-                                        @{user.username}
-                                    {/if}
-                                </h3>
-                                <p class="admin-user-role-pill">{user.role}</p>
-                            </div>
-                        </div>
-                        <div class="actions admin-user-actions">
+                            </h3>
+                            <p class="admin-user-role-pill">{user.role}</p>
+                        {/snippet}
+
+                        {#snippet userActions()}
                             {#if canDeleteUserAccount(user, currentUser) || isSuperadmin(currentUser)}
                                 <button
                                     class="button secondary admin-user-action"
@@ -396,9 +397,15 @@
                                     <Trash2 size={16} aria-hidden="true" />
                                 </button>
                             {/if}
-                        </div>
-                    </article>
-                {/each}
+                        {/snippet}
+
+                        <AdminRecordCard
+                            avatar={userAvatar}
+                            main={userMain}
+                            actions={userActions}
+                        />
+                    {/each}
+                </div>
             </div>
         {/if}
     </div>

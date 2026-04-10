@@ -356,10 +356,9 @@
             <div class="public-card public-workspace">
                 <div class="public-score-pane">
                     <div class="score-title-row score-title-bar">
-                        <a class="listen-brand" href="/">Fumen</a>
-                        <span class="listen-title-separator" aria-hidden="true"
-                            >-</span
-                        >
+                        <a class="listen-home-link" href="/" aria-label="Fumen home">
+                            <span class="listen-home-mark" aria-hidden="true"></span>
+                        </a>
                         <h2>
                             <ScoreIcon
                                 variant="listen"

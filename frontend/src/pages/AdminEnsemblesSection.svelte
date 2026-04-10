@@ -14,6 +14,7 @@
     import BaseModal from "../components/BaseModal.svelte";
     import CustomSelect from "../components/CustomSelect.svelte";
     import ConfirmModal from "../components/ConfirmModal.svelte";
+    import AdminRecordCard from "../components/AdminRecordCard.svelte";
     import {
         Search,
         Plus,
@@ -516,23 +517,20 @@
                 </p>
             </div>
         {:else}
-            <div
-                class="grid grid-cols-3 gap-2 items-start content-start max-[1360px]:grid-cols-2 max-[760px]:grid-cols-1"
-            >
-                {#each filteredEnsembles as ensemble}
-                    <article class="music-card admin-user-row admin-ensemble-card">
-                        <div class="admin-user-row-main">
-                            <div
-                                class="admin-user-avatar admin-ensemble-avatar"
-                                aria-hidden="true"
-                            >
-                                <Users size={16} aria-hidden="true" />
-                            </div>
-                            <div class="admin-user-copy admin-ensemble-copy">
-                                <h3>{ensemble.name}</h3>
-                            </div>
-                        </div>
-                        <div class="actions admin-user-actions">
+            <div class="admin-ensemble-scroll-area">
+                <div
+                    class="grid grid-cols-3 gap-2 items-start content-start max-[1360px]:grid-cols-2 max-[760px]:grid-cols-1"
+                >
+                    {#each filteredEnsembles as ensemble}
+                        {#snippet ensembleAvatar()}
+                            <Users size={16} aria-hidden="true" />
+                        {/snippet}
+
+                        {#snippet ensembleMain()}
+                            <h3>{ensemble.name}</h3>
+                        {/snippet}
+
+                        {#snippet ensembleActions()}
                             <button
                                 class="button secondary admin-user-action"
                                 type="button"
@@ -578,9 +576,15 @@
                                     <Trash2 size={16} aria-hidden="true" />
                                 </button>
                             {/if}
-                        </div>
-                    </article>
-                {/each}
+                        {/snippet}
+
+                        <AdminRecordCard
+                            avatar={ensembleAvatar}
+                            main={ensembleMain}
+                            actions={ensembleActions}
+                        />
+                    {/each}
+                </div>
             </div>
         {/if}
     </div>

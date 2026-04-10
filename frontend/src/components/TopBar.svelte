@@ -1,6 +1,7 @@
 <script lang="ts">
     import type { AppUser } from "../lib/api";
-    import { Menu, LayoutGrid, User, QrCode, House, LogOut, UserCog } from '@lucide/svelte';
+    import { Menu, LayoutGrid } from "@lucide/svelte";
+    import UserMenu from "./UserMenu.svelte";
 
     let {
         breadcrumbs,
@@ -37,16 +38,7 @@
         onMobileMenuSelect?: (id: string) => void;
     } = $props();
 
-    let menuOpen = $state(false);
     let mobileMenuOpen = $state(false);
-
-    function toggleMenu() {
-        menuOpen = !menuOpen;
-    }
-
-    function closeMenu() {
-        menuOpen = false;
-    }
 
     function toggleMobileMenu() {
         mobileMenuOpen = !mobileMenuOpen;
@@ -54,21 +46,6 @@
 
     function closeMobileMenu() {
         mobileMenuOpen = false;
-    }
-
-    function handleLogout() {
-        closeMenu();
-        onLogout?.();
-    }
-
-    function handleShowQr() {
-        closeMenu();
-        onShowQr?.();
-    }
-
-    function handleMyAccount() {
-        closeMenu();
-        onMyAccount?.();
     }
 
     function handleMobileMenuSelect(id: string) {
@@ -83,9 +60,22 @@
             {#each breadcrumbs as crumb, i}
                 {#if i === 0}
                     {#if crumb.href}
-                        <a class="font-brand text-[clamp(1.7rem,2.5vw,2.4rem)] leading-none text-[#c42b0d] no-underline flex items-center self-stretch pr-1" href={crumb.href}>{crumb.label}</a>
+                        <a
+                            class="flex items-center gap-[13px] no-underline leading-none self-stretch pr-1"
+                            href={crumb.href}
+                        >
+                            <span class="topbar-home-mark" aria-hidden="true"></span>
+                            <span class="topbar-brand-title">
+                                {crumb.label}
+                            </span>
+                        </a>
                     {:else}
-                        <span class="font-brand text-[clamp(1.7rem,2.5vw,2.4rem)] leading-none text-[#c42b0d] flex items-center self-stretch pr-1">{crumb.label}</span>
+                        <span class="flex items-center gap-[13px] leading-none self-stretch pr-1">
+                            <span class="topbar-home-mark" aria-hidden="true"></span>
+                            <span class="topbar-brand-title">
+                                {crumb.label}
+                            </span>
+                        </span>
                     {/if}
                 {:else if i === 1}
                     <span class="opacity-55">—</span>
@@ -163,83 +153,7 @@
         {/if}
 
         {#if currentUser && (onLogout || onShowQr || onMyAccount || userHomeHref)}
-            <div class="relative">
-                <button
-                    class="flex items-center justify-center w-[34px] h-[34px] border border-(--border-strong) bg-(--surface-alt) text-(--text-dim) cursor-pointer transition-[background,color] duration-150 shrink-0 hover:bg-(--surface) hover:text-(--text) p-0 overflow-hidden rounded-full"
-                    onclick={toggleMenu}
-                    aria-haspopup="true"
-                    aria-expanded={menuOpen}
-                    aria-label="User menu"
-                    title="User menu"
-                >
-                    {#if currentUser.avatar_url}
-                        <img src={currentUser.avatar_url} alt="" class="w-full h-full object-cover rounded-full block" />
-                    {:else}
-                        <User size={18} aria-hidden="true" />
-                    {/if}
-                </button>
-
-                {#if menuOpen}
-                    <!-- svelte-ignore a11y_click_events_have_key_events -->
-                    <div
-                        class="fixed inset-0 z-[99]"
-                        onclick={closeMenu}
-                        role="presentation"
-                    ></div>
-                    <div class="absolute top-[calc(100%+8px)] right-0 z-[100] min-w-[210px] bg-(--surface-alt) border border-(--border-strong) shadow-[0_8px_24px_rgba(0,0,0,0.18)] overflow-hidden [animation:fade-up-sm_0.12s_ease_both]" role="menu">
-                        <div class="px-3.5 pt-2.5 pb-2 border-b border-(--border) flex flex-col gap-0.5">
-                            <span class="meta-label">Signed in as</span>
-                            <div class="flex items-center gap-2 min-w-0">
-                                <strong class="text-[0.9rem] min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{currentUser.display_name ?? currentUser.username}</strong>
-                                <span class="inline-flex items-center shrink-0 px-1.5 py-0.5 border border-(--border-strong) bg-(--surface) text-(--accent) font-mono text-[0.62rem] font-semibold leading-none tracking-[0.08em] uppercase">
-                                    {currentUser.role}
-                                </span>
-                            </div>
-                        </div>
-                        {#if onMyAccount}
-                            <button
-                                class="flex items-center gap-2.5 w-full px-3.5 py-2.5 bg-transparent border-0 text-(--text) text-sm font-[inherit] cursor-pointer text-left no-underline transition-[background] duration-[0.12s] hover:bg-(--surface) [&_svg]:shrink-0 [&_svg]:opacity-70"
-                                role="menuitem"
-                                onclick={handleMyAccount}
-                            >
-                                <UserCog size={15} aria-hidden="true" />
-                                My account
-                            </button>
-                        {/if}
-                        {#if onShowQr}
-                            <button
-                                class="flex items-center gap-2.5 w-full px-3.5 py-2.5 bg-transparent border-0 text-(--text) text-sm font-[inherit] cursor-pointer text-left no-underline transition-[background] duration-[0.12s] hover:bg-(--surface) [&_svg]:shrink-0 [&_svg]:opacity-70"
-                                role="menuitem"
-                                onclick={handleShowQr}
-                            >
-                                <QrCode size={15} aria-hidden="true" />
-                                Log in on another device
-                            </button>
-                        {/if}
-                        {#if userHomeHref}
-                            <a
-                                class="flex items-center gap-2.5 w-full px-3.5 py-2.5 bg-transparent border-0 text-(--text) text-sm font-[inherit] cursor-pointer text-left no-underline transition-[background] duration-[0.12s] hover:bg-(--surface) [&_svg]:shrink-0 [&_svg]:opacity-70"
-                                role="menuitem"
-                                href={userHomeHref}
-                                onclick={closeMenu}
-                            >
-                                <House size={15} aria-hidden="true" />
-                                User homepage
-                            </a>
-                        {/if}
-                        {#if onLogout}
-                            <button
-                                class="flex items-center gap-2.5 w-full px-3.5 py-2.5 bg-transparent border-0 text-(--accent) text-sm font-[inherit] cursor-pointer text-left no-underline transition-[background] duration-[0.12s] hover:bg-(--surface) [&_svg]:shrink-0 [&_svg]:opacity-70"
-                                role="menuitem"
-                                onclick={handleLogout}
-                            >
-                                <LogOut size={15} aria-hidden="true" />
-                                Sign out
-                            </button>
-                        {/if}
-                    </div>
-                {/if}
-            </div>
+            <UserMenu {currentUser} {onLogout} {onShowQr} {onMyAccount} {userHomeHref} />
         {/if}
     </div>
 </header>

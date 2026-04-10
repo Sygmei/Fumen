@@ -482,6 +482,7 @@
       {userLoading}
       {userError}
       preloadedUsername={storedUsername}
+      onShowQr={handleShowMyQr}
       onShowCredential={showCredentialModal}
       onLogout={logoutUser}
       onMyAccount={handleMyAccount}

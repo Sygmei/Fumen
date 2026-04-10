@@ -2,7 +2,7 @@
     import ScoreIcon from "../components/ScoreIcon.svelte";
     import type { AppUser, UserLibraryEnsemble } from "../lib/api";
     import TopBar from "../components/TopBar.svelte";
-    import { QrCode } from '@lucide/svelte';
+    import { QrCode } from "@lucide/svelte";
 
     let {
         routeKind,
@@ -60,7 +60,10 @@
     }
 </script>
 
-<main class="page home-shell">
+<main
+    class="page home-shell"
+    class:home-landing-shell={!currentUser && routeKind !== "connect"}
+>
     {#if userLoading && !currentUser}
         <div class="home-loading-overlay">
             <div class="loading-eq" aria-label="Loading">
@@ -162,13 +165,17 @@
                                                     class="score-link-row"
                                                     href={score.public_url}
                                                 >
-                                                    <span class="score-link-title">
+                                                    <span
+                                                        class="score-link-title"
+                                                    >
                                                         <ScoreIcon
                                                             variant="library"
                                                             icon={score.icon}
                                                             imageUrl={score.icon_image_url}
                                                         />
-                                                        <span>{score.title}</span>
+                                                        <span
+                                                            >{score.title}</span
+                                                        >
                                                     </span>
                                                 </a>
                                             {/each}
@@ -180,7 +187,7 @@
                     {/if}
                 </div>
             {:else}
-                <div class="music-card landing-card">
+                <div class="music-card">
                     <div class="landing-card-copy">
                         <p class="meta-label">Instant Access</p>
                         <h1>Open-source score manager.</h1>

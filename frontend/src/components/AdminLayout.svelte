@@ -17,6 +17,7 @@
         adminSection,
         visibleSectionItems,
         sectionCounts,
+        onShowQr,
         onLogout,
         onMyAccount,
         onSectionChange,
@@ -32,6 +33,7 @@
         adminSection: AdminSection;
         visibleSectionItems: Array<{ id: AdminSection; label: string; eyebrow: string }>;
         sectionCounts: { users: number; ensembles: number; scores: number };
+        onShowQr?: () => void;
         onLogout: () => void;
         onMyAccount?: () => void;
         onSectionChange: (section: AdminSection) => void;
@@ -128,6 +130,7 @@
             ]}
             {currentUser}
             userHomeHref="/"
+            {onShowQr}
             {onLogout}
             {onMyAccount}
             mobileMenuItems={mobileMenuItems}

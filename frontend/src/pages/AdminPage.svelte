@@ -33,6 +33,7 @@
         userLoading,
         userError,
         preloadedUsername,
+        onShowQr,
         onShowCredential,
         onLogout,
         onMyAccount,
@@ -41,6 +42,7 @@
         userLoading: boolean;
         userError: string;
         preloadedUsername: string;
+        onShowQr: () => Promise<void>;
         onShowCredential: (
             title: string,
             loadLink: () => Promise<LoginLinkResponse>,
@@ -151,6 +153,7 @@
     {adminSection}
     visibleSectionItems={visibleAdminSectionItems}
     sectionCounts={{ users: adminUsers.length, ensembles: ensembles.length, scores: musics.length }}
+    {onShowQr}
     onLogout={() => void onLogout()}
     {onMyAccount}
     onSectionChange={(section) => (adminSection = section)}
