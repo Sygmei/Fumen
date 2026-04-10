@@ -12,7 +12,7 @@ use crate::{
 };
 use axum::{
     Json, Router,
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, State, multipart::Field},
     http::{HeaderMap, StatusCode},
     routing::{delete, get, patch, post},
 };
@@ -56,6 +56,43 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/admin/musics/{id}/delete", post(admin_delete_music))
         .route("/admin/musics/{id}/retry", post(admin_retry_render))
+}
+
+async fn read_field_bytes_with_progress(
+    field: &mut Field<'_>,
+    field_name: &str,
+    file_name: Option<&str>,
+) -> Result<Bytes, AppError> {
+    const LOG_STEP_BYTES: usize = 1024 * 1024;
+
+    let mut data = Vec::new();
+    let mut total_bytes = 0usize;
+    let mut next_log_at = LOG_STEP_BYTES;
+
+    while let Some(chunk) = field.chunk().await? {
+        total_bytes += chunk.len();
+        data.extend_from_slice(&chunk);
+
+        if total_bytes >= next_log_at {
+            tracing::info!(
+                field = field_name,
+                file_name = file_name.unwrap_or(""),
+                bytes_read = total_bytes,
+                mib_read = total_bytes / LOG_STEP_BYTES,
+                "score upload progress"
+            );
+            next_log_at += LOG_STEP_BYTES;
+        }
+    }
+
+    tracing::info!(
+        field = field_name,
+        file_name = file_name.unwrap_or(""),
+        bytes_read = total_bytes,
+        "score upload field fully read"
+    );
+
+    Ok(Bytes::from(data))
 }
 
 async fn admin_list_users(
@@ -595,7 +632,7 @@ async fn admin_upload_music(
     let mut icon_file: Option<(String, Bytes)> = None;
     let mut upload: Option<(String, String, Bytes)> = None;
 
-    while let Some(field) = multipart.next_field().await? {
+    while let Some(mut field) = multipart.next_field().await? {
         let field_name = field.name().map(str::to_owned);
         tracing::info!(field = field_name.as_deref().unwrap_or("<unnamed>"), "score upload field received");
 
@@ -607,7 +644,13 @@ async fn admin_upload_music(
                     .content_type()
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| "image/jpeg".to_owned());
-                let icon_bytes = field.bytes().await?;
+                let icon_file_name = field.file_name().map(ToOwned::to_owned);
+                let icon_bytes = read_field_bytes_with_progress(
+                    &mut field,
+                    "icon_file",
+                    icon_file_name.as_deref(),
+                )
+                .await?;
                 tracing::info!(bytes = icon_bytes.len(), content_type = %content_type, "score upload icon parsed");
                 icon_file = Some((content_type, icon_bytes));
             }
@@ -624,7 +667,8 @@ async fn admin_upload_music(
                     .content_type()
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| "application/octet-stream".to_owned());
-                let file_bytes = field.bytes().await?;
+                let file_bytes =
+                    read_field_bytes_with_progress(&mut field, "file", Some(&filename)).await?;
                 tracing::info!(filename = %filename, bytes = file_bytes.len(), content_type = %content_type, "score upload file parsed");
                 upload = Some((filename, content_type, file_bytes));
             }
