@@ -386,6 +386,28 @@ h3 {
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.18);
 }
 
+.public-listen-shell .public-card,
+.public-listen-shell .public-workspace,
+.public-listen-shell .public-score-pane,
+.public-listen-shell .score-title-bar,
+.public-listen-shell .score-container,
+.public-listen-shell .score-container.loaded,
+.public-listen-shell .public-score-pane>.playbar {
+  border-radius: 0;
+}
+
+.public-listen-shell .score-title-bar {
+  padding-inline: 0;
+}
+
+.public-listen-shell .score-title-row {
+  padding-inline: clamp(20px, 3vw, 30px);
+}
+
+.public-listen-shell .score-scroll-area {
+  padding: 0;
+}
+
 .public-mixer-pane {
   min-width: 0;
   min-height: 0;
@@ -458,9 +480,59 @@ h3 {
     padding-inline: 0;
   }
 
-  .listen-score-title-bar {
-    padding-inline: 0;
+  .public-listen-shell .public-card,
+  .public-listen-shell .public-workspace {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: hidden;
+    background: transparent;
   }
+
+  .public-listen-shell .public-score-pane {
+    background: transparent;
+    min-height: 0;
+    flex: 1.3 1 0;
+  }
+
+  .public-listen-shell .public-workspace {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .public-listen-shell .public-mixer-pane {
+    min-height: 0;
+    flex: 0.7 1 0;
+  }
+
+  .public-listen-shell .score-title-row {
+    padding-inline: 14px;
+  }
+
+  .public-listen-shell .score-scroll-area {
+    flex: 1 1 0;
+  }
+
+  .public-listen-shell .score-scroll-inner {
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .public-listen-shell .score-container,
+  .public-listen-shell .score-container.loaded {
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    background: #fff;
+  }
+
+  .public-listen-shell .score-scroll-inner svg,
+  .public-listen-shell .score-scroll-inner>* {
+    width: 100%;
+    max-width: none;
+  }
+
 }
 
 /* ─── Admin Sidebar Layout ───────────────────────────────────────────────── */
@@ -1542,10 +1614,6 @@ h3 {
   padding: 20px 30px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-}
-
-.listen-score-title-bar {
-  padding-inline: 0;
 }
 
 .score-title-row h2 {
