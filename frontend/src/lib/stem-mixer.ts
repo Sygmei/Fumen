@@ -33,6 +33,8 @@ type InternalTrack = {
 export class StemMixerPlayer {
   private static readonly SEEK_TOLERANCE_SECONDS = 0.03
   private static readonly STALL_THRESHOLD_SECONDS = 1.0
+  private static readonly SOFT_SYNC_THRESHOLD_SECONDS = 0.05
+  private static readonly PLAYBACK_RATE_CORRECTION = 0.02
   private context: AudioContext | null = null
   private tracks = new Map<string, InternalTrack>()
   private _duration = 0
@@ -114,6 +116,11 @@ export class StemMixerPlayer {
     )
     console.log(`[StemMixer] play() all tracks prepared, starting...`)
 
+    // Latch the AudioContext clock BEFORE firing play() so the master clock
+    // starts counting from the same moment we initiate all tracks. Latching
+    // after Promise.all would make the clock lag behind already-playing elements.
+    this._contextTimeAtStart = this.context.currentTime
+
     const starts = [...this.tracks.values()].map(async (track) => {
       try {
         await track.element.play()
@@ -123,9 +130,6 @@ export class StemMixerPlayer {
     })
 
     await Promise.all(starts)
-    // Latch the AudioContext clock so getCurrentTime() is driven by the
-    // high-precision Web Audio clock, not by HTMLAudioElement.currentTime.
-    this._contextTimeAtStart = this.context.currentTime
     this._isPlaying = true
   }
 
@@ -135,6 +139,7 @@ export class StemMixerPlayer {
     this._contextTimeAtStart = 0
     this._isPlaying = false
     for (const track of this.tracks.values()) {
+      track.element.playbackRate = 1.0
       track.element.pause()
     }
   }
@@ -144,6 +149,7 @@ export class StemMixerPlayer {
     this._playbackOffset = 0
     this._contextTimeAtStart = 0
     for (const track of this.tracks.values()) {
+      track.element.playbackRate = 1.0
       track.element.pause()
       track.element.currentTime = 0
     }
@@ -185,11 +191,10 @@ export class StemMixerPlayer {
     if (!this._isPlaying || !this.context) return
 
     // Use the AudioContext clock as the authoritative position.
-    // Only nudge elements that have drifted by more than 1 second —
-    // i.e. a track that genuinely stalled (network hiccup, browser throttle).
-    // Sub-second jitter is normal scheduling variance and must NOT be
-    // corrected: writing currentTime on a playing element causes an audible
-    // click every time.
+    // Three tiers of correction to avoid audible glitches:
+    //   > STALL_THRESHOLD   → hard seek (track stalled, network hiccup)
+    //   > SOFT_SYNC_THRESHOLD → adjust playbackRate ±2% to nudge without clicks
+    //   within tolerance    → restore playbackRate to 1.0
     const expectedTime = this.getCurrentTime()
 
     for (const track of this.tracks.values()) {
@@ -197,9 +202,24 @@ export class StemMixerPlayer {
       if (track.element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) continue
 
       const cappedExpected = Math.min(expectedTime, this.maxSeekTimeForTrack(track))
-      const drift = Math.abs(track.element.currentTime - cappedExpected)
-      if (drift > StemMixerPlayer.STALL_THRESHOLD_SECONDS) {
+      // positive drift → track is ahead of master clock
+      // negative drift → track is behind master clock
+      const drift = track.element.currentTime - cappedExpected
+      const absDrift = Math.abs(drift)
+
+      if (absDrift > StemMixerPlayer.STALL_THRESHOLD_SECONDS) {
+        // Large drift: hard seek (track genuinely stalled)
         track.element.currentTime = cappedExpected
+        track.element.playbackRate = 1.0
+      } else if (absDrift > StemMixerPlayer.SOFT_SYNC_THRESHOLD_SECONDS) {
+        // Small drift: nudge with playbackRate to avoid audible click.
+        // Behind → speed up; Ahead → slow down.
+        track.element.playbackRate = drift < 0
+          ? 1.0 + StemMixerPlayer.PLAYBACK_RATE_CORRECTION
+          : 1.0 - StemMixerPlayer.PLAYBACK_RATE_CORRECTION
+      } else {
+        // Within tolerance: restore normal rate.
+        track.element.playbackRate = 1.0
       }
     }
   }

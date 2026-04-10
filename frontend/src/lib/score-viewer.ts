@@ -266,14 +266,31 @@ export class ScoreViewer {
   }
 
   private resetCursorIterator(cursor: OSMD): void {
-    const manager = this.osmd?.Sheet?.MusicPartManager
-    const iterator = manager?.getIterator?.()
-    if (!iterator) return
+    // Try OSMD's public reset() first — it creates a fresh iterator internally
+    // and repositions the cursor visually at step 0.
+    let resetViaPublicApi = false
+    try {
+      if (typeof cursor.reset === 'function') {
+        cursor.reset()
+        resetViaPublicApi = true
+      }
+    } catch { /* ignore */ }
 
-    iterator.SkipInvisibleNotes = false
-    cursor.iterator = iterator
+    if (!resetViaPublicApi) {
+      // Fallback: replace the cursor's iterator with a freshly created one.
+      const manager = this.osmd?.Sheet?.MusicPartManager
+      const iterator = manager?.getIterator?.()
+      if (iterator) {
+        iterator.SkipInvisibleNotes = false
+        cursor.iterator = iterator
+      }
+      // cursor.update() may hide the cursor if the iterator is still at
+      // EndReached (OSMD auto-hides on end), so we call show() after.
+      cursor.update()
+    }
+
+    // Always ensure the cursor is visible regardless of which path was taken.
     cursor.show()
-    cursor.update()
     this.currentStep = 0
     this.currentSystemIdx = -1
   }
@@ -400,14 +417,22 @@ export class ScoreViewer {
     }
 
     const targetStep = this.timeMap[lo].step
-    if (targetStep === this.currentStep) return
+    if (targetStep === this.currentStep) {
+      // Position unchanged — cursor may have been hidden (e.g. OSMD auto-hides
+      // when EndReached), so re-show it without moving.
+      cursor.show()
+      return
+    }
 
     if (targetStep < this.currentStep) {
       this.resetCursorIterator(cursor)
     }
 
     const iterator = cursor.iterator
-    if (!iterator) return
+    if (!iterator) {
+      cursor.show()
+      return
+    }
 
     while (this.currentStep < targetStep && !iterator.EndReached) {
       iterator.moveToNext()
@@ -415,6 +440,9 @@ export class ScoreViewer {
       cursor.update()
     }
 
+    // Ensure the cursor is visible after advancing — cursor.update() can hide
+    // it when the iterator lands on an invisible/rest position in some OSMD builds.
+    cursor.show()
     this.flipPageIfNeeded(cursor)
   }
 
