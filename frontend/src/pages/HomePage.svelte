@@ -85,6 +85,7 @@
             onShowQr={() => void onShowQr()}
             onLogout={() => void onLogout()}
             {onMyAccount}
+            showBrandTitleOnMobile={!currentUser && routeKind !== "connect"}
         />
         <section
             class="content-panel home-grid"

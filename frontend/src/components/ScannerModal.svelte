@@ -12,7 +12,7 @@
     } = $props();
 </script>
 
-<BaseModal {onClose} title="Scan" subtitle="Scan a QR code">
+<BaseModal {onClose} size="large" cardClass="scanner-modal" title="Scan" subtitle="Scan QR code">
     <div class="scanner-frame">
         <video class="scanner-video" bind:this={videoEl} muted playsinline
         ></video>

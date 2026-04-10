@@ -12,7 +12,16 @@
     import CustomSelect from "../components/CustomSelect.svelte";
     import ConfirmModal from "../components/ConfirmModal.svelte";
     import AdminRecordCard from "../components/AdminRecordCard.svelte";
-    import { Search, Plus, QrCode, Trash2, Pencil, Shield, Users, User } from "@lucide/svelte";
+    import {
+        Search,
+        Plus,
+        QrCode,
+        Trash2,
+        Pencil,
+        Shield,
+        Users,
+        User,
+    } from "@lucide/svelte";
     import {
         canManageUsers,
         canDeleteUserAccount,
@@ -95,7 +104,8 @@
     }
 
     function roleDescription(role: Exclude<GlobalRole, "superadmin">) {
-        if (role === "admin") return "Full access, except removing other admins.";
+        if (role === "admin")
+            return "Full access, except removing other admins.";
         if (role === "manager")
             return "Can create ensembles and users, and manage assigned ensembles.";
         if (role === "editor")
@@ -150,7 +160,9 @@
             onSuccess(`User ${user.username} created.`);
         } catch (error) {
             onError(
-                error instanceof Error ? error.message : "Unable to create user",
+                error instanceof Error
+                    ? error.message
+                    : "Unable to create user",
             );
         } finally {
             creatingUser = false;
@@ -272,10 +284,8 @@
     }
 
     function handleDeleteUser(user: AppUser) {
-        openConfirm(
-            `Delete ${user.username} permanently?`,
-            "Delete",
-            () => deleteUserAccount(user),
+        openConfirm(`Delete ${user.username} permanently?`, "Delete", () =>
+            deleteUserAccount(user),
         );
     }
 
@@ -295,13 +305,15 @@
 </script>
 
 <section
-    class="grid gap-5 h-full min-h-full min-w-0 px-8 py-7 pb-12 overflow-hidden max-sm:px-4 max-sm:py-5"
+    class="grid gap-2 h-full min-h-full min-w-0 px-2 pt-2 pb-12 overflow-hidden"
 >
-    <div class="grid grid-rows-[auto_minmax(0,1fr)] gap-2 h-full min-h-0 overflow-hidden">
+    <div
+        class="grid grid-rows-[auto_minmax(0,1fr)] gap-2 h-full min-h-0 overflow-hidden"
+    >
         <div
-            class="music-card grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 items-center !p-3 !px-4"
+            class="admin-section-toolbar music-card grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 items-center !p-3 !px-4"
         >
-            <div class="flex items-center min-h-full">
+            <div class="admin-section-heading flex items-center min-h-full">
                 <h3>User accounts</h3>
             </div>
             <label class="field m-0 gap-0 min-w-0 self-center">
@@ -320,9 +332,17 @@
                 </div>
             </label>
             {#if canManageUsers(currentUser)}
-                <button class="button admin-create-user-btn" onclick={openCreateUserModal}>
+                <button
+                    class="button admin-create-user-btn"
+                    onclick={openCreateUserModal}
+                >
                     <Plus size={15} aria-hidden="true" />
-                    Create user
+                    <span class="admin-create-label admin-create-label-full"
+                        >Create user</span
+                    >
+                    <span class="admin-create-label admin-create-label-short"
+                        >Create</span
+                    >
                 </button>
             {/if}
         </div>
@@ -354,8 +374,8 @@
                         {#snippet userMain()}
                             <h3>
                                 {#if user.display_name}
-                                    {user.display_name} — <span
-                                        class="admin-user-handle"
+                                    {user.display_name} —
+                                    <span class="admin-user-handle"
                                         >@{user.username}</span
                                     >
                                 {:else}
@@ -571,7 +591,7 @@
 {#if confirmAction}
     <ConfirmModal
         title={confirmMessage}
-        confirmLabel={confirmLabel}
+        {confirmLabel}
         busy={confirmBusy}
         onConfirm={executeConfirm}
         onClose={closeConfirm}

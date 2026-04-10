@@ -114,7 +114,19 @@
       void syncRoute();
     };
 
+    const syncViewportHeight = () => {
+      const viewportHeight =
+        window.visualViewport?.height ?? window.innerHeight;
+      document.documentElement.style.setProperty(
+        "--app-height",
+        `${viewportHeight}px`,
+      );
+    };
+
     window.addEventListener("popstate", handlePopState);
+    window.addEventListener("resize", syncViewportHeight);
+    window.visualViewport?.addEventListener("resize", syncViewportHeight);
+    syncViewportHeight();
 
     setOnSessionExpired(() => {
       clearUserSession();
@@ -129,6 +141,11 @@
 
     return () => {
       window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("resize", syncViewportHeight);
+      window.visualViewport?.removeEventListener(
+        "resize",
+        syncViewportHeight,
+      );
     };
   });
 

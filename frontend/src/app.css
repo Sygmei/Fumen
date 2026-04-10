@@ -139,7 +139,7 @@
 html,
 body,
 #app {
-  min-height: 100vh;
+  min-height: var(--app-height, 100dvh);
 }
 
 body {
@@ -180,7 +180,7 @@ input[type='range'] {
 
 /* ─── Page Layout ────────────────────────────────────────────────────────── */
 .page {
-  min-height: 100vh;
+  min-height: var(--app-height, 100dvh);
   padding: 52px 0 88px;
 }
 
@@ -199,8 +199,8 @@ input[type='range'] {
 }
 
 .admin-shell.page {
-  min-height: 100vh;
-  height: 100vh;
+  min-height: var(--app-height, 100dvh);
+  height: var(--app-height, 100dvh);
   padding: 0;
   overflow: hidden;
   background:
@@ -316,8 +316,8 @@ h3 {
 }
 
 .public-shell.page {
-  min-height: 100dvh;
-  height: 100dvh;
+  min-height: var(--app-height, 100dvh);
+  height: var(--app-height, 100dvh);
   padding: 0;
   overflow: hidden;
   background:
@@ -589,6 +589,10 @@ h3 {
   min-height: 34px;
 }
 
+.admin-create-label-short {
+  display: none;
+}
+
 .admin-user-scroll-area {
   min-height: 0;
   overflow-y: auto;
@@ -770,20 +774,6 @@ h3 {
   min-height: 68px !important;
   padding-top: 18px !important;
   padding-bottom: 14px !important;
-}
-
-.admin-modal-close {
-  width: 40px;
-  min-width: 40px;
-  height: 40px;
-  min-height: 40px;
-  padding: 0;
-  justify-content: center;
-  border-radius: var(--radius-md) !important;
-}
-
-.admin-modal-close svg {
-  flex-shrink: 0;
 }
 
 .admin-user-modal-actions {
@@ -2405,7 +2395,7 @@ h3 {
 }
 
 .home-loading-overlay {
-  min-height: 100vh;
+  min-height: var(--app-height, 100dvh);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2747,14 +2737,14 @@ h3 {
 }
 
 .home-landing-stage {
-  min-height: calc(100vh - 78px);
+  min-height: calc(var(--app-height, 100dvh) - 78px);
   align-content: center;
   gap: 28px;
   padding-top: clamp(28px, 5vw, 56px);
 }
 
 .home-landing-shell .home-landing-stage {
-  min-height: calc(100dvh - 54px);
+  min-height: calc(var(--app-height, 100dvh) - 54px);
 }
 
 .landing-card {
@@ -3102,6 +3092,31 @@ h3 {
   object-fit: cover;
 }
 
+.scanner-modal .scanner-frame {
+  aspect-ratio: 1 / 1;
+}
+
+@media (max-width: 760px) {
+  .scanner-modal {
+    width: min(100%, calc(100vw - 48px));
+    height: calc(100dvh - 48px);
+    min-height: calc(100dvh - 48px);
+    max-height: calc(100dvh - 48px);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .scanner-modal .modal-main {
+    padding: 18px;
+    min-height: 0;
+  }
+
+  .scanner-modal .scanner-frame,
+  .scanner-modal .scanner-video {
+    min-height: 0;
+    height: 100%;
+  }
+}
+
 @keyframes slow-spin {
   from {
     transform: rotate(0deg);
@@ -3246,9 +3261,56 @@ h3 {
     display: none;
   }
 
+  .topbar-brand-mobile-visible .topbar-brand-title {
+    display: inline;
+  }
+
   .topbar-home-mark {
-    width: 43px;
-    height: 43px;
+    width: 34px;
+    height: 34px;
+  }
+
+  .admin-section-heading {
+    display: none;
+  }
+
+  .admin-section-toolbar {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+
+  .admin-section-toolbar > label {
+    width: 100%;
+  }
+
+  .admin-section-toolbar > .button {
+    width: 100%;
+    white-space: nowrap;
+  }
+
+  .admin-create-label-full {
+    display: none;
+  }
+
+  .admin-create-label-short {
+    display: inline;
+  }
+
+  .admin-user-list,
+  .admin-user-list > .music-card,
+  .admin-user-scroll-area,
+  .admin-ensemble-scroll-area {
+    width: 100%;
+  }
+}
+
+@media (max-width: 1199px) {
+  .topbar-breadcrumbs {
+    font-size: clamp(1.05rem, 3.2vw, 1.35rem);
+  }
+
+  .topbar-home-mark {
+    width: 30px;
+    height: 30px;
   }
 }
 
@@ -3263,7 +3325,6 @@ h3 {
   .admin-split-column,
   .admin-tabs button,
   .admin-score-ensemble-trigger,
-  .admin-modal-close,
   .admin-user-action,
   .admin-inline-icon-btn,
   .topbar-icon-btn,

@@ -34,6 +34,30 @@
     }
 </script>
 
+<style>
+    .modal-header-row {
+        position: relative;
+        padding-right: 56px;
+    }
+
+    .modal-close-button {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 40px;
+        min-width: 40px;
+        height: 40px;
+        min-height: 40px;
+        padding: 0;
+        justify-content: center;
+        border-radius: var(--radius-md) !important;
+    }
+
+    .modal-close-button svg {
+        flex-shrink: 0;
+    }
+</style>
+
 <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_click_events_have_key_events -->
 <div
     class="modal-backdrop"
@@ -51,14 +75,14 @@
     >
         {#if hasHeader}
             <div class="modal-header">
-                <div class="card-header items-start">
+                <div class="card-header items-start modal-header-row">
                     <div>
                         {#if title}<p class="meta-label">{title}</p>{/if}
                         {#if subtitle}<h2 id="modal-title">{subtitle}</h2>{/if}
                     </div>
                     {#if canClose}
                         <button
-                            class="button ghost admin-modal-close"
+                            class="button ghost modal-close-button"
                             type="button"
                             aria-label="Close modal"
                             onclick={onClose}
@@ -81,4 +105,3 @@
         {/if}
     </div>
 </div>
-

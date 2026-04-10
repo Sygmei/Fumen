@@ -69,8 +69,12 @@
     let currentMemberSearchQuery = $state("");
     let addMemberSearchQuery = $state("");
     let inviteRoles = $state<Record<string, EnsembleRole>>({});
-    let originalManagedMemberRoles = $state<Record<string, ManagedMemberDraftRole>>({});
-    let managedMemberDraftRoles = $state<Record<string, ManagedMemberDraftRole>>({});
+    let originalManagedMemberRoles = $state<
+        Record<string, ManagedMemberDraftRole>
+    >({});
+    let managedMemberDraftRoles = $state<
+        Record<string, ManagedMemberDraftRole>
+    >({});
     let savingManagedMembers = $state(false);
 
     // Manage ensemble scores
@@ -127,8 +131,11 @@
             .filter(
                 (
                     e,
-                ): e is { user_id: string; role: EnsembleRole; user: AppUser } =>
-                    e.role !== "none",
+                ): e is {
+                    user_id: string;
+                    role: EnsembleRole;
+                    user: AppUser;
+                } => e.role !== "none",
             )
             .sort((a, b) => a.user.username.localeCompare(b.user.username))
             .filter((e) =>
@@ -307,10 +314,8 @@
     }
 
     function handleDeleteEnsemble(ensemble: Ensemble) {
-        openConfirm(
-            `Delete ensemble ${ensemble.name}?`,
-            "Delete",
-            () => deleteEnsembleAccount(ensemble),
+        openConfirm(`Delete ensemble ${ensemble.name}?`, "Delete", () =>
+            deleteEnsembleAccount(ensemble),
         );
     }
 
@@ -345,7 +350,10 @@
         userId: string,
         role: ManagedMemberDraftRole,
     ) {
-        managedMemberDraftRoles = { ...managedMemberDraftRoles, [userId]: role };
+        managedMemberDraftRoles = {
+            ...managedMemberDraftRoles,
+            [userId]: role,
+        };
     }
 
     function hasManagedMemberChanges(): boolean {
@@ -474,13 +482,17 @@
 </script>
 
 <section
-    class="grid gap-5 h-full min-h-full min-w-0 px-8 py-7 pb-12 overflow-hidden max-sm:px-4 max-sm:py-5"
+    class="grid gap-2 h-full min-h-full min-w-0 px-2 pt-2 pb-12 overflow-hidden"
 >
-    <div class="grid grid-rows-[auto_minmax(0,1fr)] gap-2 h-full min-h-0 overflow-hidden">
+    <div
+        class="grid grid-rows-[auto_minmax(0,1fr)] gap-2 h-full min-h-0 overflow-hidden"
+    >
         <div
-            class="music-card grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 items-center !p-3 !px-4"
+            class="admin-section-toolbar music-card grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 items-center !p-3 !px-4"
         >
-            <div class="flex items-center min-h-full"><h3>Ensembles</h3></div>
+            <div class="admin-section-heading flex items-center min-h-full">
+                <h3>Ensembles</h3>
+            </div>
             <label class="field m-0 gap-0 min-w-0 self-center">
                 <span class="sr-only">Search ensembles</span>
                 <div class="relative">
@@ -503,7 +515,12 @@
                     onclick={openCreateEnsembleModal}
                 >
                     <Plus size={15} aria-hidden="true" />
-                    Create ensemble
+                    <span class="admin-create-label admin-create-label-full"
+                        >Create ensemble</span
+                    >
+                    <span class="admin-create-label admin-create-label-short"
+                        >Create</span
+                    >
                 </button>
             {/if}
         </div>
@@ -543,7 +560,9 @@
                                 )}
                             >
                                 <Music size={16} aria-hidden="true" />
-                                <span class="admin-action-badge" aria-hidden="true"
+                                <span
+                                    class="admin-action-badge"
+                                    aria-hidden="true"
                                     >{ensemble.score_count}</span
                                 >
                             </button>
@@ -559,7 +578,9 @@
                                 )}
                             >
                                 <UserPlus size={16} aria-hidden="true" />
-                                <span class="admin-action-badge" aria-hidden="true"
+                                <span
+                                    class="admin-action-badge"
+                                    aria-hidden="true"
                                     >{ensemble.members.length}</span
                                 >
                             </button>
@@ -567,7 +588,8 @@
                                 <button
                                     class="button ghost danger admin-user-action"
                                     type="button"
-                                    disabled={deletingEnsembleFor === ensemble.id}
+                                    disabled={deletingEnsembleFor ===
+                                        ensemble.id}
                                     onclick={() =>
                                         void handleDeleteEnsemble(ensemble)}
                                     aria-label={`Delete ${ensemble.name}`}
@@ -948,7 +970,7 @@
 {#if confirmAction}
     <ConfirmModal
         title={confirmMessage}
-        confirmLabel={confirmLabel}
+        {confirmLabel}
         busy={confirmBusy}
         onConfirm={executeConfirm}
         onClose={closeConfirm}

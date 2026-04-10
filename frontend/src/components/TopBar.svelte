@@ -11,6 +11,7 @@
         onMyAccount,
         adminHref,
         userHomeHref,
+        showBrandTitleOnMobile = false,
         mobileMenuItems = [],
         mobileMenuActiveId,
         mobileMenuAriaLabel = "Section menu",
@@ -27,6 +28,8 @@
         adminHref?: string;
         /** If set, "User homepage" appears in the user menu */
         userHomeHref?: string;
+        /** If set, the logo/title brand stays visible on mobile */
+        showBrandTitleOnMobile?: boolean;
         mobileMenuItems?: Array<{
             id: string;
             label: string;
@@ -54,14 +57,17 @@
     }
 </script>
 
-<header class="flex items-stretch justify-between gap-6 min-h-[54px] px-7 border-b border-(--border-strong) bg-[linear-gradient(90deg,rgba(196,43,13,0.12),transparent_26%),var(--surface)]">
+<header
+    class="flex items-stretch justify-between gap-6 min-h-[54px] px-7 border-b border-(--border-strong) bg-[linear-gradient(90deg,rgba(196,43,13,0.12),transparent_26%),var(--surface)]"
+    class:topbar-brand-mobile-visible={showBrandTitleOnMobile}
+>
     <div class="flex items-center gap-5 py-2.5">
-        <div class="flex items-center gap-2.5 font-bold text-[clamp(1.4rem,2vw,2rem)] leading-none" aria-label="Breadcrumb">
+        <div class="topbar-breadcrumbs flex items-center gap-2.5 font-bold text-[clamp(1.4rem,2vw,2rem)] leading-none" aria-label="Breadcrumb">
             {#each breadcrumbs as crumb, i}
                 {#if i === 0}
                     {#if crumb.href}
                         <a
-                            class="flex items-center gap-[13px] no-underline leading-none self-stretch pr-1"
+                            class="topbar-brand-link flex items-center gap-[13px] no-underline leading-none self-stretch pr-1"
                             href={crumb.href}
                         >
                             <span class="topbar-home-mark" aria-hidden="true"></span>
@@ -70,7 +76,7 @@
                             </span>
                         </a>
                     {:else}
-                        <span class="flex items-center gap-[13px] leading-none self-stretch pr-1">
+                        <span class="topbar-brand-link flex items-center gap-[13px] leading-none self-stretch pr-1">
                             <span class="topbar-home-mark" aria-hidden="true"></span>
                             <span class="topbar-brand-title">
                                 {crumb.label}

@@ -83,7 +83,7 @@
         </p>
     </div>
 {:else if !currentUser}
-    <section class="min-h-screen grid place-items-center p-6">
+    <section class="min-h-dvh grid place-items-center p-6">
         <div class="music-card w-[min(680px,100%)] grid gap-6">
             <div>
                 <p class="eyebrow">Fumen • Admin</p>
@@ -104,7 +104,7 @@
         </div>
     </section>
 {:else if !canAccessAdmin(currentUser)}
-    <section class="min-h-screen grid place-items-center p-6">
+    <section class="min-h-dvh grid place-items-center p-6">
         <div class="music-card w-[min(680px,100%)] grid gap-6">
             <div>
                 <p class="eyebrow">Fumen • Admin</p>
@@ -121,11 +121,10 @@
         </div>
     </section>
 {:else}
-    <section class="h-screen grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+    <section class="h-[var(--app-height,100dvh)] min-h-[var(--app-height,100dvh)] grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
         <TopBar
             breadcrumbs={[
                 { label: "Fumen", href: "/" },
-                { label: "Admin" },
                 { label: currentSectionLabel },
             ]}
             {currentUser}
@@ -171,7 +170,7 @@
                 {#if adminSuccess}<p class="status success">{adminSuccess}</p>{/if}
             </aside>
 
-            <div class="min-h-0 overflow-y-auto bg-(--bg)">
+            <div class="min-h-0 overflow-y-auto bg-(--bg) pb-[env(safe-area-inset-bottom,0px)]">
                 {@render children()}
             </div>
         </div>

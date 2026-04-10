@@ -140,9 +140,7 @@
             a.name.localeCompare(b.name),
         );
         if (!query) return sorted;
-        return sorted.filter((e) =>
-            e.name.toLowerCase().includes(query),
-        );
+        return sorted.filter((e) => e.name.toLowerCase().includes(query));
     });
 
     // Confirm helpers
@@ -410,17 +408,14 @@
     }
 
     function handleDeleteMusic(musicId: string) {
-        openConfirm(
-            "Delete this score permanently?",
-            "Delete",
-            () => deleteMusicAccount(musicId),
+        openConfirm("Delete this score permanently?", "Delete", () =>
+            deleteMusicAccount(musicId),
         );
     }
 
     // Download menu
     function toggleDownloadMenu(musicId: string) {
-        openDownloadMenuFor =
-            openDownloadMenuFor === musicId ? "" : musicId;
+        openDownloadMenuFor = openDownloadMenuFor === musicId ? "" : musicId;
     }
 
     // QR
@@ -429,22 +424,24 @@
             await onShowQr(music);
         } catch (error) {
             onError(
-                error instanceof Error
-                    ? error.message
-                    : "Failed to show QR",
+                error instanceof Error ? error.message : "Failed to show QR",
             );
         }
     }
 </script>
 
 <section
-    class="grid gap-5 h-full min-h-full min-w-0 px-8 py-7 pb-12 overflow-hidden max-sm:px-4 max-sm:py-5"
+    class="grid gap-2 h-full min-h-full min-w-0 px-2 pt-2 pb-12 overflow-hidden"
 >
-    <div class="grid grid-rows-[auto_minmax(0,1fr)] gap-2 h-full min-h-0 overflow-hidden">
+    <div
+        class="grid grid-rows-[auto_minmax(0,1fr)] gap-2 h-full min-h-0 overflow-hidden"
+    >
         <div
-            class="music-card grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 items-center !p-3 !px-4"
+            class="admin-section-toolbar music-card grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 items-center !p-3 !px-4"
         >
-            <div class="flex items-center min-h-full"><h3>Scores</h3></div>
+            <div class="admin-section-heading flex items-center min-h-full">
+                <h3>Scores</h3>
+            </div>
             <label class="field m-0 gap-0 min-w-0 self-center">
                 <span class="sr-only">Search scores</span>
                 <div class="relative">
@@ -466,7 +463,12 @@
                 onclick={openCreateScoreModal}
             >
                 <Plus size={15} aria-hidden="true" />
-                Add a score
+                <span class="admin-create-label admin-create-label-full"
+                    >Add a score</span
+                >
+                <span class="admin-create-label admin-create-label-short"
+                    >Create</span
+                >
             </button>
         </div>
 
@@ -479,7 +481,9 @@
                 </p>
             </div>
         {:else}
-            <div class="grid grid-cols-3 gap-2 items-start content-start max-[1360px]:grid-cols-2 max-[760px]:grid-cols-1">
+            <div
+                class="grid grid-cols-3 gap-2 items-start content-start max-[1360px]:grid-cols-2 max-[760px]:grid-cols-1"
+            >
                 {#each filteredMusics as music}
                     <article
                         class="music-card admin-score-card"
@@ -563,7 +567,8 @@
                                 <button
                                     class="button secondary admin-user-action"
                                     type="button"
-                                    onclick={() => openScoreEnsembleModal(music)}
+                                    onclick={() =>
+                                        openScoreEnsembleModal(music)}
                                     aria-label={`Manage ensembles for ${music.title}`}
                                     title="Manage ensembles"
                                 >
@@ -612,8 +617,7 @@
                                     aria-label={`Delete ${music.title}`}
                                     title="Delete score"
                                     disabled={deletingMusicFor === music.id}
-                                    onclick={() =>
-                                        handleDeleteMusic(music.id)}
+                                    onclick={() => handleDeleteMusic(music.id)}
                                 >
                                     <Trash2 size={16} aria-hidden="true" />
                                 </button>
@@ -689,8 +693,7 @@
                     type="file"
                     accept="image/*"
                     onchange={(event) => {
-                        const target =
-                            event.currentTarget as HTMLInputElement;
+                        const target = event.currentTarget as HTMLInputElement;
                         selectedIconFile = target.files?.[0] ?? null;
                     }}
                 />
@@ -839,8 +842,7 @@
                     type="file"
                     accept="image/*"
                     onchange={(event) => {
-                        const target =
-                            event.currentTarget as HTMLInputElement;
+                        const target = event.currentTarget as HTMLInputElement;
                         metadataIconFile = target.files?.[0] ?? null;
                     }}
                 />
@@ -954,7 +956,7 @@
 {#if confirmAction}
     <ConfirmModal
         title={confirmMessage}
-        confirmLabel={confirmLabel}
+        {confirmLabel}
         busy={confirmBusy}
         onConfirm={executeConfirm}
         onClose={closeConfirm}
