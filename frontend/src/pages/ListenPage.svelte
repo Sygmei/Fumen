@@ -348,14 +348,14 @@
     }
 </script>
 
-<main class="page public-shell">
+<main class="page public-shell public-listen-shell">
     <section class="content-panel public-content-panel">
         {#if publicError}
             <p class="status error">{publicError}</p>
         {:else}
             <div class="public-card public-workspace">
                 <div class="public-score-pane">
-                    <div class="score-title-row score-title-bar">
+                    <div class="score-title-row score-title-bar listen-score-title-bar">
                         <a class="listen-home-link" href="/" aria-label="Fumen home">
                             <span class="listen-home-mark" aria-hidden="true"></span>
                         </a>

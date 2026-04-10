@@ -449,6 +449,20 @@ h3 {
   }
 }
 
+@media (max-width: 1099px) {
+  .public-listen-shell {
+    padding-inline: 0;
+  }
+
+  .public-listen-shell .content-panel {
+    padding-inline: 0;
+  }
+
+  .listen-score-title-bar {
+    padding-inline: 0;
+  }
+}
+
 /* ─── Admin Sidebar Layout ───────────────────────────────────────────────── */
 .admin-shell .music-card,
 .admin-shell .toolbar,
@@ -1528,6 +1542,10 @@ h3 {
   padding: 20px 30px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+}
+
+.listen-score-title-bar {
+  padding-inline: 0;
 }
 
 .score-title-row h2 {
@@ -3180,7 +3198,7 @@ h3 {
 @media (max-width: 840px) {
 
   .hero-panel,
-  .content-panel {
+  .content-panel:not(.public-content-panel) {
     padding-inline: 14px;
   }
 
@@ -3278,11 +3296,11 @@ h3 {
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   }
 
-  .admin-section-toolbar > label {
+  .admin-section-toolbar>label {
     width: 100%;
   }
 
-  .admin-section-toolbar > .button {
+  .admin-section-toolbar>.button {
     width: 100%;
     white-space: nowrap;
   }
@@ -3296,7 +3314,7 @@ h3 {
   }
 
   .admin-user-list,
-  .admin-user-list > .music-card,
+  .admin-user-list>.music-card,
   .admin-user-scroll-area,
   .admin-ensemble-scroll-area {
     width: 100%;
