@@ -547,15 +547,12 @@
                 </div>
                 {#if canDeleteUserAccount(editingUser, currentUser) || isSuperadmin(currentUser)}
                     <div class="edit-user-field">
-                        <label class="edit-user-label" for="edit-role"
-                            >Role</label
-                        >
                         <CustomSelect
-                            id="edit-role"
-                            value={editingRole}
+                            label="Role"
+                            bind:value={editingRole}
                             options={createRoleOptions}
-                            onchange={(v) => {
-                                editingRole = v as Exclude<
+                            onValueChange={(role) => {
+                                editingRole = role as Exclude<
                                     GlobalRole,
                                     "superadmin"
                                 >;

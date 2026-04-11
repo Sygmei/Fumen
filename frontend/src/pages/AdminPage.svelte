@@ -140,6 +140,10 @@
             { eyebrow: "Share score", linkLabel: "Share link" },
         );
     }
+
+    function cacheAdminUsers(users: AppUser[]) {
+        localStorage.setItem("cached-admin-users", JSON.stringify(users));
+    }
 </script>
 
 <AdminLayout
@@ -167,11 +171,13 @@
                     adminUsers = [...adminUsers, user].sort((a, b) =>
                         a.username.localeCompare(b.username),
                     );
+                    cacheAdminUsers(adminUsers);
                 }}
                 onUserUpdated={(user) => {
                     adminUsers = adminUsers.map((u) =>
                         u.id === user.id ? user : u,
                     );
+                    cacheAdminUsers(adminUsers);
                 }}
                 onRefresh={refreshAdminData}
                 onShowQr={handleShowUserQr}
