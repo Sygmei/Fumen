@@ -1253,7 +1253,7 @@ h3 {
   z-index: 2;
 }
 
-.admin-inline-actions :global(.custom-select) {
+.admin-inline-actions .custom-select {
   width: min(100%, 230px);
   position: relative;
   z-index: 3;
@@ -1264,11 +1264,11 @@ h3 {
   min-width: 280px;
 }
 
-.admin-member-role-select :global(.custom-select) {
+.admin-member-role-select .custom-select {
   width: min(100%, 420px);
 }
 
-.admin-inline-actions :global(.custom-select-menu-wrap) {
+.admin-inline-actions .custom-select-menu-wrap {
   left: auto;
   right: 0;
 }
@@ -1348,8 +1348,17 @@ h3 {
     justify-content: stretch;
   }
 
-  .admin-inline-actions :global(.custom-select) {
+  .admin-inline-actions .custom-select {
     flex: 1 1 auto;
+    width: 100%;
+  }
+
+  .admin-member-role-select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .admin-member-role-select .custom-select {
     width: 100%;
   }
 
