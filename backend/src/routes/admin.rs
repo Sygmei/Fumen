@@ -660,7 +660,7 @@ async fn admin_upload_music(
     let mut icon: Option<String> = None;
     let mut requested_public_id: Option<String> = None;
     let mut requested_quality_profile: Option<String> = None;
-    let mut requested_ensemble_id: Option<String> = None;
+    let mut requested_ensemble_ids: Vec<String> = Vec::new();
     let mut icon_file: Option<(String, Bytes)> = None;
     let mut upload: Option<(String, String, Bytes)> = None;
 
@@ -690,7 +690,12 @@ async fn admin_upload_music(
             Some("quality_profile") => {
                 requested_quality_profile = Some(field.text().await?.trim().to_owned())
             }
-            Some("ensemble_id") => requested_ensemble_id = Some(field.text().await?.trim().to_owned()),
+            Some("ensemble_id") => {
+                let ensemble_id = field.text().await?.trim().to_owned();
+                if !ensemble_id.is_empty() {
+                    requested_ensemble_ids.push(ensemble_id);
+                }
+            }
             Some("file") => {
                 let filename = field.file_name().map(ToOwned::to_owned).ok_or_else(|| {
                     AppError::bad_request("The uploaded file is missing a filename")
@@ -720,20 +725,30 @@ async fn admin_upload_music(
     let icon = normalize_music_icon(icon.as_deref())?;
     music::ensure_public_id_available(&state.db_rw, public_id.as_deref(), None).await?;
     let quality_profile = parse_quality_profile(requested_quality_profile.as_deref())?;
-    let ensemble_id = requested_ensemble_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::bad_request("Choose an ensemble for this score"))?
-        .to_owned();
-    if music::find_ensemble_by_id(&state.db_rw, &ensemble_id)
-        .await?
-        .is_none()
-    {
-        return Err(AppError::not_found("Ensemble not found"));
+    if requested_ensemble_ids.is_empty() {
+        return Err(AppError::bad_request("Choose an ensemble for this score"));
     }
-    auth::ensure_can_upload_to_ensemble(&auth_context, &ensemble_id)?;
-    tracing::info!(ensemble_id = %ensemble_id, quality_profile = %quality_profile.as_str(), filename = %filename, bytes = bytes.len(), "score upload validated");
+
+    let mut ensemble_ids = Vec::new();
+    for ensemble_id in requested_ensemble_ids {
+        if !ensemble_ids.contains(&ensemble_id) {
+            if music::find_ensemble_by_id(&state.db_rw, &ensemble_id)
+                .await?
+                .is_none()
+            {
+                return Err(AppError::not_found("Ensemble not found"));
+            }
+            auth::ensure_can_upload_to_ensemble(&auth_context, &ensemble_id)?;
+            ensemble_ids.push(ensemble_id);
+        }
+    }
+
+    let primary_ensemble_id = ensemble_ids
+        .first()
+        .cloned()
+        .ok_or_else(|| AppError::bad_request("Choose an ensemble for this score"))?;
+
+    tracing::info!(ensemble_count = ensemble_ids.len(), quality_profile = %quality_profile.as_str(), filename = %filename, bytes = bytes.len(), "score upload validated");
 
     let music_id = Uuid::new_v4().to_string();
     let public_token = generate_public_token();
@@ -769,6 +784,130 @@ async fn admin_upload_music(
         None
     };
 
+    let created_at = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        INSERT INTO musics (
+            id, title, icon, icon_image_key, filename, content_type, object_key,
+            audio_object_key, audio_status, audio_error,
+            midi_object_key, midi_status, midi_error,
+            musicxml_object_key, musicxml_status, musicxml_error,
+            stems_status, stems_error,
+            public_token, public_id, quality_profile, created_at, directory_id, owner_user_id
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            NULL, 'processing', NULL,
+            NULL, 'processing', NULL,
+            NULL, 'processing', NULL,
+            'processing', NULL,
+            $8, $9, $10, $11, $12, $13
+        )
+        "#,
+    )
+    .bind(&music_id)
+    .bind(&resolved_title)
+    .bind(&icon)
+    .bind(&icon_image_key)
+    .bind(&filename)
+    .bind(&content_type)
+    .bind(&object_key)
+    .bind(&public_token)
+    .bind(&public_id)
+    .bind(quality_profile.as_str())
+    .bind(&created_at)
+    .bind(&primary_ensemble_id)
+    .bind(&auth_context.user.id)
+    .execute(&state.db_rw)
+    .await?;
+    for ensemble_id in &ensemble_ids {
+        sqlx::query(
+            "INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(&music_id)
+        .bind(ensemble_id)
+        .execute(&state.db_rw)
+        .await?;
+    }
+
+    let ensemble_name_map = music::fetch_ensemble_summaries(&state.db_rw).await?;
+    let ensemble_names = ensemble_ids
+        .iter()
+        .filter_map(|ensemble_id| ensemble_name_map.get(ensemble_id).cloned())
+        .collect::<Vec<_>>();
+
+    let record = MusicRecord {
+        id: music_id.clone(),
+        title: resolved_title.clone(),
+        icon: icon.clone(),
+        icon_image_key: icon_image_key.clone(),
+        filename: filename.clone(),
+        content_type: content_type.clone(),
+        object_key: object_key.clone(),
+        audio_object_key: None,
+        audio_status: "processing".to_owned(),
+        audio_error: None,
+        midi_object_key: None,
+        midi_status: "processing".to_owned(),
+        midi_error: None,
+        musicxml_object_key: None,
+        musicxml_status: "processing".to_owned(),
+        musicxml_error: None,
+        stems_status: "processing".to_owned(),
+        stems_error: None,
+        public_token: public_token.clone(),
+        public_id: public_id.clone(),
+        quality_profile: quality_profile.as_str().to_owned(),
+        created_at: created_at.clone(),
+        owner_user_id: Some(auth_context.user.id.clone()),
+    };
+
+    let render_state = state.clone();
+    let failure_state = state.clone();
+    let render_music_id = music_id.clone();
+    let render_quality_profile = quality_profile;
+    let render_bytes = bytes;
+    let render_filename = safe_filename.clone();
+    tokio::spawn(async move {
+        if let Err(error) = process_uploaded_music(
+            render_state,
+            render_music_id.clone(),
+            render_quality_profile,
+            render_bytes,
+            render_filename,
+        )
+        .await
+        {
+            tracing::error!(music_id = %render_music_id, error = ?error, "score upload processing failed");
+            if let Err(mark_error) =
+                mark_music_processing_failed(&failure_state, &render_music_id, error.message.clone()).await
+            {
+                tracing::error!(
+                    music_id = %render_music_id,
+                    error = ?mark_error,
+                    "failed to mark score upload as failed"
+                );
+            }
+        }
+    });
+
+    Ok(Json(music::record_to_admin_response(
+        &state.config,
+        &state.storage,
+        record,
+        0,
+        ensemble_ids,
+        ensemble_names,
+    )))
+}
+
+async fn process_uploaded_music(
+    state: AppState,
+    music_id: String,
+    quality_profile: audio::StemQualityProfile,
+    bytes: Bytes,
+    safe_filename: String,
+) -> Result<(), AppError> {
     let temp_dir = tempfile::tempdir()?;
     let temp_input_path = temp_dir.path().join(&safe_filename);
     tracing::info!(music_id = %music_id, path = %temp_input_path.display(), "score upload writing temporary input file");
@@ -801,34 +940,6 @@ async fn admin_upload_music(
         quality_profile,
     )
     .await?;
-
-    let created_at = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
-        r#"
-        INSERT INTO musics (id, title, icon, icon_image_key, filename, content_type, object_key, public_token, public_id, quality_profile, created_at, directory_id, owner_user_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        "#,
-    )
-    .bind(&music_id)
-    .bind(&resolved_title)
-    .bind(&icon)
-    .bind(&icon_image_key)
-    .bind(&filename)
-    .bind(&content_type)
-    .bind(&object_key)
-    .bind(&public_token)
-    .bind(&public_id)
-    .bind(quality_profile.as_str())
-    .bind(&created_at)
-    .bind(&ensemble_id)
-    .bind(&auth_context.user.id)
-    .execute(&state.db_rw)
-    .await?;
-    sqlx::query("INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2)")
-        .bind(&music_id)
-        .bind(&ensemble_id)
-        .execute(&state.db_rw)
-        .await?;
 
     let (
         (audio_object_key, audio_status, audio_error),
@@ -867,45 +978,31 @@ async fn admin_upload_music(
     .execute(&state.db_rw)
     .await?;
 
-    let record = MusicRecord {
-        id: music_id,
-        title: resolved_title,
-        icon,
-        icon_image_key: icon_image_key.clone(),
-        filename,
-        content_type,
-        object_key,
-        audio_object_key,
-        audio_status,
-        audio_error,
-        midi_object_key,
-        midi_status,
-        midi_error,
-        musicxml_object_key,
-        musicxml_status,
-        musicxml_error,
-        stems_status,
-        stems_error,
-        public_token,
-        public_id,
-        quality_profile: quality_profile.as_str().to_owned(),
-        created_at,
-        owner_user_id: Some(auth_context.user.id.clone()),
-    };
+    tracing::info!(music_id = %music_id, "score upload processing completed");
+    Ok(())
+}
 
-    let stems_total = music::fetch_stems_total(&state.db_rw, &record.id).await;
-    let ensemble_name = music::find_ensemble_by_id(&state.db_rw, &ensemble_id)
-        .await?
-        .map(|ensemble| ensemble.name)
-        .unwrap_or_else(|| ensemble_id.clone());
-    Ok(Json(music::record_to_admin_response(
-        &state.config,
-        &state.storage,
-        record,
-        stems_total,
-        vec![ensemble_id],
-        vec![ensemble_name],
-    )))
+async fn mark_music_processing_failed(
+    state: &AppState,
+    music_id: &str,
+    error: String,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+        UPDATE musics SET
+            audio_status = 'failed', audio_error = $1,
+            midi_status = 'failed', midi_error = $1,
+            musicxml_status = 'failed', musicxml_error = $1,
+            stems_status = 'failed', stems_error = $1
+        WHERE id = $2
+        "#,
+    )
+    .bind(&error)
+    .bind(music_id)
+    .execute(&state.db_rw)
+    .await?;
+
+    Ok(())
 }
 
 async fn admin_retry_render(

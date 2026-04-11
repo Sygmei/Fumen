@@ -646,9 +646,11 @@ export async function uploadMusic(
     iconFile?: File | null
     publicId: string
     qualityProfile: StemQualityProfile
-    ensembleId: string
+    ensembleIds?: string[]
+    ensembleId?: string
   },
 ): Promise<AdminMusic> {
+  const ensembleIds = payload.ensembleIds ?? (payload.ensembleId ? [payload.ensembleId] : [])
   const body = new FormData()
   body.append('file', payload.file)
   body.append('title', payload.title)
@@ -656,7 +658,9 @@ export async function uploadMusic(
   if (payload.iconFile) body.append('icon_file', payload.iconFile)
   body.append('public_id', payload.publicId)
   body.append('quality_profile', payload.qualityProfile)
-  body.append('ensemble_id', payload.ensembleId)
+  for (const ensembleId of ensembleIds) {
+    body.append('ensemble_id', ensembleId)
+  }
 
   const music = await requestJson<AdminMusic>('/admin/musics', {
     method: 'POST',

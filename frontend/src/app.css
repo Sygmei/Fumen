@@ -958,6 +958,13 @@ h3 {
   white-space: nowrap;
 }
 
+.admin-score-title > .admin-score-processing-pill {
+  flex: 0 0 auto;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
 .admin-score-retry {
   justify-self: start;
   padding: 7px 11px;

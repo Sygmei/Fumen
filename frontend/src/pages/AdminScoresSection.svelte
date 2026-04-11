@@ -144,6 +144,15 @@
         musics.find((m) => m.id === infoMusicId) ?? null,
     );
 
+    function isProcessingMusic(music: AdminMusic) {
+        return [
+            music.audio_status,
+            music.midi_status,
+            music.musicxml_status,
+            music.stems_status,
+        ].includes("processing");
+    }
+
     const filteredPickerEnsembles = $derived.by(() => {
         const query = ensemblePickerSearchQuery.trim().toLowerCase();
         const sorted = [...ensembles].sort((a, b) =>
@@ -225,17 +234,13 @@
                 iconFile: selectedIconFile,
                 publicId: uploadPublicId,
                 qualityProfile: uploadQualityProfile,
-                ensembleId: uploadEnsembleIds[0] ?? "",
+                ensembleIds: uploadEnsembleIds,
             });
-            for (const ensembleId of uploadEnsembleIds.slice(1)) {
-                if (!uploaded.ensemble_ids.includes(ensembleId)) {
-                    await addMusicToEnsemble(uploaded.id, ensembleId);
-                }
-            }
-            await onRefresh();
             uploadBusy = false;
-            closeCreateScoreModal(true);
-            onSuccess("Upload completed.");
+            onMusicUpdated(uploaded);
+            closeCreateScoreModal();
+            void onRefresh();
+            onSuccess("Upload started. The score will keep processing in the background.");
         } catch (error) {
             onError(error instanceof Error ? error.message : "Upload failed");
         } finally {
@@ -525,7 +530,9 @@
                 {#each filteredMusics as music}
                     <article
                         class="music-card admin-score-card"
+                        class:processing={isProcessingMusic(music)}
                         class:download-open={openDownloadMenuFor === music.id}
+                        aria-busy={isProcessingMusic(music)}
                     >
                         <div class="admin-score-header">
                             <h3 class="admin-score-title">
@@ -539,6 +546,11 @@
                                     target="_blank"
                                     rel="noreferrer">{music.title}</a
                                 >
+                                {#if isProcessingMusic(music)}
+                                    <span class="status-pill admin-score-processing-pill"
+                                        >Processing</span
+                                    >
+                                {/if}
                             </h3>
                             <div
                                 class="download-menu admin-score-download-menu"

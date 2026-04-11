@@ -24,6 +24,10 @@
         }
     }
 
+    function cacheAdminMusics(items: AdminMusic[]) {
+        localStorage.setItem("cached-admin-musics", JSON.stringify(items));
+    }
+
     const cachedMusics = readAdminCache<AdminMusic>("cached-admin-musics");
     const cachedAdminUsers = readAdminCache<AppUser>("cached-admin-users");
     const cachedEnsembles = readAdminCache<Ensemble>("cached-admin-ensembles");
@@ -91,6 +95,31 @@
         }
     });
 
+    $effect(() => {
+        const shouldPollForProcessing =
+            adminSection === "scores" &&
+            musics.some((music) =>
+                [
+                    music.audio_status,
+                    music.midi_status,
+                    music.musicxml_status,
+                    music.stems_status,
+                ].includes("processing"),
+            );
+
+        if (!shouldPollForProcessing) {
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            if (adminSection === "scores") {
+                void refreshAdminData();
+            }
+        }, 5000);
+
+        return () => window.clearInterval(timer);
+    });
+
     async function refreshAdminData() {
         adminLoading = true;
         adminError = "";
@@ -103,10 +132,7 @@
             musics = musicItems;
             adminUsers = userItems;
             ensembles = ensembleItems;
-            localStorage.setItem(
-                "cached-admin-musics",
-                JSON.stringify(musicItems),
-            );
+            cacheAdminMusics(musicItems);
             localStorage.setItem(
                 "cached-admin-users",
                 JSON.stringify(userItems),
@@ -217,7 +243,10 @@
                 {musics}
                 {ensembles}
                 onMusicUpdated={(music) => {
-                    musics = musics.map((m) => (m.id === music.id ? music : m));
+                    musics = [...musics.filter((m) => m.id !== music.id), music].sort(
+                        (a, b) => b.created_at.localeCompare(a.created_at),
+                    );
+                    cacheAdminMusics(musics);
                 }}
                 onRefresh={refreshAdminData}
                 onShowQr={handleShowScoreQr}
