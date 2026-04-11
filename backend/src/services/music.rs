@@ -4,8 +4,9 @@ use crate::models::{
     UserEnsembleMembershipRecord,
 };
 use crate::schemas::{
-    AdminMusicPlaytimeResponse, AdminMusicResponse, MusicPlaytimeLeaderboardEntryResponse,
-    MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, StemInfo,
+    AdminMusicPlaytimeResponse, AdminMusicResponse, AdminUserScorePlaytimeResponse,
+    MusicPlaytimeLeaderboardEntryResponse, MusicPlaytimeTrackSummaryResponse, PublicMusicResponse,
+    StemInfo,
 };
 use crate::storage::Storage;
 use crate::{
@@ -68,6 +69,17 @@ struct AdminMusicPlaytimeRow {
     total_seconds: f64,
 }
 
+#[derive(sqlx::FromRow)]
+struct AdminUserScorePlaytimeRow {
+    music_id: String,
+    title: String,
+    icon: Option<String>,
+    icon_image_key: Option<String>,
+    public_token: String,
+    public_id: Option<String>,
+    total_seconds: f64,
+}
+
 fn accessible_music_row_to_tuple(row: UserAccessibleMusicRow) -> (MusicRecord, String, String) {
     (
         MusicRecord {
@@ -108,6 +120,12 @@ fn resolve_user_avatar_url(
     avatar_image_key
         .and_then(|key| storage.public_url(key))
         .or_else(|| avatar_image_key.map(|_| format!("/api/users/{user_id}/avatar")))
+}
+
+fn resolve_music_public_url(config: &AppConfig, public_token: &str, public_id: Option<&str>) -> String {
+    public_id
+        .map(|public_id| config.public_url_for(public_id))
+        .unwrap_or_else(|| config.public_url_for(public_token))
 }
 
 pub(crate) async fn fetch_stems_total(db: &PgPool, music_id: &str) -> i64 {
@@ -608,6 +626,64 @@ pub(crate) async fn build_admin_music_playtime_response(
     })
 }
 
+pub(crate) async fn build_admin_user_metadata_playtime_response(
+    config: &AppConfig,
+    storage: &Storage,
+    db: &PgPool,
+    user_id: &str,
+) -> Result<(f64, Vec<AdminUserScorePlaytimeResponse>), AppError> {
+    let rows = sqlx::query_as::<_, AdminUserScorePlaytimeRow>(
+        r#"
+        SELECT
+            m.id AS music_id,
+            m.title,
+            m.icon,
+            m.icon_image_key,
+            m.public_token,
+            m.public_id,
+            SUM(p.total_seconds)::DOUBLE PRECISION AS total_seconds
+        FROM user_music_track_playtime p
+        JOIN musics m
+            ON m.id = p.music_id
+        WHERE p.user_id = $1
+          AND p.total_seconds > 0
+        GROUP BY
+            m.id,
+            m.title,
+            m.icon,
+            m.icon_image_key,
+            m.public_token,
+            m.public_id
+        ORDER BY total_seconds DESC, m.title ASC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+
+    let mut total_seconds = 0.0;
+    let mut score_playtimes = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        total_seconds += row.total_seconds;
+        let icon_image_url = row.icon_image_key.as_ref().map(|key| {
+            storage
+                .public_url(key)
+                .unwrap_or_else(|| format!("/api/public/{}/icon", row.public_token))
+        });
+        score_playtimes.push(AdminUserScorePlaytimeResponse {
+            music_id: row.music_id,
+            title: row.title,
+            icon: row.icon,
+            icon_image_url,
+            public_url: resolve_music_public_url(config, &row.public_token, row.public_id.as_deref()),
+            total_seconds: row.total_seconds,
+        });
+    }
+
+    Ok((total_seconds, score_playtimes))
+}
+
 pub(crate) async fn store_stems(
     state: &AppState,
     music_id: &str,
@@ -822,6 +898,9 @@ pub(crate) fn record_to_admin_response(
         .public_id
         .as_ref()
         .map(|public_id| config.public_url_for(public_id));
+    let public_url = public_id_url
+        .clone()
+        .unwrap_or_else(|| config.public_url_for(&record.public_token));
     let midi_download_url = record.midi_object_key.as_ref().map(|object_key| {
         storage
             .public_url(object_key)
@@ -854,7 +933,7 @@ pub(crate) fn record_to_admin_response(
         stems_error: record.stems_error,
         public_token: record.public_token.clone(),
         public_id: record.public_id,
-        public_url: config.public_url_for(&record.public_token),
+        public_url,
         public_id_url,
         download_url,
         midi_download_url,

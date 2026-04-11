@@ -133,7 +133,7 @@
     }
 
     async function handleShowScoreQr(music: AdminMusic) {
-        const url = music.public_id_url ?? music.public_url;
+        const url = music.public_url;
         await onShowCredential(
             `Share link for ${music.title}`,
             () => Promise.resolve({ connection_url: url, expires_at: "" }),

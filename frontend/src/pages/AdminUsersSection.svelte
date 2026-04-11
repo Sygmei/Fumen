@@ -4,8 +4,10 @@
         deleteUser,
         adminUpdateUser,
         createAdminUserLoginLink,
+        fetchAdminUserMetadata,
         compressImageToJpeg,
         type AppUser,
+        type AdminUserMetadata,
         type GlobalRole,
     } from "../lib/api";
     import BaseModal from "../components/BaseModal.svelte";
@@ -21,15 +23,17 @@
         Shield,
         Users,
         User,
+        Info,
     } from "@lucide/svelte";
     import {
+        hasGlobalPower,
         canManageUsers,
         canDeleteUserAccount,
         isSuperadmin,
         allowedCreateRoles,
         defaultCreateRole,
     } from "../lib/admin-permissions";
-    import { prettyDate } from "../lib/utils";
+    import { formatPlaytimeDuration, prettyDate } from "../lib/utils";
 
     let {
         currentUser,
@@ -69,6 +73,12 @@
     let editingClearAvatar = $state(false);
     let savingEditUser = $state(false);
     let editUserError = $state("");
+
+    // Metadata modal
+    let metadataUser = $state<AppUser | null>(null);
+    let metadataLoading = $state(false);
+    let metadataError = $state("");
+    let metadata = $state<AdminUserMetadata | null>(null);
 
     // Delete confirm
     let confirmMessage = $state("");
@@ -238,6 +248,45 @@
         }
     }
 
+    // User metadata
+    function closeUserMetadataModal() {
+        metadataUser = null;
+        metadataLoading = false;
+        metadataError = "";
+        metadata = null;
+    }
+
+    async function loadUserMetadata(userId: string) {
+        metadataLoading = true;
+        metadataError = "";
+        try {
+            const response = await fetchAdminUserMetadata(userId);
+            if (metadataUser?.id === userId) {
+                metadata = response;
+            }
+        } catch (error) {
+            if (metadataUser?.id === userId) {
+                metadataError =
+                    error instanceof Error
+                        ? error.message
+                        : "Unable to load metadata";
+            }
+        } finally {
+            if (metadataUser?.id === userId) {
+                metadataLoading = false;
+            }
+        }
+    }
+
+    function openUserMetadataModal(user: AppUser) {
+        if (!hasGlobalPower(currentUser)) return;
+        metadataUser = user;
+        metadata = null;
+        metadataError = "";
+        metadataLoading = true;
+        void loadUserMetadata(user.id);
+    }
+
     // Delete user
     function openConfirm(
         msg: string,
@@ -393,12 +442,24 @@
                                     onclick={() => openUserEditModal(user)}
                                     aria-label={`Edit ${user.username}`}
                                     title="Edit user"
+                                    >
+                                        <Pencil size={15} aria-hidden="true" />
+                                    </button>
+                            {/if}
+                            {#if hasGlobalPower(currentUser)}
+                                <button
+                                    class="button secondary admin-user-action"
+                                    type="button"
+                                    onclick={() => openUserMetadataModal(user)}
+                                    aria-label={`View metadata for ${user.username}`}
+                                    title="User metadata"
                                 >
-                                    <Pencil size={15} aria-hidden="true" />
+                                    <Info size={15} aria-hidden="true" />
                                 </button>
                             {/if}
                             <button
                                 class="button secondary admin-user-action"
+                                type="button"
                                 onclick={() => void handleShowUserQr(user)}
                                 aria-label={`Show QR code for ${user.username}`}
                                 title="Show QR code"
@@ -582,6 +643,98 @@
                 >
             </div>
         {/snippet}
+    </BaseModal>
+{/if}
+
+{#if metadataUser}
+    <BaseModal
+        title="User metadata"
+        subtitle={metadataUser.display_name ?? `@${metadataUser.username}`}
+        size="large"
+        onClose={closeUserMetadataModal}
+        cardClass="admin-user-modal admin-user-metadata-modal"
+    >
+        <div class="admin-user-metadata-summary">
+            <article class="admin-user-metadata-stat">
+                <span>Last login</span>
+                <strong>
+                    {metadata?.last_login_at
+                        ? prettyDate(metadata.last_login_at)
+                        : metadataLoading
+                            ? "Loading..."
+                            : "Never"}
+                </strong>
+            </article>
+            <article class="admin-user-metadata-stat">
+                <span>Total playtime</span>
+                <strong>
+                    {metadata
+                        ? formatPlaytimeDuration(metadata.total_playtime_seconds)
+                        : metadataLoading
+                            ? "Loading..."
+                            : "0s"}
+                </strong>
+            </article>
+            <article class="admin-user-metadata-stat">
+                <span>Scores played</span>
+                <strong>
+                    {metadata
+                        ? metadata.score_playtimes.length
+                        : metadataLoading
+                            ? "Loading..."
+                            : 0}
+                </strong>
+            </article>
+        </div>
+
+        {#if metadataLoading}
+            <p class="hint">Loading metadata...</p>
+        {:else if metadataError}
+            <p class="status error">{metadataError}</p>
+        {:else if metadata}
+            <section class="admin-user-metadata-section">
+                <div class="admin-playtime-header">
+                    <div>
+                        <p class="meta-label">Scores</p>
+                        <h3>Playtime by score</h3>
+                    </div>
+                </div>
+
+                {#if metadata.score_playtimes.length === 0}
+                    <p class="hint">No score playtime has been recorded yet.</p>
+                {:else}
+                    <div class="admin-user-metadata-score-list">
+                        {#each metadata.score_playtimes as score}
+                            <a
+                                class="admin-user-metadata-score-row"
+                                href={score.public_url}
+                                target="_blank"
+                                rel="noreferrer"
+                            >
+                                <span class="admin-user-metadata-score-icon" aria-hidden="true">
+                                    {#if score.icon_image_url}
+                                        <img
+                                            src={score.icon_image_url}
+                                            alt=""
+                                            class="admin-user-metadata-score-icon-img"
+                                        />
+                                    {:else}
+                                        {score.icon ?? ""}
+                                    {/if}
+                                </span>
+                                <span class="admin-user-metadata-score-copy">
+                                    <strong>{score.title}</strong>
+                                    <span class="subtle">Public score link</span>
+                                </span>
+                                <span class="status-pill">
+                                    {formatPlaytimeDuration(score.total_seconds)}
+                                </span>
+                            </a>
+                        {/each}
+                    </div>
+                {/if}
+            </section>
+        {/if}
     </BaseModal>
 {/if}
 

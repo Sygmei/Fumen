@@ -1,8 +1,8 @@
 use crate::models::{EnsembleRecord, MusicRecord, UserRecord};
 use crate::schemas::{
     AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicResponse,
-    CreateEnsembleRequest, CreateUserRequest, EnsembleMemberResponse, LoginLinkResponse,
-    MoveMusicRequest, UpdateEnsembleMemberRequest, UserResponse,
+    AdminUserMetadataResponse, CreateEnsembleRequest, CreateUserRequest, EnsembleMemberResponse,
+    LoginLinkResponse, MoveMusicRequest, UpdateEnsembleMemberRequest, UserResponse,
 };
 use crate::services::{auth, music};
 use crate::{
@@ -35,6 +35,7 @@ pub(super) fn routes() -> Router<AppState> {
             "/admin/users/{id}/login-link",
             post(admin_create_user_login_link),
         )
+        .route("/admin/users/{id}/metadata", get(admin_user_metadata))
         .route(
             "/admin/ensembles",
             get(admin_list_ensembles).post(admin_create_ensemble),
@@ -183,6 +184,36 @@ async fn admin_create_user_login_link(
     Ok(Json(
         auth::create_login_link(&state.db_rw, &state.config, &user.id).await?,
     ))
+}
+
+async fn admin_user_metadata(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<AdminUserMetadataResponse>, AppError> {
+    let auth_context = auth::require_admin_context(&state, &headers).await?;
+    if !auth_context.has_global_power() {
+        return Err(AppError::unauthorized("Only admins can view user metadata"));
+    }
+
+    let user = auth::find_user_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("User not found"))?;
+    let last_login_at = auth::find_user_last_login_at(&state.db_rw, &user.id).await?;
+    let (total_playtime_seconds, score_playtimes) =
+        music::build_admin_user_metadata_playtime_response(
+            &state.config,
+            &state.storage,
+            &state.db_rw,
+            &user.id,
+        )
+        .await?;
+
+    Ok(Json(AdminUserMetadataResponse {
+        last_login_at,
+        total_playtime_seconds,
+        score_playtimes,
+    }))
 }
 
 async fn admin_delete_user(

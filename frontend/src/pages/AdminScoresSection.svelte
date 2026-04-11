@@ -1064,15 +1064,8 @@
             <a
                 href={activeInfoMusic.public_url}
                 target="_blank"
-                rel="noreferrer">Random link</a
+                rel="noreferrer">Public link</a
             >
-            {#if activeInfoMusic.public_id_url}
-                <a
-                    href={activeInfoMusic.public_id_url}
-                    target="_blank"
-                    rel="noreferrer">Public id link</a
-                >
-            {/if}
         </div>
         {#if activeInfoMusic.stems_status !== "ready" && canEditOwnedScore(activeInfoMusic, currentUser)}
             <div class="actions admin-user-modal-actions">

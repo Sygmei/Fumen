@@ -81,10 +81,7 @@
         display: grid;
         place-items: center;
         overflow: hidden;
-        background:
-            radial-gradient(circle at 30% 20%, rgba(196, 43, 13, 0.16), transparent 42%),
-            radial-gradient(circle at 70% 80%, rgba(26, 23, 18, 0.12), transparent 46%),
-            #fff;
+        background: #fff;
     }
 
     .qr-placeholder-grid {

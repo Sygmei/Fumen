@@ -66,6 +66,21 @@ export type AppUser = {
   created_by_user_id: string | null
 }
 
+export type AdminUserMetadataScorePlaytime = {
+  music_id: string
+  title: string
+  icon: string | null
+  icon_image_url: string | null
+  public_url: string
+  total_seconds: number
+}
+
+export type AdminUserMetadata = {
+  last_login_at: string | null
+  total_playtime_seconds: number
+  score_playtimes: AdminUserMetadataScorePlaytime[]
+}
+
 export type EnsembleMember = {
   user_id: string
   role: EnsembleRole
@@ -536,6 +551,28 @@ export async function createAdminUserLoginLink(
     method: 'POST',
     authenticated: true,
   })
+}
+
+function normalizeAdminUserMetadata(
+  metadata: AdminUserMetadata,
+): AdminUserMetadata {
+  return {
+    ...metadata,
+    score_playtimes: metadata.score_playtimes.map((entry) => ({
+      ...entry,
+      icon_image_url: resolveBackendAssetUrl(entry.icon_image_url),
+    })),
+  }
+}
+
+export async function fetchAdminUserMetadata(
+  userId: string,
+): Promise<AdminUserMetadata> {
+  const metadata = await requestJson<AdminUserMetadata>(`/admin/users/${userId}/metadata`, {
+    authenticated: true,
+  })
+
+  return normalizeAdminUserMetadata(metadata)
 }
 
 export async function listEnsembles(): Promise<Ensemble[]> {

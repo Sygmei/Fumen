@@ -59,6 +59,18 @@ pub(crate) async fn find_session_by_token(
     .await?)
 }
 
+pub(crate) async fn find_user_last_login_at(
+    db: &PgPool,
+    user_id: &str,
+) -> Result<Option<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT created_at FROM user_sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?)
+}
+
 pub(crate) async fn require_user_session(
     state: &AppState,
     headers: &HeaderMap,

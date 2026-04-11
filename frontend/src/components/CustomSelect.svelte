@@ -20,7 +20,7 @@
         placeholder = "Select an option",
         disabled = false,
         compact = false,
-        showDescriptionInTrigger = true,
+        showDescriptionInTrigger = false,
         onValueChange,
     }: {
         value: string;
@@ -179,30 +179,18 @@
         const viewport = window.visualViewport;
         const viewportHeight = viewport?.height ?? window.innerHeight;
         const viewportWidth = viewport?.width ?? window.innerWidth;
-        const viewportTop = viewport?.offsetTop ?? 0;
-        const viewportLeft = viewport?.offsetLeft ?? 0;
         const margin = viewportWidth <= 640 ? 12 : 16;
-        const gap = viewportWidth <= 640 ? 10 : 8;
+        const gap = viewportWidth <= 640 ? 8 : 8;
 
         isMobileSheet = viewportWidth <= 640;
 
-        if (isMobileSheet) {
-            openUpward = false;
-            menuWidth = Math.max(0, viewportWidth - margin * 2);
-            menuLeft = viewportLeft + margin;
-            menuTop = viewportTop + margin;
-            menuBottom = null;
-            menuMaxHeight = Math.max(220, viewportHeight - margin * 2);
-            return;
-        }
-
         const availableBelow = Math.max(
             140,
-            viewportTop + viewportHeight - rect.bottom - margin - gap,
+            viewportHeight - rect.bottom - margin - gap,
         );
         const availableAbove = Math.max(
             140,
-            rect.top - viewportTop - margin - gap,
+            rect.top - margin - gap,
         );
         const preferredHeight = Math.min(menuElement?.scrollHeight ?? 320, 360);
         const nextMenuWidth = Math.min(
@@ -218,16 +206,14 @@
         );
         menuWidth = nextMenuWidth;
         menuLeft = Math.min(
-            Math.max(viewportLeft + margin, viewportLeft + rect.left),
+            Math.max(margin, rect.left),
             Math.max(
-                viewportLeft + margin,
-                viewportLeft + viewportWidth - nextMenuWidth - margin,
+                margin,
+                viewportWidth - nextMenuWidth - margin,
             ),
         );
-        menuTop = openUpward ? null : viewportTop + rect.bottom + gap;
-        menuBottom = openUpward
-            ? window.innerHeight - (viewportTop + rect.top) + gap
-            : null;
+        menuTop = openUpward ? null : rect.bottom + gap;
+        menuBottom = openUpward ? viewportHeight - rect.top + gap : null;
     }
 
     function handleViewportChange() {
@@ -346,9 +332,6 @@
                         </span>
                         <span class="custom-select-option-copy">
                             <strong>{option.label}</strong>
-                            {#if option.description}
-                                <small>{option.description}</small>
-                            {/if}
                         </span>
                         <span
                             class="custom-select-option-check"
@@ -370,22 +353,10 @@
         position: relative;
         display: grid;
         gap: 10px;
-        --custom-select-trigger-bg: linear-gradient(
-            180deg,
-            color-mix(in srgb, var(--surface) 84%, white 16%),
-            color-mix(in srgb, var(--surface-alt) 82%, white 18%)
-        );
+        --custom-select-trigger-bg: var(--surface);
         --custom-select-panel-bg: var(--surface);
-        --custom-select-hover-bg: color-mix(
-            in srgb,
-            var(--accent) 7%,
-            var(--surface) 93%
-        );
-        --custom-select-selected-bg: color-mix(
-            in srgb,
-            var(--accent) 11%,
-            var(--surface) 89%
-        );
+        --custom-select-hover-bg: var(--accent-faint);
+        --custom-select-selected-bg: var(--accent-dim);
         --custom-select-border: color-mix(
             in srgb,
             var(--border-strong) 88%,
@@ -401,8 +372,6 @@
             var(--border-strong) 92%,
             white 8%
         );
-        --custom-select-shadow: 0 8px 22px rgba(26, 23, 18, 0.08);
-        --custom-select-shadow-strong: 0 18px 46px rgba(26, 23, 18, 0.16);
         --custom-select-icon-bg: color-mix(
             in srgb,
             var(--surface-alt) 74%,
@@ -417,22 +386,10 @@
 
     @media (prefers-color-scheme: dark) {
         .custom-select {
-            --custom-select-trigger-bg: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--surface) 94%, white 6%),
-                color-mix(in srgb, var(--surface-alt) 90%, black 10%)
-            );
+            --custom-select-trigger-bg: var(--surface);
             --custom-select-panel-bg: var(--surface);
-            --custom-select-hover-bg: color-mix(
-                in srgb,
-                var(--accent) 12%,
-                var(--surface) 88%
-            );
-            --custom-select-selected-bg: color-mix(
-                in srgb,
-                var(--accent) 16%,
-                var(--surface) 84%
-            );
+            --custom-select-hover-bg: var(--accent-faint);
+            --custom-select-selected-bg: var(--accent-dim);
             --custom-select-border: color-mix(
                 in srgb,
                 var(--border-strong) 86%,
@@ -448,8 +405,6 @@
                 var(--border-dark-strong) 88%,
                 white 12%
             );
-            --custom-select-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
-            --custom-select-shadow-strong: 0 20px 52px rgba(0, 0, 0, 0.42);
             --custom-select-icon-bg: color-mix(
                 in srgb,
                 var(--surface-alt) 78%,
@@ -479,13 +434,12 @@
         align-items: center;
         gap: 12px;
         width: 100%;
-        min-height: 58px;
+        height: var(--control-height, 48px);
+        min-height: var(--control-height, 48px);
         padding: 10px 12px 10px 10px;
-        border: 1.5px solid var(--custom-select-border);
+        border: 1px solid var(--custom-select-border);
         background: var(--custom-select-trigger-bg);
-        box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.3),
-            var(--custom-select-shadow);
+        box-shadow: none;
         appearance: none;
         color: var(--text);
         text-align: left;
@@ -493,44 +447,20 @@
         overflow: hidden;
         transition:
             border-color 160ms ease,
-            box-shadow 160ms ease,
             transform 160ms ease;
-    }
-
-    .custom-select-trigger::before {
-        content: "";
-        position: absolute;
-        inset: 0 auto auto 0;
-        width: 100%;
-        height: 2px;
-        background: linear-gradient(
-            90deg,
-            var(--accent),
-            color-mix(in srgb, var(--accent) 40%, transparent)
-        );
-        opacity: 0;
-        transition: opacity 160ms ease;
     }
 
     .custom-select-trigger:hover,
     .custom-select-trigger:focus-visible,
     .custom-select-trigger.is-open {
         border-color: var(--custom-select-border-strong);
-        box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.3),
-            var(--custom-select-shadow),
-            0 0 0 3px var(--accent-dim);
-        transform: translateY(-1px);
-    }
-
-    .custom-select-trigger:hover::before,
-    .custom-select-trigger:focus-visible::before,
-    .custom-select-trigger.is-open::before {
-        opacity: 1;
+        box-shadow: none;
+        transform: none;
     }
 
     .custom-select-trigger:focus-visible {
-        outline: none;
+        outline: 3px solid var(--accent-dim);
+        outline-offset: -1px;
     }
 
     .custom-select-trigger:disabled {
@@ -541,8 +471,8 @@
     }
 
     .custom-select-trigger.is-compact {
-        min-height: 46px;
-        padding: 6px 8px 6px 6px;
+        min-height: 36px;
+        padding: 4px 8px 4px 6px;
         gap: 8px;
     }
 
@@ -553,17 +483,10 @@
         justify-content: center;
         width: 28px;
         height: 28px;
-        background:
-            linear-gradient(
-                180deg,
-                var(--surface-dark),
-                var(--surface-dark-2)
-            );
+        background: var(--surface-alt);
         color: var(--accent);
-        border: 1px solid var(--border-dark-strong);
-        box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.08),
-            inset 0 -1px 0 rgba(0, 0, 0, 0.22);
+        border: 1px solid var(--border-strong);
+        box-shadow: none;
         font-size: 0.82rem;
         line-height: 1;
         flex-shrink: 0;
@@ -578,32 +501,23 @@
 
     .custom-select-trigger-icon.tone-admin,
     .custom-select-option-icon.tone-admin {
-        color: var(--text-on-dark);
+        color: var(--accent);
         border-color: var(--accent);
-        background:
-            linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--surface-dark) 82%, var(--accent) 18%),
-                color-mix(in srgb, var(--surface-dark-2) 88%, var(--accent) 12%)
-            );
+        background: var(--surface-alt);
     }
 
     .custom-select-trigger-icon.tone-manager,
     .custom-select-option-icon.tone-manager {
         color: var(--accent);
-        border-color: color-mix(in srgb, var(--accent) 40%, var(--border-dark-strong));
+        border-color: var(--border-strong);
+        background: var(--surface-alt);
     }
 
     .custom-select-trigger-icon.tone-editor,
     .custom-select-option-icon.tone-editor {
         color: var(--accent);
-        border-color: color-mix(in srgb, var(--accent) 28%, var(--border-dark-strong));
-        background:
-            linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--surface-dark) 90%, var(--accent) 10%),
-                var(--surface-dark-2)
-            );
+        border-color: var(--border-strong);
+        background: var(--surface-alt);
     }
 
     .custom-select-trigger-copy,
@@ -627,16 +541,14 @@
         font-size: 0.78rem;
     }
 
-    .custom-select-trigger-copy small,
-    .custom-select-option-copy small {
+    .custom-select-trigger-copy small {
         color: var(--text-dim);
         font-size: 0.68rem;
         line-height: 1.2;
         overflow-wrap: anywhere;
     }
 
-    .custom-select-trigger.is-compact .custom-select-trigger-copy small,
-    .custom-select-option.is-compact .custom-select-option-copy small {
+    .custom-select-trigger.is-compact .custom-select-trigger-copy small {
         font-size: 0.64rem;
     }
 
@@ -664,7 +576,7 @@
     .custom-select-trigger.is-open .custom-select-trigger-chevron {
         color: var(--accent);
         border-color: color-mix(in srgb, var(--accent) 18%, transparent);
-        background: color-mix(in srgb, var(--accent) 8%, transparent);
+        background: var(--accent-faint);
     }
 
     .custom-select-menu-wrap {
@@ -685,14 +597,8 @@
         gap: 0;
         padding: 0;
         overflow-y: auto;
-        border: 1.5px solid var(--border-strong);
+        border: 1px solid var(--border-strong);
         background-color: var(--surface);
-        background-image: linear-gradient(
-            180deg,
-            color-mix(in srgb, var(--surface) 96%, white 4%),
-            color-mix(in srgb, var(--surface-alt) 92%, white 8%)
-        );
-        box-shadow: var(--shadow-lg);
         scrollbar-color: var(--border-strong) transparent;
         animation: custom-select-panel-in 150ms ease;
     }
@@ -700,9 +606,6 @@
     .custom-select-menu.is-mobile-sheet {
         padding: 0;
         border-color: color-mix(in srgb, var(--accent) 24%, var(--border-strong));
-        box-shadow:
-            0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent),
-            var(--shadow-lg);
     }
 
     .custom-select-option {
@@ -712,8 +615,9 @@
         align-items: center;
         gap: 8px;
         width: 100%;
-        min-height: 38px;
-        padding: 5px 0 5px 14px;
+        height: var(--control-height, 48px);
+        min-height: var(--control-height, 48px);
+        padding: 10px 14px;
         border: 1px solid transparent;
         background: transparent;
         color: var(--text);
@@ -738,8 +642,8 @@
 
     .custom-select-option.is-compact {
         gap: 6px;
-        min-height: 32px;
-        padding: 4px 0 4px 12px;
+        min-height: 36px;
+        padding: 5px 12px;
     }
 
     .custom-select-option + .custom-select-option {
@@ -750,14 +654,13 @@
     .custom-select-option:hover,
     .custom-select-option:focus-visible {
         border-color: color-mix(in srgb, var(--accent) 16%, var(--border));
-        background: color-mix(in srgb, var(--accent) 7%, var(--surface) 93%);
-        transform: translateY(-1px);
+        background: var(--accent-faint);
         outline: none;
     }
 
     .custom-select-option.is-selected {
         border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
-        background: color-mix(in srgb, var(--accent) 11%, var(--surface) 89%);
+        background: var(--accent-dim);
     }
 
     .custom-select-option.is-highlighted::before,
@@ -799,9 +702,10 @@
         }
 
         .custom-select-trigger {
-            min-height: 54px;
+            height: var(--control-height, 48px);
+            min-height: var(--control-height, 48px);
             gap: 10px;
-            padding: 9px 10px 9px 8px;
+            padding: 10px 10px 10px 8px;
         }
 
         .custom-select-trigger-copy strong,
@@ -809,8 +713,7 @@
             font-size: 0.82rem;
         }
 
-        .custom-select-trigger-copy small,
-        .custom-select-option-copy small {
+        .custom-select-trigger-copy small {
             font-size: 0.64rem;
         }
 
@@ -819,9 +722,10 @@
         }
 
         .custom-select-option {
-            min-height: 36px;
+            height: var(--control-height, 48px);
+            min-height: var(--control-height, 48px);
             gap: 7px;
-            padding: 5px 0 5px 12px;
+            padding: 10px 12px;
         }
     }
 </style>

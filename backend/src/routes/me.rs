@@ -201,6 +201,9 @@ async fn current_user_library(
             .public_id
             .as_ref()
             .map(|public_id| state.config.public_url_for(public_id));
+        let public_url = public_id_url
+            .clone()
+            .unwrap_or_else(|| state.config.public_url_for(&music_record.public_token));
         let icon_image_url = music_record.icon_image_key.as_ref().map(|key| {
             state
                 .storage
@@ -213,7 +216,7 @@ async fn current_user_library(
             icon: music_record.icon,
             icon_image_url,
             filename: music_record.filename,
-            public_url: state.config.public_url_for(&music_record.public_token),
+            public_url,
             public_id_url,
             created_at: music_record.created_at,
         };

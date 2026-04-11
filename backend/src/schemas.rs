@@ -120,6 +120,23 @@ pub struct AdminMusicPlaytimeResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct AdminUserScorePlaytimeResponse {
+    pub music_id: String,
+    pub title: String,
+    pub icon: Option<String>,
+    pub icon_image_url: Option<String>,
+    pub public_url: String,
+    pub total_seconds: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminUserMetadataResponse {
+    pub last_login_at: Option<String>,
+    pub total_playtime_seconds: f64,
+    pub score_playtimes: Vec<AdminUserScorePlaytimeResponse>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct PublicMusicResponse {
     pub title: String,
     pub icon: Option<String>,

@@ -882,11 +882,6 @@
                             <div class="admin-inline-row">
                                 <div class="admin-inline-copy">
                                     <strong>{music.title}</strong>
-                                    {#if music.public_id}
-                                        <span class="status-pill">
-                                            {music.public_id}
-                                        </span>
-                                    {/if}
                                 </div>
                                 <div class="admin-inline-actions">
                                     <button
@@ -936,11 +931,6 @@
                             <div class="admin-inline-row">
                                 <div class="admin-inline-copy">
                                     <strong>{music.title}</strong>
-                                    {#if music.public_id}
-                                        <span class="status-pill">
-                                            {music.public_id}
-                                        </span>
-                                    {/if}
                                 </div>
                                 <div class="admin-inline-actions">
                                     <button

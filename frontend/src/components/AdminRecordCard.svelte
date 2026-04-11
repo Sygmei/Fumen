@@ -63,9 +63,7 @@
         height: 2rem;
         flex-shrink: 0;
         border: 1px solid var(--border-strong);
-        background:
-            linear-gradient(135deg, rgba(196, 43, 13, 0.18), rgba(196, 43, 13, 0.04)),
-            var(--surface-alt);
+        background: var(--surface-alt);
         color: var(--accent);
         font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
         font-size: 0.9rem;

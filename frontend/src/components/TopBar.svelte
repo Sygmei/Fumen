@@ -58,7 +58,7 @@
 </script>
 
 <header
-    class="flex items-stretch justify-between gap-6 min-h-[54px] px-7 border-b border-(--border-strong) bg-[linear-gradient(90deg,rgba(196,43,13,0.12),transparent_26%),var(--surface)]"
+    class="flex items-stretch justify-between gap-6 min-h-[54px] px-7 border-b border-(--border-strong) bg-[var(--surface)]"
     class:topbar-brand-mobile-visible={showBrandTitleOnMobile}
 >
     <div class="flex items-center gap-5 py-2.5">
