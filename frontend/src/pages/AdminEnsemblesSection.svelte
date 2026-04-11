@@ -2,10 +2,8 @@
     import {
         createEnsemble,
         deleteEnsemble,
-        addUserToEnsemble,
-        removeUserFromEnsemble,
-        addMusicToEnsemble,
-        removeMusicFromEnsemble,
+        setEnsembleMembers,
+        setMusicEnsembles,
         type AdminMusic,
         type AppUser,
         type Ensemble,
@@ -24,6 +22,7 @@
         Users,
         Pencil,
         User,
+        UserCog,
     } from "@lucide/svelte";
     import {
         canCreateEnsembles,
@@ -34,6 +33,9 @@
     } from "../lib/admin-permissions";
 
     type ManagedMemberDraftRole = "none" | EnsembleRole;
+    type MobileRolePickerTarget =
+        | { kind: "member"; userId: string }
+        | { kind: "invite"; userId: string };
 
     let {
         currentUser,
@@ -76,6 +78,8 @@
         Record<string, ManagedMemberDraftRole>
     >({});
     let savingManagedMembers = $state(false);
+    let mobileRolePickerTarget = $state<MobileRolePickerTarget | null>(null);
+    let mobileRolePickerValue = $state<EnsembleRole>("user");
 
     // Manage ensemble scores
     let managingEnsembleScoresId = $state("");
@@ -114,6 +118,19 @@
     const activeManagedScoreEnsemble = $derived(
         ensembles.find((e) => e.id === managingEnsembleScoresId) ?? null,
     );
+
+    const mobileRolePickerUser = $derived.by(() => {
+        if (!mobileRolePickerTarget) return null;
+        return (
+            allUsers.find((user) => user.id === mobileRolePickerTarget.userId) ??
+            null
+        );
+    });
+
+    const mobileRolePickerOptions = $derived.by(() => {
+        if (!mobileRolePickerUser) return [];
+        return ensembleRoleOptionsForUser(mobileRolePickerUser);
+    });
 
     function managedMemberRoleForUser(userId: string): ManagedMemberDraftRole {
         return managedMemberDraftRoles[userId] ?? "none";
@@ -344,6 +361,7 @@
         originalManagedMemberRoles = {};
         managedMemberDraftRoles = {};
         inviteRoles = {};
+        mobileRolePickerTarget = null;
     }
 
     function stageManagedMemberRole(
@@ -376,21 +394,20 @@
         if (!ensembleId || !hasManagedMemberChanges()) return;
         savingManagedMembers = true;
         try {
-            const keys = new Set([
-                ...Object.keys(originalManagedMemberRoles),
-                ...Object.keys(managedMemberDraftRoles),
-            ]);
-            for (const userId of keys) {
-                const orig = originalManagedMemberRoles[userId] ?? "none";
-                const next = managedMemberDraftRoles[userId] ?? "none";
-                if (orig === next) continue;
-                if (next === "none")
-                    await removeUserFromEnsemble(ensembleId, userId);
-                else await addUserToEnsemble(ensembleId, userId, next);
-            }
+            const members = Object.entries(managedMemberDraftRoles)
+                .filter(([, role]) => role !== "none")
+                .map(([userId, role]) => ({
+                    userId,
+                    role: role as EnsembleRole,
+                }))
+                .sort((left, right) => left.userId.localeCompare(right.userId));
+            await setEnsembleMembers(ensembleId, members);
             await onRefresh();
             originalManagedMemberRoles = { ...managedMemberDraftRoles };
             onSuccess("Ensemble members updated.");
+            savingManagedMembers = false;
+            closeManageMembersModal();
+            return;
         } catch (error) {
             onError(
                 error instanceof Error
@@ -430,6 +447,41 @@
         stagedEnsembleScoreMusicIds = [];
     }
 
+    function inviteRoleForUser(user: AppUser): EnsembleRole {
+        return (
+            inviteRoles[user.id] ??
+            allowedEnsembleRolesForUser(user, currentUser)[0] ??
+            "user"
+        );
+    }
+
+    function openMobileRolePicker(
+        kind: MobileRolePickerTarget["kind"],
+        user: AppUser,
+        role: EnsembleRole,
+    ) {
+        mobileRolePickerTarget = { kind, userId: user.id };
+        mobileRolePickerValue = role;
+    }
+
+    function closeMobileRolePicker() {
+        mobileRolePickerTarget = null;
+    }
+
+    function applyMobileRolePicker() {
+        if (!mobileRolePickerTarget) return;
+        const { kind, userId } = mobileRolePickerTarget;
+        if (kind === "member") {
+            stageManagedMemberRole(userId, mobileRolePickerValue);
+        } else {
+            inviteRoles = {
+                ...inviteRoles,
+                [userId]: mobileRolePickerValue,
+            };
+        }
+        closeMobileRolePicker();
+    }
+
     function toggleStagedEnsembleScore(musicId: string, shouldAdd: boolean) {
         if (shouldAdd) {
             stagedEnsembleScoreMusicIds = [
@@ -454,21 +506,21 @@
         if (!managingEnsembleScoresId) return;
         const orig = new Set(originalEnsembleScoreMusicIds);
         const staged = new Set(stagedEnsembleScoreMusicIds);
-        const toAdd = [...staged].filter((id) => !orig.has(id));
-        const toRemove = [...orig].filter((id) => !staged.has(id));
-        if (toAdd.length === 0 && toRemove.length === 0) {
+        if (orig.size === staged.size && [...staged].every((id) => orig.has(id))) {
             closeManageScoresModal();
             return;
         }
         savingEnsembleScores = true;
         try {
-            for (const id of toAdd)
-                await addMusicToEnsemble(id, managingEnsembleScoresId);
-            for (const id of toRemove)
-                await removeMusicFromEnsemble(id, managingEnsembleScoresId);
+            await setMusicEnsembles(
+                managingEnsembleScoresId,
+                [...staged].sort((left, right) => left.localeCompare(right)),
+            );
             await onRefresh();
             onSuccess("Ensemble scores updated.");
+            savingEnsembleScores = false;
             closeManageScoresModal();
+            return;
         } catch (error) {
             onError(
                 error instanceof Error
@@ -685,20 +737,20 @@
                 <div class="admin-split-header">
                     <div class="admin-split-header-main">
                         <h4>Current members</h4>
+                        <label class="field admin-user-search admin-split-search">
+                            <span class="sr-only">Search current members</span>
+                            <div class="admin-user-search-input-wrap">
+                                <Search size={15} aria-hidden="true" />
+                                <input
+                                    bind:value={currentMemberSearchQuery}
+                                    placeholder="Search current members"
+                                />
+                            </div>
+                        </label>
                         <span class="admin-user-role-pill">
                             {filteredManagedMembers.length}
                         </span>
                     </div>
-                    <label class="field admin-user-search admin-split-search">
-                        <span class="sr-only">Search current members</span>
-                        <div class="admin-user-search-input-wrap">
-                            <Search size={15} aria-hidden="true" />
-                            <input
-                                bind:value={currentMemberSearchQuery}
-                                placeholder="Search current members"
-                            />
-                        </div>
-                    </label>
                 </div>
                 <div class="admin-inline-list">
                     {#if filteredManagedMembers.length === 0}
@@ -714,7 +766,27 @@
                                 </div>
                                 <div class="admin-inline-actions">
                                     {#if allowedEnsembleRolesForUser(member.user!, currentUser).length > 0}
-                                        <div class="admin-member-role-select">
+                                        <button
+                                            class="button secondary admin-inline-role-btn admin-inline-role-btn-mobile"
+                                            type="button"
+                                            aria-label={`Change role for ${member.user!.username}`}
+                                            title={`Change role for ${member.user!.username}`}
+                                            onclick={() =>
+                                                openMobileRolePicker(
+                                                    "member",
+                                                    member.user!,
+                                                    member.role,
+                                                )}
+                                        >
+                                            <UserCog
+                                                size={17}
+                                                strokeWidth={2.25}
+                                                aria-hidden="true"
+                                            />
+                                        </button>
+                                        <div
+                                            class="admin-member-role-select admin-inline-role-select-desktop"
+                                        >
                                             <CustomSelect
                                                 value={member.role}
                                                 options={ensembleRoleOptionsForUser(
@@ -755,20 +827,20 @@
                 <div class="admin-split-header">
                     <div class="admin-split-header-main">
                         <h4>Add members</h4>
+                        <label class="field admin-user-search admin-split-search">
+                            <span class="sr-only">Search available users</span>
+                            <div class="admin-user-search-input-wrap">
+                                <Search size={15} aria-hidden="true" />
+                                <input
+                                    bind:value={addMemberSearchQuery}
+                                    placeholder="Search available users"
+                                />
+                            </div>
+                        </label>
                         <span class="admin-user-role-pill">
                             {filteredAvailableEnsembleUsers.length}
                         </span>
                     </div>
-                    <label class="field admin-user-search admin-split-search">
-                        <span class="sr-only">Search available users</span>
-                        <div class="admin-user-search-input-wrap">
-                            <Search size={15} aria-hidden="true" />
-                            <input
-                                bind:value={addMemberSearchQuery}
-                                placeholder="Search available users"
-                            />
-                        </div>
-                    </label>
                 </div>
                 <div class="admin-inline-list">
                     {#if filteredAvailableEnsembleUsers.length === 0}
@@ -783,14 +855,25 @@
                                     >
                                 </div>
                                 <div class="admin-inline-actions">
-                                    <div class="admin-member-role-select">
+                                    <button
+                                        class="button secondary admin-inline-role-btn admin-inline-role-btn-mobile"
+                                        type="button"
+                                        aria-label={`Change role for ${user.username}`}
+                                        title={`Change role for ${user.username}`}
+                                        onclick={() =>
+                                            openMobileRolePicker(
+                                                "invite",
+                                                user,
+                                                inviteRoleForUser(user),
+                                            )}
+                                    >
+                                        <UserCog size={15} aria-hidden="true" />
+                                    </button>
+                                    <div
+                                        class="admin-member-role-select admin-inline-role-select-desktop"
+                                    >
                                         <CustomSelect
-                                            value={inviteRoles[user.id] ??
-                                                allowedEnsembleRolesForUser(
-                                                    user,
-                                                    currentUser,
-                                                )[0] ??
-                                                "user"}
+                                            value={inviteRoleForUser(user)}
                                             options={ensembleRoleOptionsForUser(
                                                 user,
                                             )}
@@ -859,27 +942,27 @@
                 <div class="admin-split-header">
                     <div class="admin-split-header-main">
                         <h4>Current scores</h4>
+                        <label class="field admin-user-search admin-split-search">
+                            <span class="sr-only">Search current scores</span>
+                            <div class="admin-user-search-input-wrap">
+                                <Search size={15} aria-hidden="true" />
+                                <input
+                                    bind:value={currentEnsembleScoreSearchQuery}
+                                    placeholder="Search current scores"
+                                />
+                            </div>
+                        </label>
                         <span class="admin-user-role-pill">
                             {filteredManagedEnsembleScores.length}
                         </span>
                     </div>
-                    <label class="field admin-user-search admin-split-search">
-                        <span class="sr-only">Search current scores</span>
-                        <div class="admin-user-search-input-wrap">
-                            <Search size={15} aria-hidden="true" />
-                            <input
-                                bind:value={currentEnsembleScoreSearchQuery}
-                                placeholder="Search current scores"
-                            />
-                        </div>
-                    </label>
                 </div>
                 <div class="admin-inline-list">
                     {#if filteredManagedEnsembleScores.length === 0}
                         <p class="hint">No matching scores in this ensemble.</p>
                     {:else}
                         {#each filteredManagedEnsembleScores as music}
-                            <div class="admin-inline-row">
+                            <div class="admin-inline-row admin-inline-row-score">
                                 <div class="admin-inline-copy">
                                     <strong>{music.title}</strong>
                                 </div>
@@ -908,27 +991,27 @@
                 <div class="admin-split-header">
                     <div class="admin-split-header-main">
                         <h4>Add scores</h4>
+                        <label class="field admin-user-search admin-split-search">
+                            <span class="sr-only">Search available scores</span>
+                            <div class="admin-user-search-input-wrap">
+                                <Search size={15} aria-hidden="true" />
+                                <input
+                                    bind:value={addEnsembleScoreSearchQuery}
+                                    placeholder="Search available scores"
+                                />
+                            </div>
+                        </label>
                         <span class="admin-user-role-pill">
                             {filteredAvailableEnsembleScores.length}
                         </span>
                     </div>
-                    <label class="field admin-user-search admin-split-search">
-                        <span class="sr-only">Search available scores</span>
-                        <div class="admin-user-search-input-wrap">
-                            <Search size={15} aria-hidden="true" />
-                            <input
-                                bind:value={addEnsembleScoreSearchQuery}
-                                placeholder="Search available scores"
-                            />
-                        </div>
-                    </label>
                 </div>
                 <div class="admin-inline-list">
                     {#if filteredAvailableEnsembleScores.length === 0}
                         <p class="hint">No available scores.</p>
                     {:else}
                         {#each filteredAvailableEnsembleScores as music}
-                            <div class="admin-inline-row">
+                            <div class="admin-inline-row admin-inline-row-score">
                                 <div class="admin-inline-copy">
                                     <strong>{music.title}</strong>
                                 </div>
@@ -954,6 +1037,40 @@
                 </div>
             </section>
         </div>
+    </BaseModal>
+{/if}
+
+{#if mobileRolePickerTarget && mobileRolePickerUser}
+    {#snippet mobileRolePickerFooter()}
+        <div class="actions admin-user-modal-actions">
+            <button
+                class="button ghost"
+                type="button"
+                onclick={closeMobileRolePicker}
+            >
+                Cancel
+            </button>
+            <button class="button" type="button" onclick={applyMobileRolePicker}>
+                Apply
+            </button>
+        </div>
+    {/snippet}
+    <BaseModal
+        onClose={closeMobileRolePicker}
+        size="small"
+        cardClass="admin-role-picker-modal"
+        title="Role"
+        subtitle={mobileRolePickerUser.display_name ??
+            `@${mobileRolePickerUser.username}`}
+        footer={mobileRolePickerFooter}
+    >
+        <CustomSelect
+            label="Role"
+            bind:value={mobileRolePickerValue}
+            options={mobileRolePickerOptions}
+            compact={true}
+            showDescriptionInTrigger={false}
+        />
     </BaseModal>
 {/if}
 

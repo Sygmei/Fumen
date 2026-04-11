@@ -618,6 +618,22 @@ export async function removeUserFromEnsemble(
   })
 }
 
+export async function setEnsembleMembers(
+  ensembleId: string,
+  members: Array<{ userId: string; role: EnsembleRole }>,
+): Promise<void> {
+  await requestJson(`/admin/ensembles/${ensembleId}/users`, {
+    method: 'PATCH',
+    authenticated: true,
+    body: JSON.stringify({
+      members: members.map((member) => ({
+        user_id: member.userId,
+        role: member.role,
+      })),
+    }),
+  })
+}
+
 export async function addMusicToEnsemble(
   musicId: string,
   ensembleId: string,
@@ -635,6 +651,17 @@ export async function removeMusicFromEnsemble(
   await requestJson(`/admin/musics/${musicId}/ensembles/${ensembleId}`, {
     method: 'DELETE',
     authenticated: true,
+  })
+}
+
+export async function setMusicEnsembles(
+  musicId: string,
+  ensembleIds: string[],
+): Promise<void> {
+  await requestJson(`/admin/musics/${musicId}/ensembles`, {
+    method: 'PATCH',
+    authenticated: true,
+    body: JSON.stringify({ ensemble_ids: ensembleIds }),
   })
 }
 

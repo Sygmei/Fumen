@@ -4,8 +4,7 @@
         uploadMusic,
         deleteMusic,
         updateMusicMetadata,
-        addMusicToEnsemble,
-        removeMusicFromEnsemble,
+        setMusicEnsembles,
         retryRender,
         STEM_QUALITY_PROFILES,
         type AdminMusic,
@@ -312,10 +311,10 @@
         }
         savingScoreEnsembles = true;
         try {
-            for (const id of toAdd)
-                await addMusicToEnsemble(activeEnsemblePickerMusic.id, id);
-            for (const id of toRemove)
-                await removeMusicFromEnsemble(activeEnsemblePickerMusic.id, id);
+            await setMusicEnsembles(
+                activeEnsemblePickerMusic.id,
+                [...staged].sort((left, right) => left.localeCompare(right)),
+            );
             await onRefresh();
             onSuccess("Score ensembles updated.");
             ensemblePickerMode = "";

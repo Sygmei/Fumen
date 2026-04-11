@@ -15,27 +15,9 @@
     import AdminScoresSection from "./AdminScoresSection.svelte";
     import { canAccessAdmin, canUseUsersSection } from "../lib/admin-permissions";
 
-    function readAdminCache<T>(key: string): T[] {
-        try {
-            const raw = localStorage.getItem(key);
-            return raw ? (JSON.parse(raw) as T[]) : [];
-        } catch {
-            return [];
-        }
-    }
-
-    function cacheAdminMusics(items: AdminMusic[]) {
-        localStorage.setItem("cached-admin-musics", JSON.stringify(items));
-    }
-
-    const cachedMusics = readAdminCache<AdminMusic>("cached-admin-musics");
-    const cachedAdminUsers = readAdminCache<AppUser>("cached-admin-users");
-    const cachedEnsembles = readAdminCache<Ensemble>("cached-admin-ensembles");
-
     const {
         currentUser,
         userLoading,
-        userError,
         preloadedUsername,
         onShowQr,
         onShowCredential,
@@ -44,7 +26,6 @@
     }: {
         currentUser: AppUser | null;
         userLoading: boolean;
-        userError: string;
         preloadedUsername: string;
         onShowQr: () => Promise<void>;
         onShowCredential: (
@@ -72,9 +53,9 @@
     let adminLoading = $state(false);
     let adminError = $state("");
     let adminSuccess = $state("");
-    let musics = $state<AdminMusic[]>(cachedMusics);
-    let adminUsers = $state<AppUser[]>(cachedAdminUsers);
-    let ensembles = $state<Ensemble[]>(cachedEnsembles);
+    let musics = $state<AdminMusic[]>([]);
+    let adminUsers = $state<AppUser[]>([]);
+    let ensembles = $state<Ensemble[]>([]);
 
     const visibleAdminSectionItems = $derived.by(() =>
         adminSectionItems.filter((section) => {
@@ -132,15 +113,6 @@
             musics = musicItems;
             adminUsers = userItems;
             ensembles = ensembleItems;
-            cacheAdminMusics(musicItems);
-            localStorage.setItem(
-                "cached-admin-users",
-                JSON.stringify(userItems),
-            );
-            localStorage.setItem(
-                "cached-admin-ensembles",
-                JSON.stringify(ensembleItems),
-            );
         } catch (error) {
             adminError =
                 error instanceof Error
@@ -167,15 +139,11 @@
         );
     }
 
-    function cacheAdminUsers(users: AppUser[]) {
-        localStorage.setItem("cached-admin-users", JSON.stringify(users));
-    }
 </script>
 
 <AdminLayout
     {currentUser}
     {userLoading}
-    {userError}
     {preloadedUsername}
     {adminLoading}
     {adminError}
@@ -197,13 +165,11 @@
                     adminUsers = [...adminUsers, user].sort((a, b) =>
                         a.username.localeCompare(b.username),
                     );
-                    cacheAdminUsers(adminUsers);
                 }}
                 onUserUpdated={(user) => {
                     adminUsers = adminUsers.map((u) =>
                         u.id === user.id ? user : u,
                     );
-                    cacheAdminUsers(adminUsers);
                 }}
                 onRefresh={refreshAdminData}
                 onShowQr={handleShowUserQr}
@@ -246,7 +212,6 @@
                     musics = [...musics.filter((m) => m.id !== music.id), music].sort(
                         (a, b) => b.created_at.localeCompare(a.created_at),
                     );
-                    cacheAdminMusics(musics);
                 }}
                 onRefresh={refreshAdminData}
                 onShowQr={handleShowScoreQr}

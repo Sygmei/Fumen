@@ -72,6 +72,7 @@
     let editingAvatarPreview = $state<string | null>(null);
     let editingClearAvatar = $state(false);
     let savingEditUser = $state(false);
+    let savingEditUserFor = $state("");
     let editUserError = $state("");
 
     // Metadata modal
@@ -230,20 +231,38 @@
         if (!editingUser) return;
         savingEditUser = true;
         editUserError = "";
+        const originalUser = editingUser;
+        const optimisticUser: AppUser = {
+            ...originalUser,
+            display_name: editingDisplayName.trim() || null,
+            role: editingRole as GlobalRole,
+            avatar_url: editingClearAvatar
+                ? null
+                : editingAvatarPreview ?? originalUser.avatar_url,
+        };
+        savingEditUserFor = originalUser.id;
+        onUserUpdated(optimisticUser);
+        closeUserEditModal();
         try {
-            const updated = await adminUpdateUser(editingUser.id, {
+            const updated = await adminUpdateUser(originalUser.id, {
                 role: editingRole,
                 displayName: editingDisplayName.trim() || null,
                 avatarFile: editingAvatarFile,
                 clearAvatar: editingClearAvatar,
             });
             onUserUpdated(updated);
-            closeUserEditModal();
             onSuccess(`User ${updated.username} updated.`);
         } catch (error) {
+            onUserUpdated(originalUser);
             editUserError =
                 error instanceof Error ? error.message : "Failed to save.";
+            onError(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to save user",
+            );
         } finally {
+            savingEditUserFor = "";
             savingEditUser = false;
         }
     }
@@ -431,7 +450,14 @@
                                     @{user.username}
                                 {/if}
                             </h3>
-                            <p class="admin-user-role-pill">{user.role}</p>
+                            <div class="admin-user-state-row">
+                                <p class="admin-user-role-pill">{user.role}</p>
+                                {#if savingEditUserFor === user.id}
+                                    <span class="status-pill admin-user-saving-pill"
+                                        >Saving...</span
+                                    >
+                                {/if}
+                            </div>
                         {/snippet}
 
                         {#snippet userActions()}

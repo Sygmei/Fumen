@@ -65,7 +65,10 @@
     role="presentation"
     tabindex="0"
     onclick={handleBackdropClick}
-    onkeydown={(event) => event.key === "Escape" && onClose()}
+    onkeydown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Escape") onClose();
+    }}
 >
     <div
         class={`modal-card modal-card--${size} ${hasHeader ? "modal-card--with-header" : ""} ${footer ? "modal-card--with-footer" : ""} ${bodyless ? "modal-card--bodyless" : ""} ${cardClass}`.trim()}

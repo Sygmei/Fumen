@@ -28,6 +28,22 @@ pub struct UpdateEnsembleMemberRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateEnsembleMembersRequest {
+    pub members: Vec<UpdateEnsembleMemberItemRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateEnsembleMemberItemRequest {
+    pub user_id: String,
+    pub role: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateMusicEnsemblesRequest {
+    pub ensemble_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ExchangeLoginTokenRequest {
     pub token: String,
 }

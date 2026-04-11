@@ -1,12 +1,13 @@
-use crate::models::{EnsembleRecord, MusicRecord, UserRecord};
+use crate::models::{EnsembleRecord, MusicRecord, UserEnsembleMembershipRecord, UserRecord};
 use crate::schemas::{
     AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicResponse,
     AdminUserMetadataResponse, CreateEnsembleRequest, CreateUserRequest, EnsembleMemberResponse,
-    LoginLinkResponse, MoveMusicRequest, UpdateEnsembleMemberRequest, UserResponse,
+    LoginLinkResponse, MoveMusicRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest,
+    UpdateMusicEnsemblesRequest, UserResponse,
 };
 use crate::services::{auth, music};
 use crate::{
-    AppError, AppRole, AppState, audio, ensure_membership_entities_exist,
+    AppError, AppRole, AppState, EnsembleRole, audio, ensure_membership_entities_exist,
     generate_public_token, normalize_music_icon, normalize_name, normalize_public_id,
     normalize_username, parse_quality_profile, sanitize_filename, utc_now_string,
 };
@@ -17,7 +18,7 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 use bytes::Bytes;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::fs;
 use uuid::Uuid;
 
@@ -45,6 +46,7 @@ pub(super) fn routes() -> Router<AppState> {
             "/admin/ensembles/{id}/users/{user_id}",
             post(admin_add_user_to_ensemble).delete(admin_remove_user_from_ensemble),
         )
+        .route("/admin/ensembles/{id}/users", patch(admin_update_ensemble_members))
         .route(
             "/admin/musics",
             get(admin_list_musics).post(admin_upload_music),
@@ -56,6 +58,7 @@ pub(super) fn routes() -> Router<AppState> {
             "/admin/musics/{id}/ensembles/{ensemble_id}",
             post(admin_add_music_to_ensemble).delete(admin_remove_music_from_ensemble),
         )
+        .route("/admin/musics/{id}/ensembles", patch(admin_update_music_ensembles))
         .route("/admin/musics/{id}/delete", post(admin_delete_music))
         .route("/admin/musics/{id}/retry", post(admin_retry_render))
 }
@@ -553,6 +556,82 @@ async fn admin_remove_user_from_ensemble(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn admin_update_ensemble_members(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateEnsembleMembersRequest>,
+) -> Result<StatusCode, AppError> {
+    let auth_context = auth::require_admin_context(&state, &headers).await?;
+    auth::ensure_can_manage_ensemble(&auth_context, &id)?;
+    music::find_ensemble_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Ensemble not found"))?;
+
+    let current_members = sqlx::query_as::<_, UserEnsembleMembershipRecord>(
+        "SELECT user_id, ensemble_id, role FROM user_ensemble_memberships WHERE ensemble_id = $1",
+    )
+    .bind(&id)
+    .fetch_all(&state.db_rw)
+    .await?;
+
+    let mut desired_members: HashMap<String, EnsembleRole> = HashMap::new();
+    for member in payload.members {
+        let target_user = auth::find_user_by_id(&state.db_rw, &member.user_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("User not found"))?;
+        let role =
+            auth::validate_target_membership_role(&auth_context, &target_user, member.role.trim())?;
+        desired_members.insert(target_user.id, role);
+    }
+
+    let current_member_map: HashMap<String, String> = current_members
+        .into_iter()
+        .map(|membership| (membership.user_id, membership.role))
+        .collect();
+
+    let mut to_remove: Vec<String> = current_member_map
+        .keys()
+        .filter(|user_id| !desired_members.contains_key(*user_id))
+        .cloned()
+        .collect();
+    to_remove.sort();
+
+    for user_id in &to_remove {
+        let target_user = auth::find_user_by_id(&state.db_rw, user_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("User not found"))?;
+        auth::ensure_can_remove_member_from_ensemble(&auth_context, &target_user)?;
+    }
+
+    let mut to_upsert: Vec<(String, EnsembleRole)> = desired_members.into_iter().collect();
+    to_upsert.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut tx = state.db_rw.begin().await?;
+    for (user_id, role) in to_upsert {
+        sqlx::query(
+            "INSERT INTO user_ensemble_memberships (user_id, ensemble_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, ensemble_id) DO UPDATE SET role = EXCLUDED.role",
+        )
+        .bind(&user_id)
+        .bind(&id)
+        .bind(role.as_str())
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for user_id in to_remove {
+        sqlx::query("DELETE FROM user_ensemble_memberships WHERE user_id = $1 AND ensemble_id = $2")
+            .bind(&user_id)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn admin_add_music_to_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -596,6 +675,94 @@ async fn admin_remove_music_from_ensemble(
         .bind(&ensemble_id)
         .execute(&state.db_rw)
         .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn admin_update_music_ensembles(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateMusicEnsemblesRequest>,
+) -> Result<StatusCode, AppError> {
+    let auth_context = auth::require_admin_context(&state, &headers).await?;
+
+    music::find_music_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+
+    let mut desired_ensemble_ids = Vec::new();
+    let mut desired_seen = HashSet::new();
+    for ensemble_id in payload.ensemble_ids {
+        let ensemble_id = ensemble_id.trim().to_owned();
+        if ensemble_id.is_empty() || !desired_seen.insert(ensemble_id.clone()) {
+            continue;
+        }
+        music::find_ensemble_by_id(&state.db_rw, &ensemble_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Ensemble not found"))?;
+        music::ensure_can_manage_music_and_target_ensemble(
+            &state.db_rw,
+            &auth_context,
+            &id,
+            &ensemble_id,
+        )
+        .await?;
+        desired_ensemble_ids.push(ensemble_id);
+    }
+
+    if desired_ensemble_ids.is_empty() {
+        return Err(AppError::bad_request(
+            "A score must belong to at least one ensemble",
+        ));
+    }
+
+    let current_ensemble_ids = music::fetch_music_ensemble_ids(&state.db_rw, &id).await?;
+    let current_seen: HashSet<String> = current_ensemble_ids.iter().cloned().collect();
+    let desired_seen: HashSet<String> = desired_ensemble_ids.iter().cloned().collect();
+
+    let mut to_remove: Vec<String> = current_ensemble_ids
+        .into_iter()
+        .filter(|ensemble_id| !desired_seen.contains(ensemble_id))
+        .collect();
+    to_remove.sort();
+
+    for ensemble_id in &to_remove {
+        music::ensure_can_manage_music_and_target_ensemble(
+            &state.db_rw,
+            &auth_context,
+            &id,
+            ensemble_id,
+        )
+        .await?;
+    }
+
+    let mut to_add: Vec<String> = desired_ensemble_ids
+        .into_iter()
+        .filter(|ensemble_id| !current_seen.contains(ensemble_id))
+        .collect();
+    to_add.sort();
+
+    let mut tx = state.db_rw.begin().await?;
+    for ensemble_id in to_add {
+        sqlx::query(
+            "INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(&id)
+        .bind(&ensemble_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for ensemble_id in to_remove {
+        sqlx::query("DELETE FROM music_ensemble_links WHERE music_id = $1 AND ensemble_id = $2")
+            .bind(&id)
+            .bind(&ensemble_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

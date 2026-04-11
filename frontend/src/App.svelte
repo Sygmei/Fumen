@@ -47,28 +47,6 @@
       : "";
   const storedUsername = parseJwtSub(storedAccessToken);
 
-  function readCachedUser(): AppUser | null {
-    try {
-      const raw = window.localStorage.getItem("cached-user");
-      return raw ? (JSON.parse(raw) as AppUser) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  function readCachedLibrary(): UserLibraryEnsemble[] {
-    try {
-      const raw = window.localStorage.getItem("cached-library");
-      return raw ? (JSON.parse(raw) as UserLibraryEnsemble[]) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  const cachedUser = typeof window !== "undefined" ? readCachedUser() : null;
-  const cachedLibrary =
-    typeof window !== "undefined" ? readCachedLibrary() : [];
-
   if (storedRefreshToken) {
     initAuth(storedRefreshToken, storedAccessToken);
   }
@@ -80,12 +58,12 @@
   );
 
   let refreshToken = $state(storedRefreshToken);
-  let currentUser = $state<AppUser | null>(cachedUser);
+  let currentUser = $state<AppUser | null>(null);
   let userSessionExpiresAt = $state<string | null>(null);
   let userLoading = $state(!!storedRefreshToken);
   let userError = $state("");
   let userSuccess = $state("");
-  let userLibrary = $state<UserLibraryEnsemble[]>(cachedLibrary);
+  let userLibrary = $state<UserLibraryEnsemble[]>([]);
   let connectionBusy = $state(false);
 
   let credentialModalOpen = $state(false);
@@ -224,11 +202,6 @@
       userSessionExpiresAt = response.session_expires_at;
       userLibrary = library.ensembles;
       userError = "";
-      window.localStorage.setItem("cached-user", JSON.stringify(response.user));
-      window.localStorage.setItem(
-        "cached-library",
-        JSON.stringify(library.ensembles),
-      );
     } catch (error) {
       // Ignore errors caused by the page unloading — never touch stored tokens.
       if (isPageUnloading()) return;
@@ -253,11 +226,6 @@
   function clearStoredSession() {
     window.localStorage.removeItem("refresh-token");
     window.localStorage.removeItem("access-token");
-    window.localStorage.removeItem("cached-user");
-    window.localStorage.removeItem("cached-library");
-    window.localStorage.removeItem("cached-admin-musics");
-    window.localStorage.removeItem("cached-admin-users");
-    window.localStorage.removeItem("cached-admin-ensembles");
   }
 
   function clearUserSession() {
@@ -282,8 +250,6 @@
     userLoading = false;
     window.localStorage.setItem("refresh-token", newRefreshToken);
     window.localStorage.setItem("access-token", newAccessToken);
-    window.localStorage.setItem("cached-user", JSON.stringify(user));
-    window.localStorage.setItem("cached-library", JSON.stringify([]));
   }
 
   async function completeConnectionFromToken(token: string, fromRoute = false) {
@@ -494,10 +460,9 @@
   <ListenPage accessKey={route.accessKey} />
 {:else if route.kind === "admin"}
   <main class="page admin-shell">
-    <AdminPage
+  <AdminPage
       {currentUser}
       {userLoading}
-      {userError}
       preloadedUsername={storedUsername}
       onShowQr={handleShowMyQr}
       onShowCredential={showCredentialModal}
@@ -511,8 +476,6 @@
     {currentUser}
     {userLoading}
     preloadedUsername={storedUsername}
-    {userError}
-    {userSuccess}
     {userLibrary}
     {connectionBusy}
     onLogout={logoutUser}
@@ -520,6 +483,17 @@
     onOpenScanner={openScanner}
     onMyAccount={handleMyAccount}
   />
+{/if}
+
+{#if userError || userSuccess}
+  <div class="toast-stack" aria-live="polite" aria-atomic="true">
+    {#if userError}
+      <p class="status error toast">{userError}</p>
+    {/if}
+    {#if userSuccess}
+      <p class="status success toast">{userSuccess}</p>
+    {/if}
+  </div>
 {/if}
 
 {#if credentialModalOpen}
@@ -556,7 +530,6 @@
     onSaved={(user) => {
       currentUser = user;
       accountModalOpen = false;
-      window.localStorage.setItem("cached-user", JSON.stringify(user));
     }}
   />
 {/if}
