@@ -1011,6 +1011,114 @@ h3 {
   color: var(--accent);
 }
 
+.admin-playtime-section {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.admin-playtime-header,
+.admin-playtime-user-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-playtime-stats,
+.admin-playtime-layout,
+.admin-playtime-track-list,
+.admin-playtime-user-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-playtime-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.admin-playtime-stat,
+.admin-playtime-card,
+.admin-playtime-user-row,
+.admin-playtime-track-row {
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+}
+
+.admin-playtime-stat,
+.admin-playtime-card {
+  padding: 14px 16px;
+}
+
+.admin-playtime-stat {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-playtime-stat strong,
+.admin-playtime-track-row strong {
+  font-size: 1rem;
+}
+
+.admin-playtime-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.admin-playtime-track-row,
+.admin-playtime-user-row {
+  padding: 12px 14px;
+}
+
+.admin-playtime-track-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-playtime-track-copy,
+.admin-playtime-user-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-playtime-user-list {
+  align-content: start;
+}
+
+.admin-playtime-user-row {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-playtime-user-head {
+  justify-content: flex-start;
+  list-style: none;
+  cursor: pointer;
+}
+
+.admin-playtime-user-head::-webkit-details-marker {
+  display: none;
+}
+
+.admin-playtime-user-head .status-pill {
+  margin-left: auto;
+}
+
+.admin-playtime-total-badge {
+  text-transform: uppercase;
+}
+
+.admin-playtime-avatar {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
 .admin-split-modal {
   display: grid;
   align-content: stretch;
@@ -2479,6 +2587,10 @@ h3 {
   }
 
   .upload-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-playtime-layout {
     grid-template-columns: 1fr;
   }
 

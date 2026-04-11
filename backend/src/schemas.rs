@@ -42,6 +42,17 @@ pub struct MoveMusicRequest {
     pub ensemble_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TrackPlaytimeIncrementRequest {
+    pub track_index: i64,
+    pub seconds: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReportPlaytimeRequest {
+    pub tracks: Vec<TrackPlaytimeIncrementRequest>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct StemInfo {
     pub track_index: i64,
@@ -80,6 +91,32 @@ pub struct AdminMusicResponse {
     pub ensemble_ids: Vec<String>,
     pub ensemble_names: Vec<String>,
     pub owner_user_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MusicPlaytimeTrackSummaryResponse {
+    pub track_index: i64,
+    pub track_name: String,
+    pub instrument_name: String,
+    pub total_seconds: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MusicPlaytimeLeaderboardEntryResponse {
+    pub user_id: String,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub best_track_seconds: f64,
+    pub track_totals: Vec<MusicPlaytimeTrackSummaryResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminMusicPlaytimeResponse {
+    pub total_seconds: f64,
+    pub listener_count: i64,
+    pub track_totals: Vec<MusicPlaytimeTrackSummaryResponse>,
+    pub leaderboard: Vec<MusicPlaytimeLeaderboardEntryResponse>,
 }
 
 #[derive(Debug, Serialize)]

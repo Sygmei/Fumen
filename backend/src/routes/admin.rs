@@ -1,8 +1,8 @@
 use crate::models::{EnsembleRecord, MusicRecord, UserRecord};
 use crate::schemas::{
-    AdminEnsembleResponse, AdminMusicResponse, CreateEnsembleRequest, CreateUserRequest,
-    EnsembleMemberResponse, LoginLinkResponse, MoveMusicRequest, UpdateEnsembleMemberRequest,
-    UserResponse,
+    AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicResponse,
+    CreateEnsembleRequest, CreateUserRequest, EnsembleMemberResponse, LoginLinkResponse,
+    MoveMusicRequest, UpdateEnsembleMemberRequest, UserResponse,
 };
 use crate::services::{auth, music};
 use crate::{
@@ -49,6 +49,7 @@ pub(super) fn routes() -> Router<AppState> {
             get(admin_list_musics).post(admin_upload_music),
         )
         .route("/admin/musics/{id}", patch(admin_update_music))
+        .route("/admin/musics/{id}/playtime", get(admin_music_playtime))
         .route("/admin/musics/{id}/move", post(admin_move_music))
         .route(
             "/admin/musics/{id}/ensembles/{ensemble_id}",
@@ -1128,6 +1129,27 @@ async fn admin_move_music(
         ensemble_ids,
         ensemble_names,
     )))
+}
+
+async fn admin_music_playtime(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<AdminMusicPlaytimeResponse>, AppError> {
+    let auth_context = auth::require_admin_context(&state, &headers).await?;
+    if !music::can_view_music_in_control_room(&state.db_rw, &auth_context, &id).await? {
+        return Err(AppError::unauthorized(
+            "You are not allowed to view playtime for this score",
+        ));
+    }
+
+    music::find_music_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+
+    Ok(Json(
+        music::build_admin_music_playtime_response(&state.db_rw, &state.storage, &id).await?,
+    ))
 }
 
 async fn admin_delete_music(

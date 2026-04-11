@@ -3,10 +3,13 @@ use crate::models::{
     EnsembleRecord, EnsembleSummaryRecord, MusicEnsembleLinkRecord, MusicRecord, StemRecord,
     UserEnsembleMembershipRecord,
 };
-use crate::schemas::{AdminMusicResponse, PublicMusicResponse, StemInfo};
+use crate::schemas::{
+    AdminMusicPlaytimeResponse, AdminMusicResponse, MusicPlaytimeLeaderboardEntryResponse,
+    MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, StemInfo,
+};
 use crate::storage::Storage;
 use crate::{
-    AppError, AppRole, AppState, AuthContext, sanitize_content_disposition,
+    AppError, AppRole, AppState, AuthContext, sanitize_content_disposition, utc_now_string,
 };
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -53,6 +56,18 @@ struct UserAccessibleMusicRow {
     ensemble_name: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct AdminMusicPlaytimeRow {
+    user_id: String,
+    username: String,
+    display_name: Option<String>,
+    avatar_image_key: Option<String>,
+    track_index: i64,
+    track_name: String,
+    instrument_name: String,
+    total_seconds: f64,
+}
+
 fn accessible_music_row_to_tuple(row: UserAccessibleMusicRow) -> (MusicRecord, String, String) {
     (
         MusicRecord {
@@ -83,6 +98,16 @@ fn accessible_music_row_to_tuple(row: UserAccessibleMusicRow) -> (MusicRecord, S
         row.ensemble_id,
         row.ensemble_name,
     )
+}
+
+fn resolve_user_avatar_url(
+    storage: &Storage,
+    user_id: &str,
+    avatar_image_key: Option<&str>,
+) -> Option<String> {
+    avatar_image_key
+        .and_then(|key| storage.public_url(key))
+        .or_else(|| avatar_image_key.map(|_| format!("/api/users/{user_id}/avatar")))
 }
 
 pub(crate) async fn fetch_stems_total(db: &PgPool, music_id: &str) -> i64 {
@@ -430,7 +455,157 @@ pub(crate) async fn find_public_stem(
         .bind(music_id)
         .bind(track_index)
         .fetch_optional(db_fallback)
-        .await?)
+    .await?)
+}
+
+pub(crate) async fn add_user_track_playtime(
+    db: &PgPool,
+    user_id: &str,
+    music_id: &str,
+    track_totals: &[(i64, f64)],
+) -> Result<(), AppError> {
+    if track_totals.is_empty() {
+        return Ok(());
+    }
+
+    let updated_at = utc_now_string();
+    let mut tx = db.begin().await?;
+    for (track_index, total_seconds) in track_totals {
+        sqlx::query(
+            r#"
+            INSERT INTO user_music_track_playtime (user_id, music_id, track_index, total_seconds, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (user_id, music_id, track_index)
+            DO UPDATE SET
+                total_seconds = user_music_track_playtime.total_seconds + EXCLUDED.total_seconds,
+                updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(user_id)
+        .bind(music_id)
+        .bind(track_index)
+        .bind(total_seconds)
+        .bind(&updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    Ok(())
+}
+
+pub(crate) async fn build_admin_music_playtime_response(
+    db: &PgPool,
+    storage: &Storage,
+    music_id: &str,
+) -> Result<AdminMusicPlaytimeResponse, AppError> {
+    let stems = find_public_stems(db, db, music_id).await?;
+    let rows = sqlx::query_as::<_, AdminMusicPlaytimeRow>(
+        r#"
+        SELECT
+            p.user_id,
+            u.username,
+            u.display_name,
+            u.avatar_image_key,
+            s.track_index,
+            s.track_name,
+            s.instrument_name,
+            p.total_seconds
+        FROM user_music_track_playtime p
+        JOIN users u
+            ON u.id = p.user_id
+        JOIN stems s
+            ON s.music_id = p.music_id
+           AND s.track_index = p.track_index
+        WHERE p.music_id = $1
+          AND p.total_seconds > 0
+        ORDER BY p.total_seconds DESC, u.username ASC, s.track_index ASC
+        "#,
+    )
+    .bind(music_id)
+    .fetch_all(db)
+    .await?;
+
+    let mut overall_tracks = stems
+        .iter()
+        .map(|stem| {
+            (
+                stem.track_index,
+                MusicPlaytimeTrackSummaryResponse {
+                    track_index: stem.track_index,
+                    track_name: stem.track_name.clone(),
+                    instrument_name: stem.instrument_name.clone(),
+                    total_seconds: 0.0,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut leaderboard = HashMap::<String, MusicPlaytimeLeaderboardEntryResponse>::new();
+    let mut total_seconds = 0.0;
+
+    for row in rows {
+        total_seconds += row.total_seconds;
+
+        if let Some(track) = overall_tracks.get_mut(&row.track_index) {
+            track.total_seconds += row.total_seconds;
+        }
+
+        let entry = leaderboard
+            .entry(row.user_id.clone())
+            .or_insert_with(|| MusicPlaytimeLeaderboardEntryResponse {
+                user_id: row.user_id.clone(),
+                username: row.username.clone(),
+                display_name: row.display_name.clone(),
+                avatar_url: resolve_user_avatar_url(
+                    storage,
+                    &row.user_id,
+                    row.avatar_image_key.as_deref(),
+                ),
+                best_track_seconds: 0.0,
+                track_totals: Vec::new(),
+            });
+        entry.best_track_seconds = entry.best_track_seconds.max(row.total_seconds);
+        entry.track_totals.push(MusicPlaytimeTrackSummaryResponse {
+            track_index: row.track_index,
+            track_name: row.track_name,
+            instrument_name: row.instrument_name,
+            total_seconds: row.total_seconds,
+        });
+    }
+
+    let mut track_totals = overall_tracks.into_values().collect::<Vec<_>>();
+    track_totals.sort_by(|left, right| {
+        right
+            .total_seconds
+            .partial_cmp(&left.total_seconds)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(left.track_index.cmp(&right.track_index))
+    });
+
+    let mut leaderboard = leaderboard.into_values().collect::<Vec<_>>();
+    for entry in &mut leaderboard {
+        entry.track_totals.sort_by(|left, right| {
+            right
+                .total_seconds
+                .partial_cmp(&left.total_seconds)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.track_index.cmp(&right.track_index))
+        });
+    }
+    leaderboard.sort_by(|left, right| {
+        right
+            .best_track_seconds
+            .partial_cmp(&left.best_track_seconds)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(left.username.cmp(&right.username))
+    });
+
+    Ok(AdminMusicPlaytimeResponse {
+        total_seconds,
+        listener_count: leaderboard.len() as i64,
+        track_totals,
+        leaderboard,
+    })
 }
 
 pub(crate) async fn store_stems(

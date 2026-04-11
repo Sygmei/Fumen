@@ -1,6 +1,13 @@
 <script lang="ts">
     import { onDestroy, onMount, tick } from "svelte";
-    import { fetchPublicMusic, fetchStems, type PublicMusic } from "../lib/api";
+    import {
+        ApiError,
+        fetchPublicMusic,
+        fetchStems,
+        hasAuth,
+        reportPublicMusicPlaytime,
+        type PublicMusic,
+    } from "../lib/api";
     import { StemMixerPlayer, type StemTrack } from "../lib/stem-mixer";
     import { ScoreViewer } from "../lib/score-viewer";
     import { formatTime } from "../lib/utils";
@@ -39,13 +46,32 @@
     let globalVolume = $state(1.0);
     let trackLevels = $state<Record<string, number>>({});
     let soloedTrackIds = $state<Set<string>>(new Set());
+    const PLAYTIME_ACCOUNTING_INTERVAL_MS = 1000;
+    const PLAYTIME_FLUSH_INTERVAL_MS = 5000;
+    let playtimePending: Record<string, number> = {};
+    let playtimeLastMeasuredAt = 0;
+    let playtimeLastFlushAt = 0;
+    let playtimeInterval: number | null = null;
+    let playtimeReportingDisabled = false;
 
     onMount(() => {
+        const handlePageHide = () => {
+            capturePlaytimeSlice();
+            void flushPlaytime(true);
+        };
+        window.addEventListener("pagehide", handlePageHide);
         void loadPublicMusic(accessKey);
+
+        return () => {
+            window.removeEventListener("pagehide", handlePageHide);
+        };
     });
 
     onDestroy(() => {
         stopPlaybackLoop();
+        capturePlaytimeSlice();
+        void flushPlaytime(true);
+        void stopPlaytimeTracking(false);
         if (stemPlayer) {
             void stemPlayer.dispose();
             stemPlayer = null;
@@ -60,6 +86,8 @@
         publicLoading = true;
         publicError = "";
         downloadMenuOpen = false;
+        playtimePending = {};
+        playtimeReportingDisabled = false;
 
         try {
             const music = await fetchPublicMusic(key);
@@ -110,6 +138,7 @@
 
     async function resetMixers() {
         stopPlaybackLoop();
+        void stopPlaytimeTracking(false);
         playbackState = "stopped";
         playbackPosition = 0;
         playbackDuration = 0;
@@ -188,9 +217,11 @@
 
         try {
             if (playbackState === "playing") {
+                capturePlaytimeSlice();
                 player.pause();
                 playbackState = "paused";
                 playbackPosition = player.getCurrentTime();
+                await stopPlaytimeTracking();
                 stopPlaybackLoop();
                 return;
             }
@@ -202,6 +233,7 @@
 
             await player.play();
             playbackState = "playing";
+            startPlaytimeTracking();
             startPlaybackLoop();
         } catch (error) {
             midiPlayerError =
@@ -217,9 +249,11 @@
             return;
         }
 
+        capturePlaytimeSlice();
         player.stop();
         playbackState = "stopped";
         playbackPosition = 0;
+        void stopPlaytimeTracking();
         stopPlaybackLoop();
     }
 
@@ -235,6 +269,7 @@
     }
 
     async function handleScoreSeek(seconds: number) {
+        capturePlaytimeSlice();
         scoreViewer?.seek(seconds);
         playbackPosition = seconds;
         const player = stemPlayer;
@@ -245,13 +280,16 @@
             stopPlaybackLoop();
         }
         player.seek(seconds);
+        playtimeLastMeasuredAt = performance.now();
         if (wasPlaying) {
             await player.play();
+            startPlaytimeTracking();
             startPlaybackLoop();
         }
     }
 
     function updateTrackVolume(trackId: string, volume: number) {
+        capturePlaytimeSlice();
         mixerTracks = mixerTracks.map((track) =>
             track.id === trackId ? { ...track, volume } : track,
         );
@@ -261,6 +299,7 @@
     }
 
     function updateGlobalVolume(volume: number) {
+        capturePlaytimeSlice();
         globalVolume = volume;
         mixerTracks = mixerTracks.map((track) => ({
             ...track,
@@ -274,6 +313,7 @@
     }
 
     function toggleTrackMute(trackId: string) {
+        capturePlaytimeSlice();
         mixerTracks = mixerTracks.map((track) => {
             if (track.id !== trackId) {
                 return track;
@@ -290,6 +330,7 @@
     }
 
     function toggleTrackSolo(trackId: string) {
+        capturePlaytimeSlice();
         const newSoloedIds = new Set(soloedTrackIds);
         if (newSoloedIds.has(trackId)) {
             newSoloedIds.delete(trackId);
@@ -326,10 +367,12 @@
                     playbackDuration > 0 &&
                     playbackPosition >= playbackDuration - 0.03
                 ) {
+                    capturePlaytimeSlice();
                     player.pause();
                     player.seek(playbackDuration);
                     playbackState = "paused";
                     playbackPosition = playbackDuration;
+                    void stopPlaytimeTracking();
                     stopPlaybackLoop();
                     return;
                 }
@@ -345,6 +388,124 @@
             playbackFrame = null;
         }
         trackLevels = {};
+    }
+
+    function startPlaytimeTracking() {
+        if (!hasAuth() || playtimeReportingDisabled) {
+            return;
+        }
+
+        void stopPlaytimeTracking(false);
+        playtimeLastMeasuredAt = performance.now();
+        playtimeLastFlushAt = playtimeLastMeasuredAt;
+        playtimeInterval = window.setInterval(() => {
+            capturePlaytimeSlice();
+            const now = performance.now();
+            if (now - playtimeLastFlushAt >= PLAYTIME_FLUSH_INTERVAL_MS) {
+                void flushPlaytime();
+            }
+        }, PLAYTIME_ACCOUNTING_INTERVAL_MS);
+    }
+
+    async function stopPlaytimeTracking(flush = true) {
+        if (playtimeInterval !== null) {
+            clearInterval(playtimeInterval);
+            playtimeInterval = null;
+        }
+        playtimeLastMeasuredAt = 0;
+        if (flush) {
+            await flushPlaytime();
+        }
+    }
+
+    function capturePlaytimeSlice() {
+        if (
+            playbackState !== "playing" ||
+            !publicMusic ||
+            !hasAuth() ||
+            playtimeReportingDisabled
+        ) {
+            playtimeLastMeasuredAt = performance.now();
+            return;
+        }
+
+        const now = performance.now();
+        if (!playtimeLastMeasuredAt) {
+            playtimeLastMeasuredAt = now;
+            return;
+        }
+
+        const deltaSeconds = (now - playtimeLastMeasuredAt) / 1000;
+        playtimeLastMeasuredAt = now;
+        if (deltaSeconds <= 0) {
+            return;
+        }
+
+        const audibleTrackIndices = getAudibleTrackIndices();
+        for (const trackIndex of audibleTrackIndices) {
+            playtimePending[trackIndex] =
+                (playtimePending[trackIndex] ?? 0) + deltaSeconds;
+        }
+    }
+
+    function getAudibleTrackIndices(): number[] {
+        if (globalVolume <= 0) {
+            return [];
+        }
+
+        const anySoloed = soloedTrackIds.size > 0;
+        return mixerTracks
+            .filter((track) => {
+                if (track.muted || track.volume <= 0) {
+                    return false;
+                }
+                return !anySoloed || soloedTrackIds.has(track.id);
+            })
+            .map((track) => Number(track.id))
+            .filter((trackIndex) => Number.isFinite(trackIndex));
+    }
+
+    async function flushPlaytime(keepalive = false) {
+        if (!publicMusic || !hasAuth() || playtimeReportingDisabled) {
+            playtimePending = {};
+            return;
+        }
+
+        const tracks = Object.entries(playtimePending)
+            .map(([trackIndex, seconds]) => ({
+                track_index: Number(trackIndex),
+                seconds: Number(seconds.toFixed(3)),
+            }))
+            .filter(
+                (track) =>
+                    Number.isFinite(track.track_index) &&
+                    Number.isFinite(track.seconds) &&
+                    track.seconds > 0,
+            );
+        if (tracks.length === 0) {
+            return;
+        }
+
+        playtimePending = {};
+
+        try {
+            await reportPublicMusicPlaytime(
+                accessKey,
+                { tracks },
+                { keepalive },
+            );
+            playtimeLastFlushAt = performance.now();
+        } catch (error) {
+            if (error instanceof ApiError && error.status < 500) {
+                playtimeReportingDisabled = true;
+                return;
+            }
+
+            for (const track of tracks) {
+                playtimePending[track.track_index] =
+                    (playtimePending[track.track_index] ?? 0) + track.seconds;
+            }
+        }
     }
 </script>
 

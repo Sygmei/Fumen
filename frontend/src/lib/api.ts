@@ -25,6 +25,29 @@ export type AdminMusic = {
   owner_user_id: string | null
 }
 
+export type AdminMusicPlaytimeTrackSummary = {
+  track_index: number
+  track_name: string
+  instrument_name: string
+  total_seconds: number
+}
+
+export type AdminMusicPlaytimeLeaderboardEntry = {
+  user_id: string
+  username: string
+  display_name: string | null
+  avatar_url: string | null
+  best_track_seconds: number
+  track_totals: AdminMusicPlaytimeTrackSummary[]
+}
+
+export type AdminMusicPlaytime = {
+  total_seconds: number
+  listener_count: number
+  track_totals: AdminMusicPlaytimeTrackSummary[]
+  leaderboard: AdminMusicPlaytimeLeaderboardEntry[]
+}
+
 export type StemQualityProfile = 'standard' | 'small' | 'very-small' | 'tiny'
 
 export type GlobalRole = 'superadmin' | 'admin' | 'manager' | 'editor' | 'user'
@@ -345,6 +368,18 @@ function normalizePublicMusic(music: PublicMusic): PublicMusic {
   }
 }
 
+function normalizeAdminMusicPlaytime(
+  playtime: AdminMusicPlaytime,
+): AdminMusicPlaytime {
+  return {
+    ...playtime,
+    leaderboard: playtime.leaderboard.map((entry) => ({
+      ...entry,
+      avatar_url: resolveBackendAssetUrl(entry.avatar_url),
+    })),
+  }
+}
+
 function normalizeUserLibraryResponse(library: UserLibraryResponse): UserLibraryResponse {
   return {
     ensembles: library.ensembles.map((ensemble) => ({
@@ -604,6 +639,16 @@ export async function retryRender(id: string): Promise<AdminMusic> {
   return normalizeAdminMusic(music)
 }
 
+export async function fetchAdminMusicPlaytime(
+  id: string,
+): Promise<AdminMusicPlaytime> {
+  const playtime = await requestJson<AdminMusicPlaytime>(`/admin/musics/${id}/playtime`, {
+    authenticated: true,
+  })
+
+  return normalizeAdminMusicPlaytime(playtime)
+}
+
 export async function updateMusicMetadata(
   id: string,
   payload: {
@@ -636,6 +681,26 @@ export async function fetchPublicMusic(accessKey: string): Promise<PublicMusic> 
 export async function fetchStems(accessKey: string): Promise<Stem[]> {
   const stems = await requestJson<Stem[]>(`/public/${encodeURIComponent(accessKey)}/stems`)
   return stems.map(normalizeStem)
+}
+
+export async function reportPublicMusicPlaytime(
+  accessKey: string,
+  payload: {
+    tracks: Array<{
+      track_index: number
+      seconds: number
+    }>
+  },
+  options: {
+    keepalive?: boolean
+  } = {},
+): Promise<void> {
+  await requestJson(`/public/${encodeURIComponent(accessKey)}/playtime`, {
+    method: 'POST',
+    authenticated: true,
+    keepalive: options.keepalive,
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function exchangeLoginToken(token: string): Promise<AuthTokenResponse> {

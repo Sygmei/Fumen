@@ -288,6 +288,21 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
     .execute(db)
     .await?;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS user_music_track_playtime (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            music_id TEXT NOT NULL REFERENCES musics(id) ON DELETE CASCADE,
+            track_index BIGINT NOT NULL,
+            total_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, music_id, track_index)
+        )
+        "#,
+    )
+    .execute(db)
+    .await?;
+
     sqlx::query("ALTER TABLE user_sessions ALTER COLUMN expires_at DROP NOT NULL")
         .execute(db)
         .await?;
@@ -349,6 +364,11 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
     ensure_user_ensemble_membership_column(db, "role", "TEXT NOT NULL DEFAULT 'user'").await?;
     sqlx::query(
         "CREATE UNIQUE INDEX IF NOT EXISTS users_single_superadmin_idx ON users (is_superadmin) WHERE is_superadmin = TRUE",
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS user_music_track_playtime_music_idx ON user_music_track_playtime (music_id, user_id)",
     )
     .execute(db)
     .await?;

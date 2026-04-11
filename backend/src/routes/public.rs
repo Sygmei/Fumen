@@ -1,12 +1,12 @@
-use crate::schemas::{PublicMusicResponse, StemInfo};
-use crate::services::music;
+use crate::schemas::{PublicMusicResponse, ReportPlaytimeRequest, StemInfo};
+use crate::services::{auth, music};
 use crate::{AppError, AppState, sanitize_content_disposition};
 use axum::{
     Json, Router,
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::Response,
     extract::{Path, State},
-    routing::get,
+    routing::{get, post},
 };
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -18,6 +18,10 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/public/{access_key}/midi", get(public_music_midi))
         .route("/public/{access_key}/musicxml", get(public_music_musicxml))
         .route("/public/{access_key}/stems", get(public_music_stems))
+        .route(
+            "/public/{access_key}/playtime",
+            post(report_public_music_playtime),
+        )
         .route(
             "/public/{access_key}/stems/{track_index}",
             get(public_music_stem_audio),
@@ -194,6 +198,58 @@ async fn public_music_stem_audio(
         content_encoding,
         Some(format!("inline; filename=\"{}.ogg\"", stem.track_name)),
     ))
+}
+
+async fn report_public_music_playtime(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(access_key): Path<String>,
+    Json(payload): Json<ReportPlaytimeRequest>,
+) -> Result<StatusCode, AppError> {
+    let auth_context = auth::build_auth_context(&state, &headers).await?;
+    let record = music::find_public_music_record(&state, &access_key)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+
+    if payload.tracks.is_empty() {
+        return Err(AppError::bad_request("No playtime increments were provided"));
+    }
+
+    let stems = music::find_public_stems(&state.db_ro, &state.db_rw, &record.id).await?;
+    let valid_track_indices = stems
+        .into_iter()
+        .map(|stem| stem.track_index)
+        .collect::<std::collections::HashSet<_>>();
+    let mut normalized = std::collections::HashMap::<i64, f64>::new();
+
+    for track in payload.tracks {
+        if !track.seconds.is_finite() || track.seconds <= 0.0 {
+            return Err(AppError::bad_request(
+                "Playtime increments must be positive numbers",
+            ));
+        }
+        if track.seconds > 300.0 {
+            return Err(AppError::bad_request(
+                "Playtime increments cannot exceed 300 seconds at once",
+            ));
+        }
+        if !valid_track_indices.contains(&track.track_index) {
+            return Err(AppError::bad_request("Unknown track index in playtime report"));
+        }
+
+        *normalized.entry(track.track_index).or_insert(0.0) += track.seconds;
+    }
+
+    let normalized = normalized.into_iter().collect::<Vec<_>>();
+    music::add_user_track_playtime(
+        &state.db_rw,
+        &auth_context.user.id,
+        &record.id,
+        &normalized,
+    )
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn binary_response(
