@@ -19,11 +19,11 @@ struct RefreshTokenClaims {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct AccessTokenClaims {
-    sub: String,
-    sid: String,
-    exp: i64,
-    iat: i64,
+pub(crate) struct AccessTokenClaims {
+    pub(crate) sub: String,
+    pub(crate) sid: String,
+    pub(crate) exp: i64,
+    pub(crate) iat: i64,
 }
 
 pub(crate) async fn find_user_by_id(db: &PgPool, id: &str) -> Result<Option<UserRecord>, AppError> {
@@ -576,6 +576,13 @@ fn verify_access_token(token: &str, secret: &str) -> Result<AccessTokenClaims, A
     )
     .map(|data| data.claims)
     .map_err(|error| AppError::unauthorized(format!("Invalid or expired access token: {error}")))
+}
+
+pub(crate) fn decode_access_token_claims(
+    token: &str,
+    secret: &str,
+) -> Result<AccessTokenClaims, AppError> {
+    verify_access_token(token, secret)
 }
 
 pub(crate) fn exp_to_timestamp(exp: i64) -> String {

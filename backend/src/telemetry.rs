@@ -2,11 +2,15 @@ use anyhow::{Context, Result};
 use axum::{
     body::Body,
     extract::MatchedPath,
+    extract::State,
     http::{
         HeaderValue, Request, Response,
-        header::{HeaderName, USER_AGENT},
+        header::{AUTHORIZATION, HeaderName, USER_AGENT},
     },
+    middleware::Next,
+    response::IntoResponse,
 };
+use crate::{AppState, services::auth};
 use opentelemetry::{
     KeyValue, global,
     trace::{TraceContextExt, TracerProvider as _},
@@ -18,10 +22,10 @@ use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
     trace::{Sampler, SdkTracerProvider},
 };
-use reqwest::Client;
-use std::{collections::HashMap, env, time::Duration};
+use reqwest::blocking::Client;
+use std::{collections::HashMap, env, time::Duration, time::Instant};
 use tower_http::classify::ServerErrorsFailureClass;
-use tracing::{Span, field::Empty};
+use tracing::{Span, field::Empty, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -46,8 +50,13 @@ impl Drop for TelemetryGuard {
 }
 
 pub(crate) fn init() -> Result<TelemetryGuard> {
+    let default_filter = if is_enabled() {
+        "fumen_backend=info,sqlx::query=debug,tower_http=info"
+    } else {
+        "fumen_backend=info,tower_http=info"
+    };
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("fumen_backend=info,tower_http=info"));
+        .unwrap_or_else(|_| EnvFilter::new(default_filter));
     let fmt_layer = tracing_subscriber::fmt::layer();
 
     if !is_enabled() {
@@ -97,7 +106,7 @@ pub(crate) fn init() -> Result<TelemetryGuard> {
     })
 }
 
-pub(crate) fn make_http_request_span(request: &Request<Body>) -> Span {
+pub(crate) fn make_operation_span(operation_id: &'static str, request: &Request<Body>) -> Span {
     let matched_path = request
         .extensions()
         .get::<MatchedPath>()
@@ -110,6 +119,7 @@ pub(crate) fn make_http_request_span(request: &Request<Body>) -> Span {
     let span = tracing::info_span!(
         "http.request",
         otel.kind = "server",
+        otel.name = %operation_id,
         http.request.method = %request.method(),
         url.path = %request.uri().path(),
         url.query = Empty,
@@ -118,6 +128,11 @@ pub(crate) fn make_http_request_span(request: &Request<Body>) -> Span {
         network.protocol.version = ?request.version(),
         http.response.status_code = Empty,
         error.type = Empty,
+        operation.id = %operation_id,
+        token.sub = Empty,
+        token.sid = Empty,
+        token.exp = Empty,
+        token.iat = Empty,
     );
 
     if let Some(query) = request.uri().query() {
@@ -163,16 +178,6 @@ pub(crate) fn on_http_failure(
     );
 }
 
-pub(crate) fn current_trace_id_header_value() -> Option<HeaderValue> {
-    let trace_id = Span::current().context().span().span_context().trace_id();
-    let trace_id = trace_id.to_string();
-    if trace_id.is_empty() || trace_id.chars().all(|ch| ch == '0') {
-        return None;
-    }
-
-    HeaderValue::from_str(&trace_id).ok()
-}
-
 fn attach_remote_parent(span: &Span, request: &Request<Body>) {
     let parent_context = global::get_text_map_propagator(|propagator| {
         propagator.extract(&HeaderExtractor(request.headers()))
@@ -187,12 +192,116 @@ fn attach_remote_parent(span: &Span, request: &Request<Body>) {
     }
 }
 
+pub(crate) async fn trace_operation_request(
+    State((state, operation_id)): State<(AppState, &'static str)>,
+    request: Request<Body>,
+    next: Next,
+) -> axum::response::Response {
+    let span = make_operation_span(operation_id, &request);
+    record_token_claims(&span, request.headers(), &state);
+    let trace_id = span.context().span().span_context().trace_id().to_string();
+    let start = Instant::now();
+    let response = next.run(request).instrument(span.clone()).await;
+    let latency = start.elapsed();
+    let status = response.status();
+
+    if status.is_server_error() {
+        on_http_failure(
+            ServerErrorsFailureClass::StatusCode(status),
+            latency,
+            &span,
+        );
+    } else {
+        on_http_response(&response, latency, &span);
+    }
+
+    let mut response = response.into_response();
+    if !trace_id.is_empty() && !trace_id.chars().all(|ch| ch == '0') {
+        if let Ok(trace_id) = HeaderValue::from_str(&trace_id) {
+            response
+                .headers_mut()
+                .insert(TRACE_ID_HEADER_NAME, trace_id);
+        }
+    }
+
+    response
+}
+
+fn record_token_claims(span: &Span, headers: &axum::http::HeaderMap, state: &AppState) {
+    let Some(header_value) = headers.get(AUTHORIZATION) else {
+        return;
+    };
+
+    let Ok(authorization) = header_value.to_str() else {
+        return;
+    };
+
+    let Some(token) = authorization
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    let Ok(claims) = auth::decode_access_token_claims(token, &state.config.jwt_secret) else {
+        return;
+    };
+
+    span.record("token.sub", claims.sub.as_str());
+    span.record("token.sid", claims.sid.as_str());
+    span.record("token.exp", claims.exp);
+    span.record("token.iat", claims.iat);
+}
+
+#[macro_export]
+macro_rules! op_get {
+    ($state:expr, $path:expr, $handler:ident) => {
+        axum::routing::get($handler).route_layer(axum::middleware::from_fn_with_state(
+            ($state.clone(), stringify!($handler)),
+            $crate::telemetry::trace_operation_request,
+        ))
+    };
+}
+
+#[macro_export]
+macro_rules! op_post {
+    ($state:expr, $path:expr, $handler:ident) => {
+        axum::routing::post($handler).route_layer(axum::middleware::from_fn_with_state(
+            ($state.clone(), stringify!($handler)),
+            $crate::telemetry::trace_operation_request,
+        ))
+    };
+}
+
+#[macro_export]
+macro_rules! op_patch {
+    ($state:expr, $path:expr, $handler:ident) => {
+        axum::routing::patch($handler).route_layer(axum::middleware::from_fn_with_state(
+            ($state.clone(), stringify!($handler)),
+            $crate::telemetry::trace_operation_request,
+        ))
+    };
+}
+
+#[macro_export]
+macro_rules! op_delete {
+    ($state:expr, $path:expr, $handler:ident) => {
+        axum::routing::delete($handler).route_layer(axum::middleware::from_fn_with_state(
+            ($state.clone(), stringify!($handler)),
+            $crate::telemetry::trace_operation_request,
+        ))
+    };
+}
+
 fn build_tracer_provider(
     traces_url: &str,
     service_name: &str,
     service_version: &str,
     deployment_environment: &str,
 ) -> Result<SdkTracerProvider> {
+    // The batch span processor exports from a dedicated background thread, so it needs a
+    // blocking HTTP client instead of reqwest's async client here.
     let exporter = SpanExporter::builder()
         .with_http()
         .with_http_client(Client::new())
