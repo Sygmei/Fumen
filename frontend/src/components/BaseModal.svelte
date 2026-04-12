@@ -42,7 +42,7 @@
 
     .modal-close-button {
         position: absolute;
-        top: 0;
+        top: 50%;
         right: 0;
         width: 40px;
         min-width: 40px;
@@ -51,6 +51,7 @@
         padding: 0;
         justify-content: center;
         border-radius: var(--radius-md) !important;
+        transform: translateY(-50%);
     }
 
     .modal-close-button svg {
@@ -64,7 +65,10 @@
     role="presentation"
     tabindex="0"
     onclick={handleBackdropClick}
-    onkeydown={(event) => event.key === "Escape" && onClose()}
+    onkeydown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Escape") onClose();
+    }}
 >
     <div
         class={`modal-card modal-card--${size} ${hasHeader ? "modal-card--with-header" : ""} ${footer ? "modal-card--with-footer" : ""} ${bodyless ? "modal-card--bodyless" : ""} ${cardClass}`.trim()}
@@ -75,7 +79,7 @@
     >
         {#if hasHeader}
             <div class="modal-header">
-                <div class="card-header items-start modal-header-row">
+                <div class="card-header items-center modal-header-row">
                     <div>
                         {#if title}<p class="meta-label">{title}</p>{/if}
                         {#if subtitle}<h2 id="modal-title">{subtitle}</h2>{/if}

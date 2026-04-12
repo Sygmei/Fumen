@@ -47,6 +47,14 @@ $env:MUSESCORE_BIN="C:\Program Files\MuseScore Studio 4\bin\MuseScoreStudio.exe"
 $env:MUSESCORE_DOCKER_IMAGE="your-musescore-cli-image"
 $env:DOCKER_BIN="docker"
 $env:MUSESCORE_QT_PLATFORM="offscreen"
+$env:OTEL_ENABLED="true"
+$env:OTEL_SERVICE_NAME="fumen-backend"
+$env:OTEL_SERVICE_VERSION="0.1.0"
+$env:OTEL_DEPLOYMENT_ENVIRONMENT="production"
+$env:OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:4318"
+$env:OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=""
+$env:OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer your-token"
+$env:OTEL_RESOURCE_ATTRIBUTES="service.namespace=fumen,k8s.cluster.name=production"
 ```
 
 If `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` are all unset, the backend stores uploaded files under `LOCAL_STORAGE_PATH`.
@@ -67,6 +75,22 @@ If you prefer containerized conversion, set `MUSESCORE_DOCKER_IMAGE` instead. Wh
 backend runs `docker run --rm` with bind mounts for the score input/output directories and expects
 the container image entrypoint to behave like the MuseScore CLI. `DOCKER_BIN` overrides the Docker
 executable path when `docker` is not the right command name.
+
+OpenTelemetry tracing is optional and disabled unless `OTEL_ENABLED` is truthy (`1`, `true`,
+`yes`, or `on`). When enabled, the backend exports traces over OTLP HTTP. The config shape mirrors
+the one used in `MtGMetaAnalyzer`:
+
+- `OTEL_SERVICE_NAME` defaults to `fumen-backend`
+- `OTEL_SERVICE_VERSION` defaults to the backend crate version
+- `OTEL_DEPLOYMENT_ENVIRONMENT` defaults to `production`
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` wins if set
+- otherwise `OTEL_EXPORTER_OTLP_ENDPOINT` is used as a base and `/v1/traces` is appended
+- `OTEL_EXPORTER_OTLP_HEADERS` accepts comma-separated `key=value` pairs
+- `OTEL_RESOURCE_ATTRIBUTES` accepts comma-separated extra resource attributes
+
+The backend instruments incoming HTTP requests, auth context resolution, score upload / retry
+pipelines, MuseScore and ffmpeg conversion steps, derivative storage, and destructive score delete
+flows.
 
 On Linux, the backend defaults native MuseScore launches to `QT_QPA_PLATFORM=offscreen` for
 headless export. On Windows and macOS it does not force a Qt platform plugin, which avoids the
@@ -270,3 +294,14 @@ By default, the chart injects `API_BASE_URL=https://<backend-domain>/api` into t
 Deployment. Override `frontend.apiBaseUrl` if the browser should call a different public API URL.
 It also injects `CORS_ALLOWED_ORIGINS` into the backend for the frontend domain and `www` host.
 Override `backend.corsAllowedOrigins` if you need a different list.
+
+The backend Deployment also exposes the OpenTelemetry settings under `backend.otel`:
+
+- `backend.otel.enabled`
+- `backend.otel.serviceName`
+- `backend.otel.serviceVersion`
+- `backend.otel.deploymentEnvironment`
+- `backend.otel.endpoint`
+- `backend.otel.tracesEndpoint`
+- `backend.otel.headers`
+- `backend.otel.resourceAttributes`

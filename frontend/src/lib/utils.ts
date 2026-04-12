@@ -20,6 +20,20 @@ export function formatTime(seconds: number): string {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
 }
 
+export function formatPlaytimeDuration(seconds: number): string {
+    const safeSeconds = Math.max(0, Math.round(seconds))
+    const hours = Math.floor(safeSeconds / 3600)
+    const minutes = Math.floor((safeSeconds % 3600) / 60)
+    const remainingSeconds = safeSeconds % 60
+    const parts: string[] = []
+
+    if (hours > 0) parts.push(`${hours}h`)
+    if (hours > 0 || minutes > 0) parts.push(`${minutes}m`)
+    parts.push(`${remainingSeconds}s`)
+
+    return parts.join(' ')
+}
+
 export function qualityProfileLabel(profile: string): string {
     if (profile === 'compact') return 'Small'
     if (profile === 'high') return 'Very small'

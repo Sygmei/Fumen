@@ -8,8 +8,6 @@
         routeKind,
         currentUser,
         userLoading,
-        userError,
-        userSuccess,
         userLibrary,
         connectionBusy,
         preloadedUsername,
@@ -17,19 +15,19 @@
         onShowQr,
         onOpenScanner,
         onMyAccount,
+        onAppConfig,
     }: {
         routeKind: string;
         currentUser: AppUser | null;
         userLoading: boolean;
-        userError: string;
         preloadedUsername: string;
-        userSuccess: string;
         userLibrary: UserLibraryEnsemble[];
         connectionBusy: boolean;
         onLogout: () => Promise<void>;
         onShowQr: () => Promise<void>;
         onOpenScanner: () => void;
         onMyAccount?: () => void;
+        onAppConfig?: () => void;
     } = $props();
 
     function canAccessAdmin() {
@@ -85,6 +83,7 @@
             onShowQr={() => void onShowQr()}
             onLogout={() => void onLogout()}
             {onMyAccount}
+            {onAppConfig}
             showBrandTitleOnMobile={!currentUser && routeKind !== "connect"}
         />
         <section
@@ -101,8 +100,6 @@
                     </p>
                     {#if connectionBusy || userLoading}<p class="status">
                             Connecting...
-                        </p>{/if}{#if userError}<p class="status error">
-                            {userError}
                         </p>{/if}
                 </div>
             {:else if currentUser}
@@ -117,10 +114,6 @@
                             </p>
                         </div>
                     </div>
-                    {#if userError}<p class="status error">{userError}</p>{/if}
-                    {#if userSuccess}<p class="status success">
-                            {userSuccess}
-                        </p>{/if}
                     {#if userLibrary.length === 0}
                         <p class="hint">
                             No scores are available for your ensembles yet.
@@ -229,12 +222,6 @@
                             Live score
                         </div>
                     </div>
-                    {#if userError}<p class="status error landing-status">
-                            {userError}
-                        </p>{/if}
-                    {#if userSuccess}<p class="status success landing-status">
-                            {userSuccess}
-                        </p>{/if}
                 </div>
             {/if}
         </section>

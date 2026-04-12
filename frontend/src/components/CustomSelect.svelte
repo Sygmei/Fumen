@@ -2,7 +2,7 @@
     import { tick } from "svelte";
     import type { Component } from "svelte";
     import { portal } from "../lib/portal";
-    import { ChevronDown, Check } from '@lucide/svelte';
+    import { ChevronDown, Check } from "@lucide/svelte";
 
     type SelectOption = {
         value: string;
@@ -20,7 +20,7 @@
         placeholder = "Select an option",
         disabled = false,
         compact = false,
-        showDescriptionInTrigger = true,
+        showDescriptionInTrigger = false,
         onValueChange,
     }: {
         value: string;
@@ -43,12 +43,24 @@
     let menuWidth = $state(0);
     let menuTop = $state<number | null>(null);
     let menuBottom = $state<number | null>(null);
+    let isMobileSheet = $state(false);
 
     const listboxId = `custom-select-${Math.random().toString(36).slice(2, 10)}`;
 
     let selectedOption = $derived.by(
         () => options.find((option) => option.value === value) ?? null,
     );
+
+    function scrollHighlightedOptionIntoView() {
+        if (!menuElement || highlightIndex < 0) {
+            return;
+        }
+
+        const highlighted = menuElement.querySelector<HTMLElement>(
+            `[data-option-index="${highlightIndex}"]`,
+        );
+        highlighted?.scrollIntoView({ block: "nearest" });
+    }
 
     function openMenu() {
         if (disabled || options.length === 0) {
@@ -60,12 +72,14 @@
             (option) => option.value === value,
         );
         highlightIndex = selectedIndex >= 0 ? selectedIndex : 0;
+        void tick().then(scrollHighlightedOptionIntoView);
     }
 
     function closeMenu() {
         open = false;
         highlightIndex = -1;
         openUpward = false;
+        isMobileSheet = false;
     }
 
     function toggleMenu() {
@@ -95,6 +109,7 @@
         const baseIndex = highlightIndex >= 0 ? highlightIndex : 0;
         highlightIndex =
             (baseIndex + direction + options.length) % options.length;
+        void tick().then(scrollHighlightedOptionIntoView);
     }
 
     function handleTriggerKeydown(event: KeyboardEvent) {
@@ -124,11 +139,9 @@
             return;
         }
 
-        if (event.key === "Escape") {
-            if (open) {
-                event.preventDefault();
-                closeMenu();
-            }
+        if (event.key === "Escape" && open) {
+            event.preventDefault();
+            closeMenu();
         }
     }
 
@@ -163,17 +176,27 @@
         await tick();
 
         const rect = rootElement.getBoundingClientRect();
-        const viewportHeight =
-            window.visualViewport?.height ?? window.innerHeight;
-        const margin = 16;
-        const gap = 8;
-        const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+        const viewport = window.visualViewport;
+        const viewportHeight = viewport?.height ?? window.innerHeight;
+        const viewportWidth = viewport?.width ?? window.innerWidth;
+        const margin = viewportWidth <= 640 ? 12 : 16;
+        const gap = viewportWidth <= 640 ? 8 : 8;
+
+        isMobileSheet = viewportWidth <= 640;
+
         const availableBelow = Math.max(
             140,
             viewportHeight - rect.bottom - margin - gap,
         );
-        const availableAbove = Math.max(140, rect.top - margin - gap);
+        const availableAbove = Math.max(
+            140,
+            rect.top - margin - gap,
+        );
         const preferredHeight = Math.min(menuElement?.scrollHeight ?? 320, 360);
+        const nextMenuWidth = Math.min(
+            Math.max(rect.width, compact ? 224 : rect.width),
+            viewportWidth - margin * 2,
+        );
 
         openUpward =
             availableBelow < preferredHeight && availableAbove > availableBelow;
@@ -181,11 +204,14 @@
             140,
             Math.min(openUpward ? availableAbove : availableBelow, 360),
         );
+        menuWidth = nextMenuWidth;
         menuLeft = Math.min(
             Math.max(margin, rect.left),
-            Math.max(margin, viewportWidth - rect.width - margin),
+            Math.max(
+                margin,
+                viewportWidth - nextMenuWidth - margin,
+            ),
         );
-        menuWidth = Math.min(rect.width, viewportWidth - margin * 2);
         menuTop = openUpward ? null : rect.bottom + gap;
         menuBottom = openUpward ? viewportHeight - rect.top + gap : null;
     }
@@ -200,6 +226,21 @@
         if (open) {
             void updateMenuPlacement();
         }
+    });
+
+    $effect(() => {
+        const viewport = window.visualViewport;
+        if (!viewport) {
+            return;
+        }
+
+        viewport.addEventListener("resize", handleViewportChange);
+        viewport.addEventListener("scroll", handleViewportChange);
+
+        return () => {
+            viewport.removeEventListener("resize", handleViewportChange);
+            viewport.removeEventListener("scroll", handleViewportChange);
+        };
     });
 </script>
 
@@ -251,6 +292,7 @@
         <div
             class="custom-select-menu-wrap"
             class:opens-upward={openUpward}
+            class:is-mobile-sheet={isMobileSheet}
             use:portal
             style={`left: ${menuLeft}px; width: ${menuWidth}px; ${
                 menuTop === null ? "" : `top: ${menuTop}px;`
@@ -258,6 +300,7 @@
         >
             <div
                 class="custom-select-menu"
+                class:is-mobile-sheet={isMobileSheet}
                 bind:this={menuElement}
                 role="listbox"
                 id={listboxId}
@@ -273,6 +316,7 @@
                         class:is-compact={compact}
                         role="option"
                         aria-selected={option.value === value}
+                        data-option-index={index}
                         onclick={() => selectOption(option)}
                         onmouseenter={() => handleOptionMouseEnter(index)}
                     >
@@ -288,9 +332,6 @@
                         </span>
                         <span class="custom-select-option-copy">
                             <strong>{option.label}</strong>
-                            {#if option.description}
-                                <small>{option.description}</small>
-                            {/if}
                         </span>
                         <span
                             class="custom-select-option-check"
@@ -311,92 +352,128 @@
     .custom-select {
         position: relative;
         display: grid;
-        gap: 8px;
-        --custom-select-trigger-bg: var(--surface-alt);
-        --custom-select-panel-bg: rgba(255, 252, 250, 0.97);
-        --custom-select-hover-bg: rgba(255, 255, 255, 0.82);
-        --custom-select-selected-bg: color-mix(in srgb, var(--accent) 6%, white 94%);
+        gap: 10px;
+        --custom-select-trigger-bg: var(--surface);
+        --custom-select-panel-bg: var(--surface);
+        --custom-select-hover-bg: var(--accent-faint);
+        --custom-select-selected-bg: var(--accent-dim);
         --custom-select-border: color-mix(
             in srgb,
-            var(--border) 84%,
-            white 16%
+            var(--border-strong) 88%,
+            white 12%
         );
-        --custom-select-panel-border: rgba(18, 32, 56, 0.1);
-        --custom-select-shadow: 0 14px 32px rgba(18, 32, 56, 0.08);
-        --custom-select-shadow-strong: 0 26px 60px rgba(18, 32, 56, 0.18);
+        --custom-select-border-strong: color-mix(
+            in srgb,
+            var(--accent) 22%,
+            var(--border-strong) 78%
+        );
+        --custom-select-panel-border: color-mix(
+            in srgb,
+            var(--border-strong) 92%,
+            white 8%
+        );
+        --custom-select-icon-bg: color-mix(
+            in srgb,
+            var(--surface-alt) 74%,
+            white 26%
+        );
+        --custom-select-icon-border: color-mix(
+            in srgb,
+            var(--border-strong) 68%,
+            white 32%
+        );
     }
 
     @media (prefers-color-scheme: dark) {
         .custom-select {
-            --custom-select-trigger-bg: color-mix(in srgb, var(--surface) 88%, black 12%);
-            --custom-select-panel-bg: color-mix(
-                in srgb,
-                var(--surface-dark-2) 88%,
-                black 12%
-            );
-            --custom-select-hover-bg: color-mix(
-                in srgb,
-                var(--surface-dark-3) 88%,
-                white 12%
-            );
-            --custom-select-selected-bg: color-mix(
-                in srgb,
-                var(--surface-dark-2) 80%,
-                var(--accent) 20%
-            );
+            --custom-select-trigger-bg: var(--surface);
+            --custom-select-panel-bg: var(--surface);
+            --custom-select-hover-bg: var(--accent-faint);
+            --custom-select-selected-bg: var(--accent-dim);
             --custom-select-border: color-mix(
                 in srgb,
-                var(--border-strong) 78%,
-                white 22%
+                var(--border-strong) 86%,
+                white 14%
             );
-            --custom-select-panel-border: var(--border-dark-strong);
-            --custom-select-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
-            --custom-select-shadow-strong: 0 28px 68px rgba(0, 0, 0, 0.46);
+            --custom-select-border-strong: color-mix(
+                in srgb,
+                var(--accent) 30%,
+                var(--border-dark-strong) 70%
+            );
+            --custom-select-panel-border: color-mix(
+                in srgb,
+                var(--border-dark-strong) 88%,
+                white 12%
+            );
+            --custom-select-icon-bg: color-mix(
+                in srgb,
+                var(--surface-alt) 78%,
+                black 22%
+            );
+            --custom-select-icon-border: color-mix(
+                in srgb,
+                var(--border-dark-strong) 82%,
+                white 18%
+            );
         }
     }
 
     .custom-select-label {
-        font-size: 0.8rem;
-        font-weight: 700;
-        letter-spacing: 0.02em;
+        font-family: "Fira Code", "Cascadia Code", monospace;
+        font-size: 0.68rem;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
     }
 
     .custom-select-trigger {
+        position: relative;
         display: grid;
         grid-template-columns: auto minmax(0, 1fr) auto;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
         width: 100%;
-        padding: 8px 10px 8px 8px;
+        height: var(--control-height, 48px);
+        min-height: var(--control-height, 48px);
+        padding: 10px 12px 10px 10px;
         border: 1px solid var(--custom-select-border);
-        border-radius: var(--radius-lg);
         background: var(--custom-select-trigger-bg);
-        box-shadow: var(--custom-select-shadow);
+        box-shadow: none;
+        appearance: none;
         color: var(--text);
         text-align: left;
+        cursor: pointer;
+        overflow: hidden;
         transition:
             border-color 160ms ease,
-            box-shadow 160ms ease,
             transform 160ms ease;
     }
 
     .custom-select-trigger:hover,
     .custom-select-trigger:focus-visible,
     .custom-select-trigger.is-open {
-        border-color: color-mix(in srgb, var(--accent) 42%, white 58%);
-        box-shadow:
-            var(--custom-select-shadow),
-            0 0 0 4px rgba(196, 43, 13, 0.08);
+        border-color: var(--custom-select-border-strong);
+        box-shadow: none;
+        transform: none;
     }
 
     .custom-select-trigger:focus-visible {
-        outline: none;
+        outline: 3px solid var(--accent-dim);
+        outline-offset: -1px;
+    }
+
+    .custom-select-trigger:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+        transform: none;
+        box-shadow: none;
     }
 
     .custom-select-trigger.is-compact {
-        padding: 6px 8px 6px 6px;
+        min-height: 36px;
+        padding: 4px 8px 4px 6px;
         gap: 8px;
-        border-radius: var(--radius-md);
     }
 
     .custom-select-trigger-icon,
@@ -404,88 +481,102 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 42px;
-        height: 42px;
-        border-radius: var(--radius-md);
-        background: color-mix(
-            in srgb,
-            var(--surface) 78%,
-            var(--surface-alt) 22%
-        );
-        color: color-mix(in srgb, var(--text-dim) 78%, var(--text) 22%);
-        border: 1px solid
-            color-mix(in srgb, var(--border-strong) 72%, transparent 28%);
-        box-shadow: inset 0 1px 0 color-mix(in srgb, white 28%, transparent 72%);
-        font-size: 1.05rem;
+        width: 28px;
+        height: 28px;
+        background: var(--surface-alt);
+        color: var(--accent);
+        border: 1px solid var(--border-strong);
+        box-shadow: none;
+        font-size: 0.82rem;
         line-height: 1;
+        flex-shrink: 0;
     }
 
     .custom-select-trigger.is-compact .custom-select-trigger-icon,
     .custom-select-option.is-compact .custom-select-option-icon {
-        width: 34px;
-        height: 34px;
-        border-radius: var(--radius-sm);
-        font-size: 0.92rem;
+        width: 22px;
+        height: 22px;
+        font-size: 0.72rem;
     }
 
     .custom-select-trigger-icon.tone-admin,
     .custom-select-option-icon.tone-admin {
-        color: #184fae;
-        background: rgba(210, 229, 255, 0.8);
+        color: var(--accent);
+        border-color: var(--accent);
+        background: var(--surface-alt);
     }
 
     .custom-select-trigger-icon.tone-manager,
     .custom-select-option-icon.tone-manager {
-        color: #0e7b68;
-        background: rgba(201, 247, 234, 0.8);
+        color: var(--accent);
+        border-color: var(--border-strong);
+        background: var(--surface-alt);
     }
 
     .custom-select-trigger-icon.tone-editor,
     .custom-select-option-icon.tone-editor {
-        color: #9a4a07;
-        background: rgba(255, 227, 198, 0.8);
+        color: var(--accent);
+        border-color: var(--border-strong);
+        background: var(--surface-alt);
     }
 
     .custom-select-trigger-copy,
     .custom-select-option-copy {
         display: grid;
-        gap: 3px;
+        gap: 1px;
         min-width: 0;
     }
 
     .custom-select-trigger-copy strong,
     .custom-select-option-copy strong {
-        font-size: 0.94rem;
+        font-size: 0.88rem;
+        font-weight: 700;
         letter-spacing: 0.01em;
+        line-height: 1.15;
+        overflow-wrap: anywhere;
     }
 
     .custom-select-trigger.is-compact .custom-select-trigger-copy strong,
     .custom-select-option.is-compact .custom-select-option-copy strong {
-        font-size: 0.84rem;
+        font-size: 0.78rem;
     }
 
-    .custom-select-trigger-copy small,
-    .custom-select-option-copy small {
+    .custom-select-trigger-copy small {
         color: var(--text-dim);
-        font-size: 0.77rem;
-        line-height: 1.4;
+        font-size: 0.68rem;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
     }
 
-    .custom-select-trigger.is-compact .custom-select-trigger-copy small,
-    .custom-select-option.is-compact .custom-select-option-copy small {
-        font-size: 0.72rem;
+    .custom-select-trigger.is-compact .custom-select-trigger-copy small {
+        font-size: 0.64rem;
     }
 
     .custom-select-trigger-chevron {
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: 1px solid transparent;
         color: var(--text-dim);
-        transition: transform 160ms ease;
+        transition:
+            transform 160ms ease,
+            color 160ms ease,
+            border-color 160ms ease,
+            background 160ms ease;
     }
 
     .custom-select-trigger.is-open .custom-select-trigger-chevron {
         transform: rotate(180deg);
+    }
+
+    .custom-select-trigger:hover .custom-select-trigger-chevron,
+    .custom-select-trigger:focus-visible .custom-select-trigger-chevron,
+    .custom-select-trigger.is-open .custom-select-trigger-chevron {
+        color: var(--accent);
+        border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+        background: var(--accent-faint);
     }
 
     .custom-select-menu-wrap {
@@ -497,63 +588,144 @@
         top: auto;
     }
 
+    .custom-select-menu-wrap.is-mobile-sheet {
+        z-index: 1300;
+    }
+
     .custom-select-menu {
         display: grid;
-        gap: 8px;
-        padding: 10px;
+        gap: 0;
+        padding: 0;
         overflow-y: auto;
-        border-radius: var(--radius-xl);
-        border: 1px solid var(--custom-select-panel-border);
-        background: var(--custom-select-panel-bg);
-        backdrop-filter: blur(20px);
-        box-shadow: var(--custom-select-shadow-strong);
+        border: 1px solid var(--border-strong);
+        background-color: var(--surface);
         scrollbar-color: var(--border-strong) transparent;
+        animation: custom-select-panel-in 150ms ease;
+    }
+
+    .custom-select-menu.is-mobile-sheet {
+        padding: 0;
+        border-color: color-mix(in srgb, var(--accent) 24%, var(--border-strong));
     }
 
     .custom-select-option {
+        position: relative;
         display: grid;
         grid-template-columns: auto minmax(0, 1fr) auto;
         align-items: center;
-        gap: 12px;
+        gap: 8px;
         width: 100%;
-        padding: 10px;
+        height: var(--control-height, 48px);
+        min-height: var(--control-height, 48px);
+        padding: 10px 14px;
         border: 1px solid transparent;
-        border-radius: var(--radius-lg);
         background: transparent;
         color: var(--text);
         text-align: left;
+        cursor: pointer;
+        overflow: hidden;
         transition:
             border-color 140ms ease,
             background 140ms ease,
             transform 140ms ease;
     }
 
+    .custom-select-option::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 3px;
+        background: var(--accent);
+        opacity: 0;
+        transition: opacity 140ms ease;
+    }
+
     .custom-select-option.is-compact {
-        gap: 10px;
-        padding: 8px;
-        border-radius: var(--radius-md);
+        gap: 6px;
+        min-height: 36px;
+        padding: 5px 12px;
+    }
+
+    .custom-select-option + .custom-select-option {
+        border-top-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
     }
 
     .custom-select-option.is-highlighted,
     .custom-select-option:hover,
     .custom-select-option:focus-visible {
-        border-color: rgba(196, 43, 13, 0.14);
-        background: var(--custom-select-hover-bg);
-        transform: translateY(-1px);
+        border-color: color-mix(in srgb, var(--accent) 16%, var(--border));
+        background: var(--accent-faint);
         outline: none;
     }
 
     .custom-select-option.is-selected {
-        border-color: color-mix(in srgb, var(--accent) 34%, white 66%);
-        background: var(--custom-select-selected-bg);
+        border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+        background: var(--accent-dim);
+    }
+
+    .custom-select-option.is-highlighted::before,
+    .custom-select-option:hover::before,
+    .custom-select-option:focus-visible::before,
+    .custom-select-option.is-selected::before {
+        opacity: 1;
     }
 
     .custom-select-option-check {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 18px;
-        height: 18px;
+        width: 16px;
+        height: 16px;
         color: var(--accent);
+        flex-shrink: 0;
+    }
+
+    @keyframes custom-select-panel-in {
+        from {
+            opacity: 0;
+            transform: translateY(6px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @media (max-width: 640px) {
+        .custom-select {
+            gap: 8px;
+        }
+
+        .custom-select-label {
+            font-size: 0.64rem;
+        }
+
+        .custom-select-trigger {
+            height: var(--control-height, 48px);
+            min-height: var(--control-height, 48px);
+            gap: 10px;
+            padding: 10px 10px 10px 8px;
+        }
+
+        .custom-select-trigger-copy strong,
+        .custom-select-option-copy strong {
+            font-size: 0.82rem;
+        }
+
+        .custom-select-trigger-copy small {
+            font-size: 0.64rem;
+        }
+
+        .custom-select-menu.is-mobile-sheet {
+            padding: 0;
+        }
+
+        .custom-select-option {
+            height: var(--control-height, 48px);
+            min-height: var(--control-height, 48px);
+            gap: 7px;
+            padding: 10px 12px;
+        }
     }
 </style>

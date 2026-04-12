@@ -25,6 +25,29 @@ export type AdminMusic = {
   owner_user_id: string | null
 }
 
+export type AdminMusicPlaytimeTrackSummary = {
+  track_index: number
+  track_name: string
+  instrument_name: string
+  total_seconds: number
+}
+
+export type AdminMusicPlaytimeLeaderboardEntry = {
+  user_id: string
+  username: string
+  display_name: string | null
+  avatar_url: string | null
+  best_track_seconds: number
+  track_totals: AdminMusicPlaytimeTrackSummary[]
+}
+
+export type AdminMusicPlaytime = {
+  total_seconds: number
+  listener_count: number
+  track_totals: AdminMusicPlaytimeTrackSummary[]
+  leaderboard: AdminMusicPlaytimeLeaderboardEntry[]
+}
+
 export type StemQualityProfile = 'standard' | 'small' | 'very-small' | 'tiny'
 
 export type GlobalRole = 'superadmin' | 'admin' | 'manager' | 'editor' | 'user'
@@ -41,6 +64,21 @@ export type AppUser = {
   managed_ensemble_ids: string[]
   editable_ensemble_ids: string[]
   created_by_user_id: string | null
+}
+
+export type AdminUserMetadataScorePlaytime = {
+  music_id: string
+  title: string
+  icon: string | null
+  icon_image_url: string | null
+  public_url: string
+  total_seconds: number
+}
+
+export type AdminUserMetadata = {
+  last_login_at: string | null
+  total_playtime_seconds: number
+  score_playtimes: AdminUserMetadataScorePlaytime[]
 }
 
 export type EnsembleMember = {
@@ -345,6 +383,18 @@ function normalizePublicMusic(music: PublicMusic): PublicMusic {
   }
 }
 
+function normalizeAdminMusicPlaytime(
+  playtime: AdminMusicPlaytime,
+): AdminMusicPlaytime {
+  return {
+    ...playtime,
+    leaderboard: playtime.leaderboard.map((entry) => ({
+      ...entry,
+      avatar_url: resolveBackendAssetUrl(entry.avatar_url),
+    })),
+  }
+}
+
 function normalizeUserLibraryResponse(library: UserLibraryResponse): UserLibraryResponse {
   return {
     ensembles: library.ensembles.map((ensemble) => ({
@@ -503,6 +553,28 @@ export async function createAdminUserLoginLink(
   })
 }
 
+function normalizeAdminUserMetadata(
+  metadata: AdminUserMetadata,
+): AdminUserMetadata {
+  return {
+    ...metadata,
+    score_playtimes: metadata.score_playtimes.map((entry) => ({
+      ...entry,
+      icon_image_url: resolveBackendAssetUrl(entry.icon_image_url),
+    })),
+  }
+}
+
+export async function fetchAdminUserMetadata(
+  userId: string,
+): Promise<AdminUserMetadata> {
+  const metadata = await requestJson<AdminUserMetadata>(`/admin/users/${userId}/metadata`, {
+    authenticated: true,
+  })
+
+  return normalizeAdminUserMetadata(metadata)
+}
+
 export async function listEnsembles(): Promise<Ensemble[]> {
   return requestJson<Ensemble[]>('/admin/ensembles', {
     authenticated: true,
@@ -546,6 +618,22 @@ export async function removeUserFromEnsemble(
   })
 }
 
+export async function setEnsembleMembers(
+  ensembleId: string,
+  members: Array<{ userId: string; role: EnsembleRole }>,
+): Promise<void> {
+  await requestJson(`/admin/ensembles/${ensembleId}/users`, {
+    method: 'PATCH',
+    authenticated: true,
+    body: JSON.stringify({
+      members: members.map((member) => ({
+        user_id: member.userId,
+        role: member.role,
+      })),
+    }),
+  })
+}
+
 export async function addMusicToEnsemble(
   musicId: string,
   ensembleId: string,
@@ -566,6 +654,17 @@ export async function removeMusicFromEnsemble(
   })
 }
 
+export async function setMusicEnsembles(
+  musicId: string,
+  ensembleIds: string[],
+): Promise<void> {
+  await requestJson(`/admin/musics/${musicId}/ensembles`, {
+    method: 'PATCH',
+    authenticated: true,
+    body: JSON.stringify({ ensemble_ids: ensembleIds }),
+  })
+}
+
 export async function uploadMusic(
   payload: {
     file: File
@@ -574,9 +673,11 @@ export async function uploadMusic(
     iconFile?: File | null
     publicId: string
     qualityProfile: StemQualityProfile
-    ensembleId: string
+    ensembleIds?: string[]
+    ensembleId?: string
   },
 ): Promise<AdminMusic> {
+  const ensembleIds = payload.ensembleIds ?? (payload.ensembleId ? [payload.ensembleId] : [])
   const body = new FormData()
   body.append('file', payload.file)
   body.append('title', payload.title)
@@ -584,7 +685,9 @@ export async function uploadMusic(
   if (payload.iconFile) body.append('icon_file', payload.iconFile)
   body.append('public_id', payload.publicId)
   body.append('quality_profile', payload.qualityProfile)
-  body.append('ensemble_id', payload.ensembleId)
+  for (const ensembleId of ensembleIds) {
+    body.append('ensemble_id', ensembleId)
+  }
 
   const music = await requestJson<AdminMusic>('/admin/musics', {
     method: 'POST',
@@ -602,6 +705,16 @@ export async function retryRender(id: string): Promise<AdminMusic> {
   })
 
   return normalizeAdminMusic(music)
+}
+
+export async function fetchAdminMusicPlaytime(
+  id: string,
+): Promise<AdminMusicPlaytime> {
+  const playtime = await requestJson<AdminMusicPlaytime>(`/admin/musics/${id}/playtime`, {
+    authenticated: true,
+  })
+
+  return normalizeAdminMusicPlaytime(playtime)
 }
 
 export async function updateMusicMetadata(
@@ -636,6 +749,26 @@ export async function fetchPublicMusic(accessKey: string): Promise<PublicMusic> 
 export async function fetchStems(accessKey: string): Promise<Stem[]> {
   const stems = await requestJson<Stem[]>(`/public/${encodeURIComponent(accessKey)}/stems`)
   return stems.map(normalizeStem)
+}
+
+export async function reportPublicMusicPlaytime(
+  accessKey: string,
+  payload: {
+    tracks: Array<{
+      track_index: number
+      seconds: number
+    }>
+  },
+  options: {
+    keepalive?: boolean
+  } = {},
+): Promise<void> {
+  await requestJson(`/public/${encodeURIComponent(accessKey)}/playtime`, {
+    method: 'POST',
+    authenticated: true,
+    keepalive: options.keepalive,
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function exchangeLoginToken(token: string): Promise<AuthTokenResponse> {

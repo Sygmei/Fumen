@@ -1,13 +1,14 @@
 <script lang="ts">
     import {
+        fetchAdminMusicPlaytime,
         uploadMusic,
         deleteMusic,
         updateMusicMetadata,
-        addMusicToEnsemble,
-        removeMusicFromEnsemble,
+        setMusicEnsembles,
         retryRender,
         STEM_QUALITY_PROFILES,
         type AdminMusic,
+        type AdminMusicPlaytime,
         type AppUser,
         type Ensemble,
         type StemQualityProfile,
@@ -33,7 +34,12 @@
         canEditOwnedScore,
         canManageScoreEnsembles,
     } from "../lib/admin-permissions";
-    import { formatBytes, prettyDate, qualityProfileLabel } from "../lib/utils";
+    import {
+        formatBytes,
+        formatPlaytimeDuration,
+        prettyDate,
+        qualityProfileLabel,
+    } from "../lib/utils";
 
     let {
         currentUser,
@@ -85,6 +91,9 @@
 
     // Score info
     let infoMusicId = $state("");
+    let infoPlaytime = $state<AdminMusicPlaytime | null>(null);
+    let infoPlaytimeLoading = $state(false);
+    let infoPlaytimeError = $state("");
 
     // Other
     let retryingFor = $state("");
@@ -133,6 +142,15 @@
     const activeInfoMusic = $derived(
         musics.find((m) => m.id === infoMusicId) ?? null,
     );
+
+    function isProcessingMusic(music: AdminMusic) {
+        return [
+            music.audio_status,
+            music.midi_status,
+            music.musicxml_status,
+            music.stems_status,
+        ].includes("processing");
+    }
 
     const filteredPickerEnsembles = $derived.by(() => {
         const query = ensemblePickerSearchQuery.trim().toLowerCase();
@@ -215,17 +233,13 @@
                 iconFile: selectedIconFile,
                 publicId: uploadPublicId,
                 qualityProfile: uploadQualityProfile,
-                ensembleId: uploadEnsembleIds[0] ?? "",
+                ensembleIds: uploadEnsembleIds,
             });
-            for (const ensembleId of uploadEnsembleIds.slice(1)) {
-                if (!uploaded.ensemble_ids.includes(ensembleId)) {
-                    await addMusicToEnsemble(uploaded.id, ensembleId);
-                }
-            }
-            await onRefresh();
             uploadBusy = false;
-            closeCreateScoreModal(true);
-            onSuccess("Upload completed.");
+            onMusicUpdated(uploaded);
+            closeCreateScoreModal();
+            void onRefresh();
+            onSuccess("Upload started. The score will keep processing in the background.");
         } catch (error) {
             onError(error instanceof Error ? error.message : "Upload failed");
         } finally {
@@ -297,10 +311,10 @@
         }
         savingScoreEnsembles = true;
         try {
-            for (const id of toAdd)
-                await addMusicToEnsemble(activeEnsemblePickerMusic.id, id);
-            for (const id of toRemove)
-                await removeMusicFromEnsemble(activeEnsemblePickerMusic.id, id);
+            await setMusicEnsembles(
+                activeEnsemblePickerMusic.id,
+                [...staged].sort((left, right) => left.localeCompare(right)),
+            );
             await onRefresh();
             onSuccess("Score ensembles updated.");
             ensemblePickerMode = "";
@@ -368,11 +382,39 @@
     // Score info
     function openScoreInfoModal(music: AdminMusic) {
         infoMusicId = music.id;
+        infoPlaytime = null;
+        infoPlaytimeError = "";
+        void loadScorePlaytime(music.id);
         openDownloadMenuFor = "";
     }
 
     function closeScoreInfoModal() {
         infoMusicId = "";
+        infoPlaytime = null;
+        infoPlaytimeLoading = false;
+        infoPlaytimeError = "";
+    }
+
+    async function loadScorePlaytime(musicId: string) {
+        infoPlaytimeLoading = true;
+        infoPlaytimeError = "";
+        try {
+            const playtime = await fetchAdminMusicPlaytime(musicId);
+            if (infoMusicId === musicId) {
+                infoPlaytime = playtime;
+            }
+        } catch (error) {
+            if (infoMusicId === musicId) {
+                infoPlaytimeError =
+                    error instanceof Error
+                        ? error.message
+                        : "Unable to load playtime";
+            }
+        } finally {
+            if (infoMusicId === musicId) {
+                infoPlaytimeLoading = false;
+            }
+        }
     }
 
     // Retry render
@@ -487,7 +529,9 @@
                 {#each filteredMusics as music}
                     <article
                         class="music-card admin-score-card"
+                        class:processing={isProcessingMusic(music)}
                         class:download-open={openDownloadMenuFor === music.id}
+                        aria-busy={isProcessingMusic(music)}
                     >
                         <div class="admin-score-header">
                             <h3 class="admin-score-title">
@@ -501,6 +545,11 @@
                                     target="_blank"
                                     rel="noreferrer">{music.title}</a
                                 >
+                                {#if isProcessingMusic(music)}
+                                    <span class="status-pill admin-score-processing-pill"
+                                        >Processing</span
+                                    >
+                                {/if}
                             </h3>
                             <div
                                 class="download-menu admin-score-download-menu"
@@ -922,19 +971,112 @@
         {#if activeInfoMusic.midi_error}
             <p class="hint">{activeInfoMusic.midi_error}</p>
         {/if}
+        <section class="admin-playtime-section">
+            <div class="admin-playtime-header">
+                <div>
+                    <p class="meta-label">Playtime</p>
+                    <h3>Listening activity</h3>
+                </div>
+                {#if infoPlaytime}
+                    <span class="status-pill admin-playtime-total-badge"
+                        >{formatPlaytimeDuration(infoPlaytime.total_seconds)}
+                        total</span
+                    >
+                {/if}
+            </div>
+
+            {#if infoPlaytimeLoading}
+                <p class="hint">Loading playtime...</p>
+            {:else if infoPlaytimeError}
+                <p class="status error">{infoPlaytimeError}</p>
+            {:else if infoPlaytime}
+                <div class="admin-playtime-layout">
+                    <section class="admin-playtime-card">
+                        <h3>User leaderboard</h3>
+                        {#if infoPlaytime.leaderboard.length === 0}
+                            <p class="hint">
+                                No user playtime has been recorded yet.
+                            </p>
+                        {:else}
+                            <div class="admin-playtime-user-list">
+                                {#each infoPlaytime.leaderboard as entry, index}
+                                    <details
+                                        class="admin-playtime-user-row"
+                                    >
+                                        <summary
+                                            class="admin-playtime-user-head"
+                                        >
+                                            <div
+                                                class="admin-user-avatar admin-playtime-avatar"
+                                            >
+                                                {#if entry.avatar_url}
+                                                    <img
+                                                        src={entry.avatar_url}
+                                                        alt=""
+                                                        class="admin-user-avatar-img"
+                                                    />
+                                                {:else}
+                                                    {(entry.display_name ??
+                                                        entry.username)
+                                                        .slice(0, 1)
+                                                        .toUpperCase()}
+                                                {/if}
+                                            </div>
+                                            <div
+                                                class="admin-playtime-user-copy"
+                                            >
+                                                <strong
+                                                    >#{index + 1}
+                                                    {entry.display_name ??
+                                                        entry.username}</strong
+                                                >
+                                                <span class="subtle"
+                                                    >@{entry.username}</span
+                                                >
+                                            </div>
+                                            <span class="status-pill"
+                                                >{formatPlaytimeDuration(
+                                                    entry.best_track_seconds,
+                                                )}</span
+                                            >
+                                        </summary>
+                                        <div class="admin-playtime-track-list">
+                                            {#each entry.track_totals as track}
+                                                <article
+                                                    class="admin-playtime-track-row"
+                                                >
+                                                    <div
+                                                        class="admin-playtime-track-copy"
+                                                    >
+                                                        <strong
+                                                            >{track.track_name}</strong
+                                                        >
+                                                        <span class="subtle"
+                                                            >{track.instrument_name}</span
+                                                        >
+                                                    </div>
+                                                    <strong
+                                                        >{formatPlaytimeDuration(
+                                                            track.total_seconds,
+                                                        )}</strong
+                                                    >
+                                                </article>
+                                            {/each}
+                                        </div>
+                                    </details>
+                                {/each}
+                            </div>
+                        {/if}
+                    </section>
+                </div>
+            {/if}
+        </section>
         <div class="admin-score-links">
             <a
                 href={activeInfoMusic.public_url}
                 target="_blank"
-                rel="noreferrer">Random link</a
+                rel="noreferrer">Public link</a
             >
-            {#if activeInfoMusic.public_id_url}
-                <a
-                    href={activeInfoMusic.public_id_url}
-                    target="_blank"
-                    rel="noreferrer">Public id link</a
-                >
-            {/if}
         </div>
         {#if activeInfoMusic.stems_status !== "ready" && canEditOwnedScore(activeInfoMusic, currentUser)}
             <div class="actions admin-user-modal-actions">

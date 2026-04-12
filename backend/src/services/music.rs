@@ -3,10 +3,14 @@ use crate::models::{
     EnsembleRecord, EnsembleSummaryRecord, MusicEnsembleLinkRecord, MusicRecord, StemRecord,
     UserEnsembleMembershipRecord,
 };
-use crate::schemas::{AdminMusicResponse, PublicMusicResponse, StemInfo};
+use crate::schemas::{
+    AdminMusicPlaytimeResponse, AdminMusicResponse, AdminUserScorePlaytimeResponse,
+    MusicPlaytimeLeaderboardEntryResponse, MusicPlaytimeTrackSummaryResponse, PublicMusicResponse,
+    StemInfo,
+};
 use crate::storage::Storage;
 use crate::{
-    AppError, AppRole, AppState, AuthContext, sanitize_content_disposition,
+    AppError, AppRole, AppState, AuthContext, sanitize_content_disposition, utc_now_string,
 };
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -53,6 +57,29 @@ struct UserAccessibleMusicRow {
     ensemble_name: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct AdminMusicPlaytimeRow {
+    user_id: String,
+    username: String,
+    display_name: Option<String>,
+    avatar_image_key: Option<String>,
+    track_index: i64,
+    track_name: String,
+    instrument_name: String,
+    total_seconds: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct AdminUserScorePlaytimeRow {
+    music_id: String,
+    title: String,
+    icon: Option<String>,
+    icon_image_key: Option<String>,
+    public_token: String,
+    public_id: Option<String>,
+    total_seconds: f64,
+}
+
 fn accessible_music_row_to_tuple(row: UserAccessibleMusicRow) -> (MusicRecord, String, String) {
     (
         MusicRecord {
@@ -83,6 +110,26 @@ fn accessible_music_row_to_tuple(row: UserAccessibleMusicRow) -> (MusicRecord, S
         row.ensemble_id,
         row.ensemble_name,
     )
+}
+
+fn resolve_user_avatar_url(
+    storage: &Storage,
+    user_id: &str,
+    avatar_image_key: Option<&str>,
+) -> Option<String> {
+    avatar_image_key
+        .and_then(|key| storage.public_url(key))
+        .or_else(|| avatar_image_key.map(|_| format!("/api/users/{user_id}/avatar")))
+}
+
+fn resolve_music_public_url(
+    config: &AppConfig,
+    public_token: &str,
+    public_id: Option<&str>,
+) -> String {
+    public_id
+        .map(|public_id| config.public_url_for(public_id))
+        .unwrap_or_else(|| config.public_url_for(public_token))
 }
 
 pub(crate) async fn fetch_stems_total(db: &PgPool, music_id: &str) -> i64 {
@@ -433,6 +480,224 @@ pub(crate) async fn find_public_stem(
         .await?)
 }
 
+pub(crate) async fn add_user_track_playtime(
+    db: &PgPool,
+    user_id: &str,
+    music_id: &str,
+    track_totals: &[(i64, f64)],
+) -> Result<(), AppError> {
+    if track_totals.is_empty() {
+        return Ok(());
+    }
+
+    let updated_at = utc_now_string();
+    let mut tx = db.begin().await?;
+    for (track_index, total_seconds) in track_totals {
+        sqlx::query(
+            r#"
+            INSERT INTO user_music_track_playtime (user_id, music_id, track_index, total_seconds, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (user_id, music_id, track_index)
+            DO UPDATE SET
+                total_seconds = user_music_track_playtime.total_seconds + EXCLUDED.total_seconds,
+                updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(user_id)
+        .bind(music_id)
+        .bind(track_index)
+        .bind(total_seconds)
+        .bind(&updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    Ok(())
+}
+
+#[tracing::instrument(skip(db, storage), fields(music_id = %music_id))]
+pub(crate) async fn build_admin_music_playtime_response(
+    db: &PgPool,
+    storage: &Storage,
+    music_id: &str,
+) -> Result<AdminMusicPlaytimeResponse, AppError> {
+    let stems = find_public_stems(db, db, music_id).await?;
+    let rows = sqlx::query_as::<_, AdminMusicPlaytimeRow>(
+        r#"
+        SELECT
+            p.user_id,
+            u.username,
+            u.display_name,
+            u.avatar_image_key,
+            s.track_index,
+            s.track_name,
+            s.instrument_name,
+            p.total_seconds
+        FROM user_music_track_playtime p
+        JOIN users u
+            ON u.id = p.user_id
+        JOIN stems s
+            ON s.music_id = p.music_id
+           AND s.track_index = p.track_index
+        WHERE p.music_id = $1
+          AND p.total_seconds > 0
+        ORDER BY p.total_seconds DESC, u.username ASC, s.track_index ASC
+        "#,
+    )
+    .bind(music_id)
+    .fetch_all(db)
+    .await?;
+
+    let mut overall_tracks = stems
+        .iter()
+        .map(|stem| {
+            (
+                stem.track_index,
+                MusicPlaytimeTrackSummaryResponse {
+                    track_index: stem.track_index,
+                    track_name: stem.track_name.clone(),
+                    instrument_name: stem.instrument_name.clone(),
+                    total_seconds: 0.0,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut leaderboard = HashMap::<String, MusicPlaytimeLeaderboardEntryResponse>::new();
+    let mut total_seconds = 0.0;
+
+    for row in rows {
+        total_seconds += row.total_seconds;
+
+        if let Some(track) = overall_tracks.get_mut(&row.track_index) {
+            track.total_seconds += row.total_seconds;
+        }
+
+        let entry = leaderboard.entry(row.user_id.clone()).or_insert_with(|| {
+            MusicPlaytimeLeaderboardEntryResponse {
+                user_id: row.user_id.clone(),
+                username: row.username.clone(),
+                display_name: row.display_name.clone(),
+                avatar_url: resolve_user_avatar_url(
+                    storage,
+                    &row.user_id,
+                    row.avatar_image_key.as_deref(),
+                ),
+                best_track_seconds: 0.0,
+                track_totals: Vec::new(),
+            }
+        });
+        entry.best_track_seconds = entry.best_track_seconds.max(row.total_seconds);
+        entry.track_totals.push(MusicPlaytimeTrackSummaryResponse {
+            track_index: row.track_index,
+            track_name: row.track_name,
+            instrument_name: row.instrument_name,
+            total_seconds: row.total_seconds,
+        });
+    }
+
+    let mut track_totals = overall_tracks.into_values().collect::<Vec<_>>();
+    track_totals.sort_by(|left, right| {
+        right
+            .total_seconds
+            .partial_cmp(&left.total_seconds)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(left.track_index.cmp(&right.track_index))
+    });
+
+    let mut leaderboard = leaderboard.into_values().collect::<Vec<_>>();
+    for entry in &mut leaderboard {
+        entry.track_totals.sort_by(|left, right| {
+            right
+                .total_seconds
+                .partial_cmp(&left.total_seconds)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.track_index.cmp(&right.track_index))
+        });
+    }
+    leaderboard.sort_by(|left, right| {
+        right
+            .best_track_seconds
+            .partial_cmp(&left.best_track_seconds)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(left.username.cmp(&right.username))
+    });
+
+    Ok(AdminMusicPlaytimeResponse {
+        total_seconds,
+        listener_count: leaderboard.len() as i64,
+        track_totals,
+        leaderboard,
+    })
+}
+
+#[tracing::instrument(skip(config, storage, db), fields(user_id = %user_id))]
+pub(crate) async fn build_admin_user_metadata_playtime_response(
+    config: &AppConfig,
+    storage: &Storage,
+    db: &PgPool,
+    user_id: &str,
+) -> Result<(f64, Vec<AdminUserScorePlaytimeResponse>), AppError> {
+    let rows = sqlx::query_as::<_, AdminUserScorePlaytimeRow>(
+        r#"
+        SELECT
+            m.id AS music_id,
+            m.title,
+            m.icon,
+            m.icon_image_key,
+            m.public_token,
+            m.public_id,
+            SUM(p.total_seconds)::DOUBLE PRECISION AS total_seconds
+        FROM user_music_track_playtime p
+        JOIN musics m
+            ON m.id = p.music_id
+        WHERE p.user_id = $1
+          AND p.total_seconds > 0
+        GROUP BY
+            m.id,
+            m.title,
+            m.icon,
+            m.icon_image_key,
+            m.public_token,
+            m.public_id
+        ORDER BY total_seconds DESC, m.title ASC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+
+    let mut total_seconds = 0.0;
+    let mut score_playtimes = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        total_seconds += row.total_seconds;
+        let icon_image_url = row.icon_image_key.as_ref().map(|key| {
+            storage
+                .public_url(key)
+                .unwrap_or_else(|| format!("/api/public/{}/icon", row.public_token))
+        });
+        score_playtimes.push(AdminUserScorePlaytimeResponse {
+            music_id: row.music_id,
+            title: row.title,
+            icon: row.icon,
+            icon_image_url,
+            public_url: resolve_music_public_url(
+                config,
+                &row.public_token,
+                row.public_id.as_deref(),
+            ),
+            total_seconds: row.total_seconds,
+        });
+    }
+
+    Ok((total_seconds, score_playtimes))
+}
+
+#[tracing::instrument(
+    skip(state, stems, error),
+    fields(music_id = %music_id, stem_count = stems.len(), stems_status = status)
+)]
 pub(crate) async fn store_stems(
     state: &AppState,
     music_id: &str,
@@ -539,6 +804,7 @@ pub(crate) async fn build_public_stem_infos(
     Ok(resolved_infos)
 }
 
+#[tracing::instrument(skip(state, outcome), fields(music_id = %music_id, kind = kind))]
 pub(crate) async fn store_conversion(
     state: &AppState,
     music_id: &str,
@@ -647,6 +913,9 @@ pub(crate) fn record_to_admin_response(
         .public_id
         .as_ref()
         .map(|public_id| config.public_url_for(public_id));
+    let public_url = public_id_url
+        .clone()
+        .unwrap_or_else(|| config.public_url_for(&record.public_token));
     let midi_download_url = record.midi_object_key.as_ref().map(|object_key| {
         storage
             .public_url(object_key)
@@ -679,7 +948,7 @@ pub(crate) fn record_to_admin_response(
         stems_error: record.stems_error,
         public_token: record.public_token.clone(),
         public_id: record.public_id,
-        public_url: config.public_url_for(&record.public_token),
+        public_url,
         public_id_url,
         download_url,
         midi_download_url,
@@ -741,6 +1010,7 @@ pub(crate) fn record_to_public_response(
     }
 }
 
+#[tracing::instrument(skip(state), fields(music_id = %music_id))]
 pub(crate) async fn delete_music_record_and_assets(
     state: &AppState,
     music_id: &str,
@@ -797,4 +1067,3 @@ fn gzip_bytes(bytes: &Bytes) -> Result<Bytes, AppError> {
     let compressed = encoder.finish().map_err(AppError::from)?;
     Ok(Bytes::from(compressed))
 }
-

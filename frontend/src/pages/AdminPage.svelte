@@ -15,32 +15,18 @@
     import AdminScoresSection from "./AdminScoresSection.svelte";
     import { canAccessAdmin, canUseUsersSection } from "../lib/admin-permissions";
 
-    function readAdminCache<T>(key: string): T[] {
-        try {
-            const raw = localStorage.getItem(key);
-            return raw ? (JSON.parse(raw) as T[]) : [];
-        } catch {
-            return [];
-        }
-    }
-
-    const cachedMusics = readAdminCache<AdminMusic>("cached-admin-musics");
-    const cachedAdminUsers = readAdminCache<AppUser>("cached-admin-users");
-    const cachedEnsembles = readAdminCache<Ensemble>("cached-admin-ensembles");
-
     const {
         currentUser,
         userLoading,
-        userError,
         preloadedUsername,
         onShowQr,
         onShowCredential,
         onLogout,
         onMyAccount,
+        onAppConfig,
     }: {
         currentUser: AppUser | null;
         userLoading: boolean;
-        userError: string;
         preloadedUsername: string;
         onShowQr: () => Promise<void>;
         onShowCredential: (
@@ -50,6 +36,7 @@
         ) => Promise<void>;
         onLogout: () => Promise<void>;
         onMyAccount?: () => void;
+        onAppConfig?: () => void;
     } = $props();
 
     type AdminSection = "users" | "ensembles" | "scores";
@@ -68,9 +55,9 @@
     let adminLoading = $state(false);
     let adminError = $state("");
     let adminSuccess = $state("");
-    let musics = $state<AdminMusic[]>(cachedMusics);
-    let adminUsers = $state<AppUser[]>(cachedAdminUsers);
-    let ensembles = $state<Ensemble[]>(cachedEnsembles);
+    let musics = $state<AdminMusic[]>([]);
+    let adminUsers = $state<AppUser[]>([]);
+    let ensembles = $state<Ensemble[]>([]);
 
     const visibleAdminSectionItems = $derived.by(() =>
         adminSectionItems.filter((section) => {
@@ -91,6 +78,31 @@
         }
     });
 
+    $effect(() => {
+        const shouldPollForProcessing =
+            adminSection === "scores" &&
+            musics.some((music) =>
+                [
+                    music.audio_status,
+                    music.midi_status,
+                    music.musicxml_status,
+                    music.stems_status,
+                ].includes("processing"),
+            );
+
+        if (!shouldPollForProcessing) {
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            if (adminSection === "scores") {
+                void refreshAdminData();
+            }
+        }, 5000);
+
+        return () => window.clearInterval(timer);
+    });
+
     async function refreshAdminData() {
         adminLoading = true;
         adminError = "";
@@ -103,18 +115,6 @@
             musics = musicItems;
             adminUsers = userItems;
             ensembles = ensembleItems;
-            localStorage.setItem(
-                "cached-admin-musics",
-                JSON.stringify(musicItems),
-            );
-            localStorage.setItem(
-                "cached-admin-users",
-                JSON.stringify(userItems),
-            );
-            localStorage.setItem(
-                "cached-admin-ensembles",
-                JSON.stringify(ensembleItems),
-            );
         } catch (error) {
             adminError =
                 error instanceof Error
@@ -133,19 +133,19 @@
     }
 
     async function handleShowScoreQr(music: AdminMusic) {
-        const url = music.public_id_url ?? music.public_url;
+        const url = music.public_url;
         await onShowCredential(
             `Share link for ${music.title}`,
             () => Promise.resolve({ connection_url: url, expires_at: "" }),
             { eyebrow: "Share score", linkLabel: "Share link" },
         );
     }
+
 </script>
 
 <AdminLayout
     {currentUser}
     {userLoading}
-    {userError}
     {preloadedUsername}
     {adminLoading}
     {adminError}
@@ -156,6 +156,7 @@
     {onShowQr}
     onLogout={() => void onLogout()}
     {onMyAccount}
+    {onAppConfig}
     onSectionChange={(section) => (adminSection = section)}
 >
     {#snippet children()}
@@ -211,7 +212,9 @@
                 {musics}
                 {ensembles}
                 onMusicUpdated={(music) => {
-                    musics = musics.map((m) => (m.id === music.id ? music : m));
+                    musics = [...musics.filter((m) => m.id !== music.id), music].sort(
+                        (a, b) => b.created_at.localeCompare(a.created_at),
+                    );
                 }}
                 onRefresh={refreshAdminData}
                 onShowQr={handleShowScoreQr}

@@ -59,6 +59,18 @@ pub(crate) async fn find_session_by_token(
     .await?)
 }
 
+pub(crate) async fn find_user_last_login_at(
+    db: &PgPool,
+    user_id: &str,
+) -> Result<Option<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT created_at FROM user_sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?)
+}
+
 pub(crate) async fn require_user_session(
     state: &AppState,
     headers: &HeaderMap,
@@ -89,6 +101,7 @@ pub(crate) async fn require_user_session(
     Ok((user, session, claims.exp))
 }
 
+#[tracing::instrument(skip(state, headers))]
 pub(crate) async fn build_auth_context(
     state: &AppState,
     headers: &HeaderMap,
@@ -132,6 +145,7 @@ pub(crate) async fn build_auth_context(
     })
 }
 
+#[tracing::instrument(skip(state, headers))]
 pub(crate) async fn require_admin_context(
     state: &AppState,
     headers: &HeaderMap,
@@ -380,14 +394,12 @@ pub(crate) async fn fetch_editable_ensemble_ids(
     .await?)
 }
 
-pub(crate) async fn fetch_all_ensemble_ids(
-    db: &PgPool,
-) -> Result<Vec<String>, AppError> {
-    Ok(sqlx::query_scalar::<_, String>(
-        "SELECT id FROM ensembles ORDER BY id ASC",
+pub(crate) async fn fetch_all_ensemble_ids(db: &PgPool) -> Result<Vec<String>, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT id FROM ensembles ORDER BY id ASC")
+            .fetch_all(db)
+            .await?,
     )
-    .fetch_all(db)
-    .await?)
 }
 
 pub(crate) async fn user_record_to_response(
@@ -410,9 +422,10 @@ pub(crate) async fn user_record_to_response(
         .as_deref()
         .and_then(|key| storage.public_url(key))
         .or_else(|| {
-            record.avatar_image_key.as_ref().map(|_| {
-                format!("/api/users/{}/avatar", record.id)
-            })
+            record
+                .avatar_image_key
+                .as_ref()
+                .map(|_| format!("/api/users/{}/avatar", record.id))
         });
 
     Ok(UserResponse {
@@ -441,13 +454,16 @@ pub(crate) fn auth_context_to_user_response(auth: &AuthContext, storage: &Storag
         .cloned()
         .collect::<Vec<_>>();
     editable_ensemble_ids.sort();
-    let avatar_url = auth.user.avatar_image_key
+    let avatar_url = auth
+        .user
+        .avatar_image_key
         .as_deref()
         .and_then(|key| storage.public_url(key))
         .or_else(|| {
-            auth.user.avatar_image_key.as_ref().map(|_| {
-                format!("/api/users/{}/avatar", auth.user.id)
-            })
+            auth.user
+                .avatar_image_key
+                .as_ref()
+                .map(|_| format!("/api/users/{}/avatar", auth.user.id))
         });
 
     UserResponse {
@@ -463,6 +479,7 @@ pub(crate) fn auth_context_to_user_response(auth: &AuthContext, storage: &Storag
     }
 }
 
+#[tracing::instrument(skip(db, config), fields(user_id = %user_id))]
 pub(crate) async fn create_login_link(
     db: &PgPool,
     config: &AppConfig,
@@ -538,10 +555,7 @@ pub(crate) fn sign_access_token(
     Ok((token, exp))
 }
 
-pub(crate) fn verify_refresh_token(
-    token: &str,
-    secret: &str,
-) -> Result<String, AppError> {
+pub(crate) fn verify_refresh_token(token: &str, secret: &str) -> Result<String, AppError> {
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
     validation.validate_exp = false;
     validation.required_spec_claims = HashSet::new();

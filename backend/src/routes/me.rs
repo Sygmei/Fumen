@@ -88,7 +88,10 @@ async fn update_my_profile(
                 _ => "jpg",
             };
             let key = format!("avatars/{}.{}", user_id, ext);
-            state.storage.upload_bytes(&key, avatar_bytes, &content_type).await?;
+            state
+                .storage
+                .upload_bytes(&key, avatar_bytes, &content_type)
+                .await?;
             Some(key)
         } else {
             existing.avatar_image_key.clone()
@@ -108,7 +111,8 @@ async fn update_my_profile(
     let updated = auth::find_user_by_id(&state.db_rw, &user_id)
         .await?
         .ok_or_else(|| AppError::not_found("User not found"))?;
-    let user_response = auth::user_record_to_response(&state.db_rw, &state.storage, updated).await?;
+    let user_response =
+        auth::user_record_to_response(&state.db_rw, &state.storage, updated).await?;
 
     Ok(Json(CurrentUserResponse {
         session_expires_at: Some(auth::exp_to_timestamp(auth_context.access_token_exp)),
@@ -201,6 +205,9 @@ async fn current_user_library(
             .public_id
             .as_ref()
             .map(|public_id| state.config.public_url_for(public_id));
+        let public_url = public_id_url
+            .clone()
+            .unwrap_or_else(|| state.config.public_url_for(&music_record.public_token));
         let icon_image_url = music_record.icon_image_key.as_ref().map(|key| {
             state
                 .storage
@@ -213,12 +220,15 @@ async fn current_user_library(
             icon: music_record.icon,
             icon_image_url,
             filename: music_record.filename,
-            public_url: state.config.public_url_for(&music_record.public_token),
+            public_url,
             public_id_url,
             created_at: music_record.created_at,
         };
 
-        if let Some(ensemble) = ensembles.iter_mut().find(|ensemble| ensemble.id == ensemble_id) {
+        if let Some(ensemble) = ensembles
+            .iter_mut()
+            .find(|ensemble| ensemble.id == ensemble_id)
+        {
             ensemble.scores.push(score);
         } else {
             ensembles.push(UserLibraryEnsembleResponse {

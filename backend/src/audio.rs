@@ -12,6 +12,7 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 use tokio::process::Command;
+use tokio::task::JoinSet;
 use zip::ZipArchive;
 
 pub const DEFAULT_STEM_QUALITY_PROFILE: &str = "standard";
@@ -223,6 +224,7 @@ struct TrackInfo {
 // Public async entry points
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(skip(config, output_dir), fields(input_path = %input_path.display()))]
 pub async fn generate_midi(
     config: &AppConfig,
     input_path: &Path,
@@ -239,6 +241,7 @@ pub async fn generate_midi(
     .await
 }
 
+#[tracing::instrument(skip(config, output_dir), fields(input_path = %input_path.display()))]
 pub async fn generate_musicxml(
     config: &AppConfig,
     input_path: &Path,
@@ -255,6 +258,7 @@ pub async fn generate_musicxml(
     .await
 }
 
+#[tracing::instrument(skip(config, output_dir), fields(input_path = %input_path.display()))]
 pub async fn generate_audio(
     config: &AppConfig,
     input_path: &Path,
@@ -278,6 +282,10 @@ pub async fn generate_audio(
 ///
 /// Returns `(stems, status, error_message)`.
 /// `status` is one of `"unavailable"`, `"ready"`, or `"failed"`.
+#[tracing::instrument(
+    skip(config, output_dir),
+    fields(input_path = %input_path.display(), quality_profile = %quality_profile.as_str())
+)]
 pub async fn generate_stems(
     config: &AppConfig,
     input_path: &Path,
@@ -296,6 +304,10 @@ pub async fn generate_stems(
     generate_stems_with_musescore(config, input_path, output_dir, quality_profile).await
 }
 
+#[tracing::instrument(
+    skip(config, output_dir),
+    fields(input_path = %input_path.display(), quality_profile = %quality_profile.as_str())
+)]
 async fn generate_stems_with_musescore(
     config: &AppConfig,
     input_path: &Path,
@@ -383,9 +395,14 @@ async fn generate_stems_with_musescore(
         .await
         .with_context(|| format!("creating {}", render_dir.display()))?;
 
-    let mut stems = Vec::new();
-    let mut first_failure = None;
+    let config = config.clone();
+    enum StemJobOutcome {
+        Ready(StemResult),
+        Unavailable(String),
+        Failed(String),
+    }
 
+    let mut jobs = JoinSet::new();
     for (stem_idx, track_info) in track_infos.iter().enumerate() {
         let chunk_idx = track_info.midi_track_index;
         let Some(chunk) = chunks.get(chunk_idx) else {
@@ -394,77 +411,109 @@ async fn generate_stems_with_musescore(
 
         let stem_mid_path = render_dir.join(format!("stem_{stem_idx}.mid"));
         let stem_ogg_path = render_dir.join(format!("stem_{stem_idx}.ogg"));
+        let stem_compressed_path = render_dir.join(format!("stem_{stem_idx}.compressed.ogg"));
         let stem_midi = build_stem_midi(&midi_bytes, &clean_tempo_chunk, chunk);
+        let track_name = track_info.track_name.clone();
+        let track_label = track_name.clone();
+        let program = track_info.program;
+        let instrument_name =
+            gm_instrument_name(track_info.program, track_info.is_percussion).to_owned();
+        let drum_map = track_info.is_percussion.then(|| {
+            drumset_mappings
+                .get(&normalize_track_lookup_key(&track_info.track_name))
+                .cloned()
+                .unwrap_or_default()
+        });
+        let ffmpeg = ffmpeg.clone();
+        let quality_profile = quality_profile;
+        let config = config.clone();
 
-        tokio::fs::write(&stem_mid_path, &stem_midi)
-            .await
-            .with_context(|| format!("writing {}", stem_mid_path.display()))?;
+        jobs.spawn(async move {
+            tokio::fs::write(&stem_mid_path, &stem_midi)
+                .await
+                .with_context(|| format!("writing {}", stem_mid_path.display()))?;
 
-        tracing::info!(
-            "stems: [{}/{}] '{}' ({}, GM prog {}) - rendering via MuseScore",
-            stem_idx + 1,
-            total,
-            track_info.track_name,
-            gm_instrument_name(track_info.program, track_info.is_percussion),
-            track_info.program,
-        );
+            tracing::info!(
+                "stems: [{}/{}] '{}' ({}, GM prog {}) - rendering via MuseScore",
+                stem_idx + 1,
+                total,
+                track_label,
+                instrument_name,
+                program,
+            );
 
-        match convert_with_musescore(
-            config,
-            &stem_mid_path,
-            &stem_ogg_path,
-            "audio/ogg",
-            "ogg",
-            "MuseScore CLI not configured. Set MUSESCORE_BIN to enable direct OGG stem rendering.",
-        )
-        .await?
-        {
-            ConversionOutcome::Ready { bytes, .. } => {
-                let bytes = if let Some(ffmpeg_binary) = ffmpeg.as_deref() {
-                    recompress_ogg_stem(
-                        ffmpeg_binary,
-                        &stem_ogg_path,
-                        &render_dir.join(format!("stem_{stem_idx}.compressed.ogg")),
-                        quality_profile,
-                    )
-                    .await?
-                } else {
-                    bytes
-                };
-                let drum_map = track_info.is_percussion.then(|| {
-                    drumset_mappings
-                        .get(&normalize_track_lookup_key(&track_info.track_name))
-                        .cloned()
-                        .unwrap_or_default()
-                });
-                stems.push(StemResult {
-                    track_index: stem_idx,
-                    track_name: track_info.track_name.clone(),
-                    instrument_name: gm_instrument_name(
-                        track_info.program,
-                        track_info.is_percussion,
-                    )
-                    .to_owned(),
-                    bytes,
-                    drum_map,
-                });
+            match convert_with_musescore(
+                &config,
+                &stem_mid_path,
+                &stem_ogg_path,
+                "audio/ogg",
+                "ogg",
+                "MuseScore CLI not configured. Set MUSESCORE_BIN to enable direct OGG stem rendering.",
+            )
+            .await?
+            {
+                ConversionOutcome::Ready { bytes, .. } => {
+                    let bytes = if let Some(ffmpeg_binary) = ffmpeg.as_deref() {
+                        recompress_ogg_stem(
+                            ffmpeg_binary,
+                            &stem_ogg_path,
+                            &stem_compressed_path,
+                            quality_profile,
+                        )
+                        .await?
+                    } else {
+                        bytes
+                    };
+
+                    Ok(StemJobOutcome::Ready(StemResult {
+                        track_index: stem_idx,
+                        track_name,
+                        instrument_name,
+                        bytes,
+                        drum_map,
+                    }))
+                }
+                ConversionOutcome::Unavailable { reason } => {
+                    Ok(StemJobOutcome::Unavailable(reason))
+                }
+                ConversionOutcome::Failed { reason } => {
+                    tracing::warn!(
+                        "stems: [{}/{}] '{}' - MuseScore direct render failed: {}",
+                        stem_idx + 1,
+                        total,
+                        track_label,
+                        reason
+                    );
+                    Ok(StemJobOutcome::Failed(reason))
+                }
             }
-            ConversionOutcome::Unavailable { reason } => {
-                return Ok((Vec::new(), "unavailable".to_owned(), Some(reason)));
+        });
+    }
+
+    let mut stems = Vec::new();
+    let mut first_failure = None;
+    let mut unavailable_reason = None;
+
+    while let Some(job) = jobs.join_next().await {
+        match job {
+            Ok(Ok(StemJobOutcome::Ready(stem))) => stems.push(stem),
+            Ok(Ok(StemJobOutcome::Unavailable(reason))) => {
+                if unavailable_reason.is_none() {
+                    unavailable_reason = Some(reason);
+                }
             }
-            ConversionOutcome::Failed { reason } => {
-                tracing::warn!(
-                    "stems: [{}/{}] '{}' - MuseScore direct render failed: {}",
-                    stem_idx + 1,
-                    total,
-                    track_info.track_name,
-                    reason
-                );
+            Ok(Ok(StemJobOutcome::Failed(reason))) => {
                 if first_failure.is_none() {
                     first_failure = Some(reason);
                 }
             }
+            Ok(Err(error)) => return Err(error),
+            Err(error) => return Err(error.into()),
         }
+    }
+
+    if let Some(reason) = unavailable_reason {
+        return Ok((Vec::new(), "unavailable".to_owned(), Some(reason)));
     }
 
     stems.sort_by_key(|stem| stem.track_index);
@@ -704,6 +753,7 @@ fn build_stem_midi(original: &[u8], tempo_chunk: &[u8], instrument_chunk: &[u8])
     out
 }
 
+#[tracing::instrument(skip(config, output_dir), fields(input_path = %input_path.display()))]
 async fn load_or_generate_preview_midi(
     config: &AppConfig,
     input_path: &Path,
@@ -929,6 +979,14 @@ fn file_name(path: &Path) -> Result<&str> {
 // MuseScore conversion helper
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(
+    skip(config),
+    fields(
+        input_path = %input_path.display(),
+        output_path = %output_path.display(),
+        format = extension
+    )
+)]
 async fn convert_with_musescore(
     config: &AppConfig,
     input_path: &Path,
@@ -952,14 +1010,12 @@ async fn convert_with_musescore(
             .to_string_lossy(),
     );
 
-    let xdg_runtime_dir = std::env::temp_dir().join("fumen-musescore-runtime");
-    tokio::fs::create_dir_all(&xdg_runtime_dir)
-        .await
-        .with_context(|| format!("failed to create {}", xdg_runtime_dir.display()))?;
+    let xdg_runtime_dir =
+        tempfile::tempdir().context("failed to create MuseScore runtime directory")?;
 
     let (runner_label, mut command) = match &command_kind {
         MuseScoreCommand::Native { binary } => {
-            let mut command = native_musescore_command(binary, config, &xdg_runtime_dir);
+            let mut command = native_musescore_command(binary, config, xdg_runtime_dir.path());
             command.arg("-o").arg(output_path).arg(input_path);
             (binary.as_str().to_owned(), command)
         }
@@ -1030,6 +1086,14 @@ fn sanitize_musescore_output(output: &str) -> String {
         .join("\n")
 }
 
+#[tracing::instrument(
+    fields(
+        ffmpeg_binary = ffmpeg_binary,
+        input_path = %input_path.display(),
+        output_path = %output_path.display(),
+        quality_profile = %quality_profile.as_str()
+    )
+)]
 async fn recompress_ogg_stem(
     ffmpeg_binary: &str,
     input_path: &Path,

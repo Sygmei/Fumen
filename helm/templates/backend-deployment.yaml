@@ -59,6 +59,22 @@ spec:
               value: {{ include "fumen.backend.corsAllowedOrigins" . | quote }}
             - name: SUPERADMIN_USERNAME
               value: {{ .Values.backend.superadminUsername | quote }}
+            - name: OTEL_ENABLED
+              value: {{ .Values.backend.otel.enabled | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.backend.otel.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+              value: {{ .Values.backend.otel.tracesEndpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.backend.otel.serviceName | quote }}
+            - name: OTEL_SERVICE_VERSION
+              value: {{ .Values.backend.otel.serviceVersion | default .Values.backend.version | quote }}
+            - name: OTEL_DEPLOYMENT_ENVIRONMENT
+              value: {{ .Values.backend.otel.deploymentEnvironment | quote }}
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              value: {{ .Values.backend.otel.headers | quote }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ .Values.backend.otel.resourceAttributes | quote }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

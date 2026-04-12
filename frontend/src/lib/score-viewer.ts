@@ -30,6 +30,11 @@ interface SystemEntry {
   heightPx: number   // height of this system row
 }
 
+export interface CountInInfo {
+  bpm: number
+  beatsPerBar: number
+}
+
 export class ScoreViewer {
   private osmd: OSMD = null
   private timeMap: TimeEntry[] = []
@@ -39,6 +44,7 @@ export class ScoreViewer {
   private container: HTMLElement
   private _clickHandler: ((e: MouseEvent) => void) | null = null
   private readonly zoom: number
+  private countInInfo: CountInInfo = { bpm: 120, beatsPerBar: 4 }
 
   /** Called when the user clicks on the score. Argument is seconds into the piece. */
   onClickSeek: ((seconds: number) => void) | null = null
@@ -62,6 +68,7 @@ export class ScoreViewer {
       )
     }
     xmlText = stripUnsupportedElements(xmlText)
+    this.countInInfo = this.extractCountInInfo(xmlText)
 
     const { OpenSheetMusicDisplay } = await import('opensheetmusicdisplay')
 
@@ -106,6 +113,12 @@ export class ScoreViewer {
       ;(this.osmd as any).setOptions({ zoom: this.zoom })
     }
     console.log('[ScoreViewer] zoom set to', this.osmd.zoom)
+
+    const measureBpmMap = this.buildMeasureBpmMap()
+    this.countInInfo = {
+      bpm: measureBpmMap.get(0) ?? this.countInInfo.bpm,
+      beatsPerBar: this.countInInfo.beatsPerBar,
+    }
 
     // Ensure part names AND abbreviations are both rendered.
     // We rewrote the abbreviations in the XML to equal the full names, so all
@@ -405,6 +418,27 @@ export class ScoreViewer {
         result.set(i, lastBpm)
       }
     } catch { /* ignore */ }
+    return result
+  }
+
+  getCountInInfo(): CountInInfo {
+    return this.countInInfo
+  }
+
+  private extractCountInInfo(xmlText: string): CountInInfo {
+    const result: CountInInfo = { bpm: 120, beatsPerBar: 4 }
+    try {
+      const timeMatch = xmlText.match(/<time\b[^>]*>([\s\S]*?)<\/time>/i)
+      if (timeMatch) {
+        const beats = timeMatch[1].match(/<beats>\s*(\d+)\s*<\/beats>/i)?.[1]
+        const parsedBeats = beats ? Number(beats) : NaN
+        if (Number.isFinite(parsedBeats) && parsedBeats > 0) {
+          result.beatsPerBar = parsedBeats
+        }
+      }
+    } catch {
+      // Keep the default 4/4 fallback when the XML structure is unusual.
+    }
     return result
   }
 

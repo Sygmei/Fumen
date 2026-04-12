@@ -9,7 +9,6 @@
     let {
         currentUser,
         userLoading,
-        userError,
         preloadedUsername,
         adminLoading,
         adminError,
@@ -20,12 +19,12 @@
         onShowQr,
         onLogout,
         onMyAccount,
+        onAppConfig,
         onSectionChange,
         children,
     }: {
         currentUser: AppUser | null;
         userLoading: boolean;
-        userError: string;
         preloadedUsername: string;
         adminLoading: boolean;
         adminError: string;
@@ -36,6 +35,7 @@
         onShowQr?: () => void;
         onLogout: () => void;
         onMyAccount?: () => void;
+        onAppConfig?: () => void;
         onSectionChange: (section: AdminSection) => void;
         children: Snippet;
     } = $props();
@@ -100,7 +100,6 @@
                 Use the backend CLI to generate a temporary connection link for
                 the superadmin account, then open it here.
             </p>
-            {#if userError}<p class="status error">{userError}</p>{/if}
         </div>
     </section>
 {:else if !canAccessAdmin(currentUser)}
@@ -117,7 +116,6 @@
             <div class="flex items-center gap-4 flex-wrap">
                 <a class="button ghost" href="/">User homepage</a>
             </div>
-            {#if adminError}<p class="status error">{adminError}</p>{/if}
         </div>
     </section>
 {:else}
@@ -132,6 +130,7 @@
             {onShowQr}
             {onLogout}
             {onMyAccount}
+            {onAppConfig}
             mobileMenuItems={mobileMenuItems}
             mobileMenuActiveId={adminSection}
             mobileMenuAriaLabel="Admin sections"
@@ -165,9 +164,6 @@
                         </button>
                     {/each}
                 </nav>
-
-                {#if adminError}<p class="status error">{adminError}</p>{/if}
-                {#if adminSuccess}<p class="status success">{adminSuccess}</p>{/if}
             </aside>
 
             <div class="min-h-0 overflow-y-auto bg-(--bg) pb-[env(safe-area-inset-bottom,0px)]">
@@ -175,4 +171,15 @@
             </div>
         </div>
     </section>
+{/if}
+
+{#if adminError || adminSuccess}
+    <div class="toast-stack" aria-live="polite" aria-atomic="true">
+        {#if adminError}
+            <p class="status error toast">{adminError}</p>
+        {/if}
+        {#if adminSuccess}
+            <p class="status success toast">{adminSuccess}</p>
+        {/if}
+    </div>
 {/if}

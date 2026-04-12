@@ -63,9 +63,7 @@
         height: 2rem;
         flex-shrink: 0;
         border: 1px solid var(--border-strong);
-        background:
-            linear-gradient(135deg, rgba(196, 43, 13, 0.18), rgba(196, 43, 13, 0.04)),
-            var(--surface-alt);
+        background: var(--surface-alt);
         color: var(--accent);
         font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
         font-size: 0.9rem;
@@ -96,10 +94,10 @@
     .admin-record-actions {
         grid-area: actions;
         display: grid;
-        grid-template-columns: repeat(3, 34px);
+        grid-template-columns: repeat(4, 34px);
         gap: 8px;
-        width: 118px;
-        min-width: 118px;
+        width: 152px;
+        min-width: 152px;
         justify-content: end;
         align-self: center;
     }
@@ -137,7 +135,7 @@
             min-width: 0;
             justify-content: stretch;
             align-self: stretch;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
         }
 
         .admin-record-actions :global(.button) {
