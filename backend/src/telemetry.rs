@@ -138,10 +138,12 @@ pub(crate) fn make_http_request_span(request: &Request<Body>) -> Span {
 
 pub(crate) fn on_http_response(response: &Response<Body>, latency: Duration, span: &Span) {
     span.record("http.response.status_code", response.status().as_u16());
+    let trace_id = span.context().span().span_context().trace_id().to_string();
     tracing::info!(
         parent: span,
         latency_ms = latency.as_millis() as u64,
         status = response.status().as_u16(),
+        trace_id = %trace_id,
         "http response"
     );
 }

@@ -130,6 +130,7 @@ async fn append_trace_id_header(
 fn build_cors_layer(config: &AppConfig) -> Result<CorsLayer> {
     let base = CorsLayer::new()
         .allow_headers([AUTHORIZATION, ACCEPT, CONTENT_TYPE])
+        .expose_headers([telemetry::TRACE_ID_HEADER_NAME])
         .allow_methods(Any);
 
     match &config.cors_allowed_origins {
