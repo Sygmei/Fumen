@@ -15,7 +15,13 @@
     import ScoreIcon from "../components/ScoreIcon.svelte";
     import { Download, ChevronDown, Pause, Play, Square } from '@lucide/svelte';
 
-    const { accessKey }: { accessKey: string } = $props();
+    let {
+        accessKey,
+        enableCountIn = false,
+    }: {
+        accessKey: string;
+        enableCountIn?: boolean;
+    } = $props();
 
     let publicMusic = $state<PublicMusic | null>(null);
     let publicLoading = $state(false);
@@ -35,7 +41,7 @@
     let midiLoading = $state(false);
     let midiPlayerError = $state("");
     let stemLoadProgress = $state(0);
-    let playbackState = $state<"stopped" | "playing" | "paused">("stopped");
+    let playbackState = $state<"stopped" | "playing" | "paused" | "counting-in">("stopped");
     let playbackPosition = $state(0);
     let playbackDuration = $state(0);
     let pct = $derived(
@@ -216,7 +222,7 @@
         }
 
         try {
-            if (playbackState === "playing") {
+            if (playbackState === "playing" || playbackState === "counting-in") {
                 capturePlaytimeSlice();
                 player.pause();
                 playbackState = "paused";
@@ -231,9 +237,27 @@
                 playbackPosition = 0;
             }
 
-            await player.play();
-            playbackState = "playing";
-            startPlaytimeTracking();
+            const shouldCountIn =
+                enableCountIn &&
+                playbackPosition <= 0.01;
+            if (shouldCountIn) {
+                const countInInfo = scoreViewer?.getCountInInfo() ?? {
+                    bpm: 120,
+                    beatsPerBar: 4,
+                };
+                const beatSeconds =
+                    countInInfo.bpm > 0 ? 60 / countInInfo.bpm : 0.5;
+                await player.play({
+                    startDelaySeconds: beatSeconds * countInInfo.beatsPerBar,
+                    countInBeats: countInInfo.beatsPerBar,
+                    beatSeconds,
+                });
+                playbackState = "counting-in";
+            } else {
+                await player.play();
+                playbackState = "playing";
+                startPlaytimeTracking();
+            }
             startPlaybackLoop();
         } catch (error) {
             midiPlayerError =
@@ -275,7 +299,8 @@
         const player = stemPlayer;
         if (!player) return;
         const wasPlaying = playbackState === "playing";
-        if (wasPlaying) {
+        const wasCountingIn = playbackState === "counting-in";
+        if (wasPlaying || wasCountingIn) {
             player.pause();
             stopPlaybackLoop();
         }
@@ -283,8 +308,11 @@
         playtimeLastMeasuredAt = performance.now();
         if (wasPlaying) {
             await player.play();
+            playbackState = "playing";
             startPlaytimeTracking();
             startPlaybackLoop();
+        } else if (wasCountingIn) {
+            playbackState = "paused";
         }
     }
 
@@ -362,8 +390,13 @@
                     levels[track.id] = stemPlayer.getLevel(track.id);
                 trackLevels = levels;
             }
-            if (playbackState === "playing") {
+            if (playbackState === "counting-in" && playbackPosition > 0.01) {
+                playbackState = "playing";
+                startPlaytimeTracking();
+            }
+            if (playbackState === "playing" || playbackState === "counting-in") {
                 if (
+                    playbackState === "playing" &&
                     playbackDuration > 0 &&
                     playbackPosition >= playbackDuration - 0.03
                 ) {
@@ -606,7 +639,8 @@
                     </div>
                     <div
                         class="playbar"
-                        class:is-playing={playbackState === "playing"}
+                        class:is-playing={playbackState === "playing" ||
+                            playbackState === "counting-in"}
                     >
                         <button
                             class="playbar-btn playbar-play"
@@ -614,11 +648,13 @@
                             disabled={mixerTracks.length === 0 ||
                                 midiLoading ||
                                 !stemPlaybackReady}
-                            aria-label={playbackState === "playing"
+                            aria-label={playbackState === "playing" ||
+                                playbackState === "counting-in"
                                 ? "Pause"
                                 : "Play"}
                         >
-                            {#if playbackState === "playing"}
+                            {#if playbackState === "playing" ||
+                                playbackState === "counting-in"}
                                 <Pause size={18} fill="currentColor" strokeWidth={0} />
                             {:else}
                                 <Play size={18} fill="currentColor" strokeWidth={0} />

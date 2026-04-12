@@ -9,6 +9,7 @@
         onLogout,
         onShowQr,
         onMyAccount,
+        onAppConfig,
         adminHref,
         userHomeHref,
         showBrandTitleOnMobile = false,
@@ -24,6 +25,8 @@
         onShowQr?: () => void;
         /** If set, "My account" appears in the user menu */
         onMyAccount?: () => void;
+        /** If set, "App settings" appears in the user menu */
+        onAppConfig?: () => void;
         /** If set, an admin-panel icon link appears */
         adminHref?: string;
         /** If set, "User homepage" appears in the user menu */
@@ -159,7 +162,14 @@
         {/if}
 
         {#if currentUser && (onLogout || onShowQr || onMyAccount || userHomeHref)}
-            <UserMenu {currentUser} {onLogout} {onShowQr} {onMyAccount} {userHomeHref} />
+            <UserMenu
+                {currentUser}
+                {onLogout}
+                {onShowQr}
+                {onMyAccount}
+                {onAppConfig}
+                {userHomeHref}
+            />
         {/if}
     </div>
 </header>

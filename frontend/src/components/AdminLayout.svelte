@@ -19,6 +19,7 @@
         onShowQr,
         onLogout,
         onMyAccount,
+        onAppConfig,
         onSectionChange,
         children,
     }: {
@@ -34,6 +35,7 @@
         onShowQr?: () => void;
         onLogout: () => void;
         onMyAccount?: () => void;
+        onAppConfig?: () => void;
         onSectionChange: (section: AdminSection) => void;
         children: Snippet;
     } = $props();
@@ -128,6 +130,7 @@
             {onShowQr}
             {onLogout}
             {onMyAccount}
+            {onAppConfig}
             mobileMenuItems={mobileMenuItems}
             mobileMenuActiveId={adminSection}
             mobileMenuAriaLabel="Admin sections"

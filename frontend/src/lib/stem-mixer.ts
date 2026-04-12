@@ -48,6 +48,7 @@ export class StemMixerPlayer {
   // begin (i.e. START_LOOKAHEAD_SECONDS in the future from the moment play()
   // ran).  Used as the single authoritative clock; no per-track clocks exist.
   private _contextTimeAtStart = 0
+  private countInNodes: OscillatorNode[] = []
 
   async loadStems(stems: StemSource[], onProgress?: (progress: number) => void): Promise<LoadedStems> {
     await this.dispose()
@@ -150,17 +151,31 @@ export class StemMixerPlayer {
     }
   }
 
-  async play(): Promise<void> {
+  async play(options?: { startDelaySeconds?: number; countInBeats?: number; beatSeconds?: number }): Promise<void> {
     if (!this.context) return
     if (this.context.state === 'suspended') {
       await this.context.resume()
+    }
+
+    this._clearCountInNodes()
+
+    const startDelaySeconds = Math.max(0, options?.startDelaySeconds ?? 0)
+    const countInBeats = Math.max(0, Math.floor(options?.countInBeats ?? 0))
+    const beatSeconds = Math.max(0, options?.beatSeconds ?? 0)
+    const musicStartAt = this.context.currentTime + StemMixerPlayer.START_LOOKAHEAD_SECONDS + startDelaySeconds
+    if (startDelaySeconds > 0 && countInBeats > 0 && beatSeconds > 0) {
+      this._scheduleCountIn(
+        musicStartAt - startDelaySeconds,
+        countInBeats,
+        beatSeconds,
+      )
     }
 
     // Schedule every track to start at exactly the same AudioContext time.
     // AudioBufferSourceNode.start(when, offset) is sample-accurate: all tracks
     // begin on the same audio-engine clock tick regardless of JS event-loop
     // timing, eliminating any inter-track drift at the source.
-    const startAt = this.context.currentTime + StemMixerPlayer.START_LOOKAHEAD_SECONDS
+    const startAt = musicStartAt
     const offset = Math.max(0, Math.min(this._playbackOffset, this._duration))
 
     for (const track of this.tracks.values()) {
@@ -188,6 +203,7 @@ export class StemMixerPlayer {
     this._playbackOffset = this.getCurrentTime()
     this._isPlaying = false
     this._contextTimeAtStart = 0
+    this._clearCountInNodes()
     for (const track of this.tracks.values()) {
       this._releaseSourceNode(track)
     }
@@ -197,6 +213,7 @@ export class StemMixerPlayer {
     this._isPlaying = false
     this._playbackOffset = 0
     this._contextTimeAtStart = 0
+    this._clearCountInNodes()
     for (const track of this.tracks.values()) {
       this._releaseSourceNode(track)
     }
@@ -275,6 +292,7 @@ export class StemMixerPlayer {
     this._playbackOffset = 0
     this._isReadyToPlay = false
     this._contextTimeAtStart = 0
+    this._clearCountInNodes()
 
     for (const track of this.tracks.values()) {
       this._releaseSourceNode(track)
@@ -296,6 +314,39 @@ export class StemMixerPlayer {
     try { track.sourceNode.stop() } catch { /* already stopped or never started */ }
     track.sourceNode.disconnect()
     track.sourceNode = null
+  }
+
+  private _scheduleCountIn(startAt: number, beats: number, beatSeconds: number): void {
+    if (!this.context) return
+    const duration = Math.max(0.05, Math.min(beatSeconds * 0.18, 0.12))
+    const accentDuration = Math.max(0.06, Math.min(duration * 1.1, beatSeconds * 0.22))
+    const maxBeats = Math.max(0, Math.floor(beats))
+
+    for (let beat = 0; beat < maxBeats; beat += 1) {
+      const oscillator = this.context.createOscillator()
+      const gain = this.context.createGain()
+      const beatStart = startAt + beat * beatSeconds
+      const beatEnd = beatStart + (beat === 0 ? accentDuration : duration)
+
+      oscillator.type = "sine"
+      oscillator.frequency.value = beat === 0 ? 988 : 660
+      gain.gain.setValueAtTime(0.0001, beatStart)
+      gain.gain.linearRampToValueAtTime(0.18, beatStart + 0.005)
+      gain.gain.exponentialRampToValueAtTime(0.0001, beatEnd)
+      oscillator.connect(gain)
+      gain.connect(this.context.destination)
+      oscillator.start(beatStart)
+      oscillator.stop(beatEnd + 0.02)
+      this.countInNodes.push(oscillator)
+    }
+  }
+
+  private _clearCountInNodes(): void {
+    for (const node of this.countInNodes) {
+      try { node.stop() } catch { /* already stopped or never started */ }
+      try { node.disconnect() } catch { /* ignore */ }
+    }
+    this.countInNodes = []
   }
 
   private _applyTrackGain(track: InternalTrack): void {

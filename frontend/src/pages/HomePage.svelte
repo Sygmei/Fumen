@@ -15,6 +15,7 @@
         onShowQr,
         onOpenScanner,
         onMyAccount,
+        onAppConfig,
     }: {
         routeKind: string;
         currentUser: AppUser | null;
@@ -26,6 +27,7 @@
         onShowQr: () => Promise<void>;
         onOpenScanner: () => void;
         onMyAccount?: () => void;
+        onAppConfig?: () => void;
     } = $props();
 
     function canAccessAdmin() {
@@ -81,6 +83,7 @@
             onShowQr={() => void onShowQr()}
             onLogout={() => void onLogout()}
             {onMyAccount}
+            {onAppConfig}
             showBrandTitleOnMobile={!currentUser && routeKind !== "connect"}
         />
         <section

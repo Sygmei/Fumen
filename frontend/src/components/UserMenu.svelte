@@ -1,18 +1,27 @@
 <script lang="ts">
     import type { AppUser } from "../lib/api";
-    import { House, LogOut, QrCode, User, UserCog } from "@lucide/svelte";
+    import {
+        House,
+        LogOut,
+        QrCode,
+        Settings2,
+        User,
+        UserCog,
+    } from "@lucide/svelte";
 
     let {
         currentUser,
         onLogout,
         onShowQr,
         onMyAccount,
+        onAppConfig,
         userHomeHref,
     }: {
         currentUser: AppUser;
         onLogout?: () => void;
         onShowQr?: () => void;
         onMyAccount?: () => void;
+        onAppConfig?: () => void;
         userHomeHref?: string;
     } = $props();
 
@@ -39,6 +48,11 @@
     function handleMyAccount() {
         closeMenu();
         onMyAccount?.();
+    }
+
+    function handleAppConfig() {
+        closeMenu();
+        onAppConfig?.();
     }
 </script>
 
@@ -98,6 +112,16 @@
                 >
                     <UserCog size={15} aria-hidden="true" />
                     My account
+                </button>
+            {/if}
+            {#if onAppConfig}
+                <button
+                    class="flex items-center gap-2.5 w-full px-3.5 py-2.5 bg-transparent border-0 text-(--text) text-sm font-[inherit] cursor-pointer text-left no-underline transition-[background] duration-[0.12s] hover:bg-(--surface) [&_svg]:shrink-0 [&_svg]:opacity-70"
+                    role="menuitem"
+                    onclick={handleAppConfig}
+                >
+                    <Settings2 size={15} aria-hidden="true" />
+                    App settings
                 </button>
             {/if}
             {#if onShowQr}

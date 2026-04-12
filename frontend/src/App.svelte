@@ -23,6 +23,7 @@
   import AdminPage from "./pages/AdminPage.svelte";
   import HomePage from "./pages/HomePage.svelte";
   import CredentialModal from "./components/CredentialModal.svelte";
+  import AppConfigModal from "./components/AppConfigModal.svelte";
   import ScannerModal from "./components/ScannerModal.svelte";
   import AccountModal from "./components/AccountModal.svelte";
   import { parseJwtSub } from "./lib/utils";
@@ -81,9 +82,26 @@
   let qrScanner: QrScanner | null = null;
 
   let accountModalOpen = $state(false);
+  let appConfigModalOpen = $state(false);
+  const storedCountInEnabled =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("app-enable-count-in") === "true"
+      : false;
+  let enableCountIn = $state(storedCountInEnabled);
 
   function handleMyAccount() {
     accountModalOpen = true;
+  }
+
+  function handleAppConfig() {
+    appConfigModalOpen = true;
+  }
+
+  function setEnableCountIn(value: boolean) {
+    enableCountIn = value;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("app-enable-count-in", String(value));
+    }
   }
 
   onMount(() => {
@@ -457,7 +475,7 @@
 </script>
 
 {#if route.kind === "public"}
-  <ListenPage accessKey={route.accessKey} />
+  <ListenPage accessKey={route.accessKey} {enableCountIn} />
 {:else if route.kind === "admin"}
   <main class="page admin-shell">
   <AdminPage
@@ -468,6 +486,7 @@
       onShowCredential={showCredentialModal}
       onLogout={logoutUser}
       onMyAccount={handleMyAccount}
+      onAppConfig={handleAppConfig}
     />
   </main>
 {:else}
@@ -482,6 +501,7 @@
     onShowQr={handleShowMyQr}
     onOpenScanner={openScanner}
     onMyAccount={handleMyAccount}
+    onAppConfig={handleAppConfig}
   />
 {/if}
 
@@ -530,6 +550,16 @@
     onSaved={(user) => {
       currentUser = user;
       accountModalOpen = false;
+    }}
+  />
+{/if}
+
+{#if appConfigModalOpen}
+  <AppConfigModal
+    enableCountIn={enableCountIn}
+    onToggleCountIn={setEnableCountIn}
+    onClose={() => {
+      appConfigModalOpen = false;
     }}
   />
 {/if}

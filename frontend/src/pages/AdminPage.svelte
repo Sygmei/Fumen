@@ -23,6 +23,7 @@
         onShowCredential,
         onLogout,
         onMyAccount,
+        onAppConfig,
     }: {
         currentUser: AppUser | null;
         userLoading: boolean;
@@ -35,6 +36,7 @@
         ) => Promise<void>;
         onLogout: () => Promise<void>;
         onMyAccount?: () => void;
+        onAppConfig?: () => void;
     } = $props();
 
     type AdminSection = "users" | "ensembles" | "scores";
@@ -154,6 +156,7 @@
     {onShowQr}
     onLogout={() => void onLogout()}
     {onMyAccount}
+    {onAppConfig}
     onSectionChange={(section) => (adminSection = section)}
 >
     {#snippet children()}
