@@ -1,0 +1,6 @@
+[output]
+group_by_tag = true
+version = "0.0.0"
+
+[output.typescript]
+package_name = "@fumen/api-client"

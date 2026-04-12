@@ -34,6 +34,7 @@ use sqlx::{
     PgPool,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
+use std::fs;
 use std::str::FromStr;
 use std::{net::SocketAddr, path::PathBuf};
 use storage::Storage;
@@ -48,6 +49,11 @@ use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 fn main() -> Result<()> {
+    if let Some(output_path) = dump_openapi_arg()? {
+        dump_openapi_to_file(&output_path)?;
+        return Ok(());
+    }
+
     let _telemetry = telemetry::init()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -56,6 +62,42 @@ fn main() -> Result<()> {
     let result = runtime.block_on(async_main());
     drop(runtime);
     result
+}
+
+fn dump_openapi_arg() -> Result<Option<PathBuf>> {
+    let mut args = std::env::args().skip(1);
+
+    match args.next().as_deref() {
+        None => Ok(None),
+        Some("--dump-openapi") => {
+            let output_path = args
+                .next()
+                .map(PathBuf::from)
+                .context("usage: cargo run --bin fumen-backend -- --dump-openapi <output-path>")?;
+
+            if let Some(extra) = args.next() {
+                anyhow::bail!("unexpected extra argument: {extra}");
+            }
+
+            Ok(Some(output_path))
+        }
+        Some(other) => anyhow::bail!("unknown argument: {other}"),
+    }
+}
+
+fn dump_openapi_to_file(output_path: &PathBuf) -> Result<()> {
+    let openapi = openapi::ApiDoc::openapi();
+    let json = serde_json::to_string_pretty(&openapi)?;
+
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create directory {}", parent.display()))?;
+    }
+
+    fs::write(output_path, json)
+        .with_context(|| format!("failed to write OpenAPI JSON to {}", output_path.display()))?;
+    println!("wrote OpenAPI JSON to {}", output_path.display());
+    Ok(())
 }
 
 async fn async_main() -> Result<()> {

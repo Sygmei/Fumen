@@ -45,3 +45,21 @@ If you have state that's important to retain within a component, consider creati
 import { writable } from 'svelte/store'
 export default writable(0)
 ```
+
+## API client generation
+
+Generate the frontend TypeScript client from the backend OpenAPI document with:
+
+```bash
+npm run api:generate
+```
+
+This command runs the backend in offline export mode with Cargo, writes `openapi.json` into `frontend/.generated/openapi/openapi.json`, and then feeds that file to Arvalez to generate the TypeScript client into `frontend/src/adapters/fumen-backend`.
+
+The backend export uses a separate Cargo target directory so it still works on Windows while the normal backend dev server binary is running.
+
+To generate from an existing local `openapi.json` instead:
+
+```bash
+npm run api:generate -- --openapi ./relative/path/to/openapi.json
+```
