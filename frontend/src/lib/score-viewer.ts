@@ -30,6 +30,16 @@ interface SystemEntry {
   heightPx: number   // height of this system row
 }
 
+interface TempoInfo {
+  bpm: number
+  beatUnitWholeNotes: number
+}
+
+interface MeterInfo {
+  beatsPerBar: number
+  beatUnitWholeNotes: number
+}
+
 export interface CountInInfo {
   bpm: number
   beatsPerBar: number
@@ -45,6 +55,11 @@ export class ScoreViewer {
   private _clickHandler: ((e: MouseEvent) => void) | null = null
   private readonly zoom: number
   private countInInfo: CountInInfo = { bpm: 120, beatsPerBar: 4 }
+  private meterInfo: MeterInfo = { beatsPerBar: 4, beatUnitWholeNotes: 0.25 }
+  private measureTempoMap: Map<number, TempoInfo> = new Map([
+    [0, { bpm: 120, beatUnitWholeNotes: 0.25 }],
+  ])
+  private initialTempo: TempoInfo = { bpm: 120, beatUnitWholeNotes: 0.25 }
 
   /** Called when the user clicks on the score. Argument is seconds into the piece. */
   onClickSeek: ((seconds: number) => void) | null = null
@@ -68,7 +83,12 @@ export class ScoreViewer {
       )
     }
     xmlText = stripUnsupportedElements(xmlText)
-    this.countInInfo = this.extractCountInInfo(xmlText)
+    this.meterInfo = this.extractMeterInfo(xmlText)
+    this.measureTempoMap = this.buildMeasureTempoMap(xmlText)
+    this.countInInfo = {
+      bpm: this.initialTempo.bpm,
+      beatsPerBar: this.meterInfo.beatsPerBar,
+    }
 
     const { OpenSheetMusicDisplay } = await import('opensheetmusicdisplay')
 
@@ -113,12 +133,6 @@ export class ScoreViewer {
       ;(this.osmd as any).setOptions({ zoom: this.zoom })
     }
     console.log('[ScoreViewer] zoom set to', this.osmd.zoom)
-
-    const measureBpmMap = this.buildMeasureBpmMap()
-    this.countInInfo = {
-      bpm: measureBpmMap.get(0) ?? this.countInInfo.bpm,
-      beatsPerBar: this.countInInfo.beatsPerBar,
-    }
 
     // Ensure part names AND abbreviations are both rendered.
     // We rewrote the abbreviations in the XML to equal the full names, so all
@@ -200,9 +214,10 @@ export class ScoreViewer {
     const svgH     = svgRect.height
     console.log(`[ScoreViewer] buildTimeMap: svgH=${svgH}, containerH=${this.container.getBoundingClientRect().height}`)
 
-    const measureBpm = this.buildMeasureBpmMap()
+    const measureTempo = this.measureTempoMap
     const map: TimeEntry[] = []
     const geoms: Array<{ top: number; height: number }> = []
+    const measureStarts = new Map<number, number>()
 
     this.resetCursorIterator(cursor)
     const iterator = cursor.iterator
@@ -222,13 +237,16 @@ export class ScoreViewer {
 
       const enrolledValue = this.getIteratorTimestamp(iterator)
       const measureIdx: number = iterator.CurrentMeasureIndex ?? 0
-      const bpm = measureBpm.get(measureIdx) ?? measureBpm.get(0) ?? 120
-
-      // Duration of this beat in whole notes, needed when a repeat jump
-      // means nextRealValue ≤ realValue so we cannot use the delta.
-      const beatWholeNotes = this.getBeatDuration(cursor)
+      const tempo = measureTempo.get(measureIdx) ?? measureTempo.get(0) ?? {
+        bpm: 120,
+        beatUnitWholeNotes: 0.25,
+      }
+      const stepWholeNotes = this.getBeatDuration(cursor)
 
       map.push({ seconds: cumulativeSeconds, step, xPx: -1, topPx: -1 })
+      if (!measureStarts.has(measureIdx)) {
+        measureStarts.set(measureIdx, enrolledValue)
+      }
 
       try {
         const el = cursor.cursorElement as HTMLElement | null
@@ -254,18 +272,19 @@ export class ScoreViewer {
         const delta = nextEnrolledValue - enrolledValue
         if (delta > 0) {
           // Normal forward step: use the actual inter-step delta for accuracy.
-          cumulativeSeconds += (delta * 240) / bpm
+          cumulativeSeconds += this.wholeNotesToSeconds(delta, tempo)
         } else {
           // Repeat jump (or D.C./D.S.): nextRealValue went backward or stayed
           // the same.  Use the note's own duration so the timeline advances
           // by exactly one beat.
-          cumulativeSeconds += (beatWholeNotes * 240) / bpm
+          cumulativeSeconds += this.wholeNotesToSeconds(stepWholeNotes, tempo)
         }
       }
     }
 
     this.timeMap = map
     this.currentStep = 0
+    this.updateCountInInfoFromPickup(measureStarts)
     this.resetCursorIterator(cursor)
 
     console.log(`[ScoreViewer] walked ${geoms.length} steps (incl. repeats); svgH=${svgH}px`)
@@ -401,23 +420,35 @@ export class ScoreViewer {
 
 
 
-  private buildMeasureBpmMap(): Map<number, number> {
-    const result = new Map<number, number>()
-    result.set(0, 120)
+  private buildMeasureTempoMap(xmlText: string): Map<number, TempoInfo> {
+    const result = new Map<number, TempoInfo>()
+    const defaultTempo = { bpm: 120, beatUnitWholeNotes: 0.25 }
+    result.set(0, defaultTempo)
+    this.initialTempo = defaultTempo
     try {
-      const measures = this.osmd.Sheet?.SourceMeasures as Array<{
-        TempoExpressions?: Array<{ InstantaneousTempo?: { TempoInBpm?: number } }>
-      }> | undefined
-      if (!measures) return result
-      let lastBpm = 120
-      for (let i = 0; i < measures.length; i++) {
-        for (const expr of measures[i].TempoExpressions ?? []) {
-          const t = expr.InstantaneousTempo?.TempoInBpm
-          if (typeof t === 'number' && t > 0) { lastBpm = t; break }
-        }
-        result.set(i, lastBpm)
+      const doc = new DOMParser().parseFromString(xmlText, 'application/xml')
+      if (doc.querySelector('parsererror')) {
+        return result
       }
-    } catch { /* ignore */ }
+
+      const part = doc.getElementsByTagName('part')[0]
+      if (!part) return result
+
+      let lastTempo = result.get(0) ?? { bpm: 120, beatUnitWholeNotes: 0.25 }
+      const measures = Array.from(part.children).filter((node) => node.tagName === 'measure')
+      for (let i = 0; i < measures.length; i++) {
+        const tempo = this.extractTempoFromMeasure(measures[i] as Element, lastTempo)
+        if (tempo) {
+          lastTempo = tempo
+          if (this.initialTempo === defaultTempo) {
+            this.initialTempo = tempo
+          }
+        }
+        result.set(i, lastTempo)
+      }
+    } catch {
+      /* ignore */
+    }
     return result
   }
 
@@ -425,21 +456,148 @@ export class ScoreViewer {
     return this.countInInfo
   }
 
-  private extractCountInInfo(xmlText: string): CountInInfo {
-    const result: CountInInfo = { bpm: 120, beatsPerBar: 4 }
+  private extractMeterInfo(xmlText: string): MeterInfo {
+    const result: MeterInfo = { beatsPerBar: 4, beatUnitWholeNotes: 0.25 }
     try {
-      const timeMatch = xmlText.match(/<time\b[^>]*>([\s\S]*?)<\/time>/i)
-      if (timeMatch) {
-        const beats = timeMatch[1].match(/<beats>\s*(\d+)\s*<\/beats>/i)?.[1]
-        const parsedBeats = beats ? Number(beats) : NaN
-        if (Number.isFinite(parsedBeats) && parsedBeats > 0) {
-          result.beatsPerBar = parsedBeats
-        }
+      const doc = new DOMParser().parseFromString(xmlText, 'application/xml')
+      if (doc.querySelector('parsererror')) {
+        return result
+      }
+
+      const time = doc.querySelector('part measure time') ?? doc.querySelector('measure time')
+      const beats = time?.querySelector('beats')?.textContent?.trim()
+      const beatType = time?.querySelector('beat-type')?.textContent?.trim()
+
+      const parsedBeats = beats ? Number(beats) : NaN
+      const parsedBeatType = beatType ? Number(beatType) : NaN
+
+      if (Number.isFinite(parsedBeats) && parsedBeats > 0) {
+        result.beatsPerBar = parsedBeats
+      }
+      if (Number.isFinite(parsedBeatType) && parsedBeatType > 0) {
+        result.beatUnitWholeNotes = 4 / parsedBeatType
       }
     } catch {
       // Keep the default 4/4 fallback when the XML structure is unusual.
     }
     return result
+  }
+
+  private extractTempoFromMeasure(measure: Element, fallback: TempoInfo): TempoInfo | null {
+    let current = fallback
+    let changed = false
+
+    for (const child of Array.from(measure.children)) {
+      if (child.tagName !== 'direction') {
+        continue
+      }
+
+      const metronome = child.querySelector('direction-type metronome')
+      if (metronome) {
+        const perMinute = Number(metronome.querySelector('per-minute')?.textContent?.trim())
+        const beatUnit = metronome.querySelector('beat-unit')?.textContent?.trim()
+        if (Number.isFinite(perMinute) && perMinute > 0) {
+          current = {
+            bpm: perMinute,
+            beatUnitWholeNotes: this.beatUnitToWholeNotes(
+              beatUnit,
+              metronome.querySelectorAll('beat-unit-dot').length,
+            ) ?? fallback.beatUnitWholeNotes,
+          }
+          changed = true
+          continue
+        }
+      }
+
+      const soundTempo = Number(child.querySelector('sound')?.getAttribute('tempo'))
+      if (Number.isFinite(soundTempo) && soundTempo > 0) {
+        current = {
+          bpm: soundTempo,
+          beatUnitWholeNotes: current.beatUnitWholeNotes,
+        }
+        changed = true
+      }
+    }
+
+    return changed ? current : null
+  }
+
+  private beatUnitToWholeNotes(
+    beatUnit: string | null | undefined,
+    dotCount: number,
+  ): number | null {
+    const base = (() => {
+      switch ((beatUnit ?? '').trim().toLowerCase()) {
+        case 'whole':
+          return 1
+        case 'half':
+          return 0.5
+        case 'quarter':
+          return 0.25
+        case 'eighth':
+          return 0.125
+        case '16th':
+          return 0.0625
+        case '32nd':
+          return 0.03125
+        case '64th':
+          return 0.015625
+        case '128th':
+          return 0.0078125
+        default:
+          return null
+      }
+    })()
+
+    if (base === null) {
+      return null
+    }
+
+    return base * this.dotMultiplier(dotCount)
+  }
+
+  private dotMultiplier(dotCount: number): number {
+    let multiplier = 1
+    let addition = 0.5
+    for (let i = 0; i < dotCount; i++) {
+      multiplier += addition
+      addition /= 2
+    }
+    return multiplier
+  }
+
+  private wholeNotesToSeconds(wholeNotes: number, tempo: TempoInfo): number {
+    if (wholeNotes <= 0 || tempo.bpm <= 0 || tempo.beatUnitWholeNotes <= 0) {
+      return 0
+    }
+
+    return (wholeNotes * 60) / (tempo.bpm * tempo.beatUnitWholeNotes)
+  }
+
+  private updateCountInInfoFromPickup(measureStarts: Map<number, number>): void {
+    const tempo = this.initialTempo
+    let beatsPerBar = this.meterInfo.beatsPerBar
+
+    const measure0Start = measureStarts.get(0)
+    const measure1Start = measureStarts.get(1)
+    if (
+      typeof measure0Start === 'number' &&
+      typeof measure1Start === 'number' &&
+      measure1Start > measure0Start &&
+      this.meterInfo.beatUnitWholeNotes > 0
+    ) {
+      const pickupWholeNotes = measure1Start - measure0Start
+      const pickupBeats = pickupWholeNotes / this.meterInfo.beatUnitWholeNotes
+      const remainingBeats = this.meterInfo.beatsPerBar - pickupBeats
+      if (remainingBeats > 0 && remainingBeats < this.meterInfo.beatsPerBar + 0.01) {
+        beatsPerBar = Math.max(1, Math.round(remainingBeats))
+      }
+    }
+
+    this.countInInfo = {
+      bpm: tempo.bpm,
+      beatsPerBar,
+    }
   }
 
   seek(seconds: number): void {
