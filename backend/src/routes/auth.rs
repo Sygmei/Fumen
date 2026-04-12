@@ -4,13 +4,13 @@ use crate::schemas::{
 };
 use crate::services::auth;
 use crate::{AppError, AppState, utc_now_string};
-use axum::{Json, Router, extract::State, routing::post};
+use axum::{Json, Router, extract::State};
 use uuid::Uuid;
 
-pub(super) fn routes() -> Router<AppState> {
+pub(super) fn routes(state: AppState) -> Router<AppState> {
     Router::new()
-        .route("/auth/exchange", post(exchange_login_token))
-        .route("/auth/refresh", post(refresh_access_token))
+        .route("/auth/exchange", crate::op_post!(state, "/auth/exchange", exchange_login_token))
+        .route("/auth/refresh", crate::op_post!(state, "/auth/refresh", refresh_access_token))
 }
 
 #[utoipa::path(

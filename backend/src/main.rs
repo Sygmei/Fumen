@@ -25,9 +25,7 @@ use axum::{
         HeaderValue,
         header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     },
-    middleware,
     response::IntoResponse,
-    routing::get,
 };
 use config::{AppConfig, StorageConfig};
 use models::UserRecord;
@@ -43,16 +41,24 @@ use tower_http::{
     compression::CompressionLayer,
     cors::{AllowOrigin, Any, CorsLayer},
     services::{ServeDir, ServeFile},
-    trace::TraceLayer,
 };
 use tracing::info;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let _telemetry = telemetry::init()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to build Tokio runtime")?;
+    let result = runtime.block_on(async_main());
+    drop(runtime);
+    result
+}
+
+async fn async_main() -> Result<()> {
 
     let config = AppConfig::from_env()?;
     match &config.storage {
@@ -83,13 +89,6 @@ async fn main() -> Result<()> {
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(CompressionLayer::new())
-        .layer(middleware::map_response(append_trace_id_header))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(telemetry::make_http_request_span)
-                .on_response(telemetry::on_http_response)
-                .on_failure(telemetry::on_http_failure),
-        )
         .layer(cors_layer);
 
     let frontend_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../frontend/dist");
@@ -99,7 +98,7 @@ async fn main() -> Result<()> {
                 .not_found_service(ServeFile::new(frontend_dist.join("index.html"))),
         );
     } else {
-        app = app.route("/", get(root_message));
+        app = app.route("/", crate::op_get!(state, "/", root_message));
     }
 
     let address: SocketAddr = state
@@ -117,18 +116,6 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
-}
-
-async fn append_trace_id_header(
-    mut response: axum::response::Response,
-) -> axum::response::Response {
-    if let Some(trace_id) = telemetry::current_trace_id_header_value() {
-        response
-            .headers_mut()
-            .insert(telemetry::TRACE_ID_HEADER_NAME, trace_id);
-    }
-
-    response
 }
 
 fn build_cors_layer(config: &AppConfig) -> Result<CorsLayer> {

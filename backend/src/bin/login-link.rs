@@ -30,8 +30,17 @@ struct CliUserRecord {
     created_by_user_id: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to build Tokio runtime")?;
+    let result = runtime.block_on(async_main());
+    drop(runtime);
+    result
+}
+
+async fn async_main() -> Result<()> {
     let user_lookup = std::env::args()
         .nth(1)
         .ok_or_else(|| anyhow!("usage: cargo run --bin login-link -- <username-or-user-id>"))?;

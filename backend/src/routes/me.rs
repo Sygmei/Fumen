@@ -10,17 +10,16 @@ use axum::{
     extract::{Multipart, Path, State},
     http::{HeaderMap, StatusCode, header},
     response::Response,
-    routing::{get, patch, post},
 };
 
-pub(super) fn routes() -> Router<AppState> {
+pub(super) fn routes(state: AppState) -> Router<AppState> {
     Router::new()
-        .route("/me", get(current_user))
-        .route("/me/profile", patch(update_my_profile))
-        .route("/me/library", get(current_user_library))
-        .route("/me/login-link", post(create_my_login_link))
-        .route("/me/logout", post(me_logout))
-        .route("/users/{user_id}/avatar", get(user_avatar))
+        .route("/me", crate::op_get!(state, "/me", current_user))
+        .route("/me/profile", crate::op_patch!(state, "/me/profile", update_my_profile))
+        .route("/me/library", crate::op_get!(state, "/me/library", current_user_library))
+        .route("/me/login-link", crate::op_post!(state, "/me/login-link", create_my_login_link))
+        .route("/me/logout", crate::op_post!(state, "/me/logout", me_logout))
+        .route("/users/{user_id}/avatar", crate::op_get!(state, "/users/{user_id}/avatar", user_avatar))
 }
 
 #[utoipa::path(

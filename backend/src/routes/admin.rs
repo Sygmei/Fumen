@@ -17,7 +17,6 @@ use axum::{
     Json, Router,
     extract::{Multipart, Path, State, multipart::Field},
     http::{HeaderMap, StatusCode},
-    routing::{delete, get, patch, post},
 };
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
@@ -25,51 +24,73 @@ use tokio::fs;
 use tracing::Instrument;
 use uuid::Uuid;
 
-pub(super) fn routes() -> Router<AppState> {
+pub(super) fn routes(state: AppState) -> Router<AppState> {
     Router::new()
-        .route(
-            "/admin/users",
-            get(admin_list_users).post(admin_create_user),
-        )
-        .route(
-            "/admin/users/{id}",
-            patch(admin_update_user).delete(admin_delete_user),
-        )
+        .route("/admin/users", crate::op_get!(state, "/admin/users", admin_list_users))
+        .route("/admin/users", crate::op_post!(state, "/admin/users", admin_create_user))
+        .route("/admin/users/{id}", crate::op_patch!(state, "/admin/users/{id}", admin_update_user))
+        .route("/admin/users/{id}", crate::op_delete!(state, "/admin/users/{id}", admin_delete_user))
         .route(
             "/admin/users/{id}/login-link",
-            post(admin_create_user_login_link),
+            crate::op_post!(state, "/admin/users/{id}/login-link", admin_create_user_login_link),
         )
-        .route("/admin/users/{id}/metadata", get(admin_user_metadata))
         .route(
-            "/admin/ensembles",
-            get(admin_list_ensembles).post(admin_create_ensemble),
+            "/admin/users/{id}/metadata",
+            crate::op_get!(state, "/admin/users/{id}/metadata", admin_user_metadata),
         )
-        .route("/admin/ensembles/{id}", delete(admin_delete_ensemble))
+        .route("/admin/ensembles", crate::op_get!(state, "/admin/ensembles", admin_list_ensembles))
+        .route("/admin/ensembles", crate::op_post!(state, "/admin/ensembles", admin_create_ensemble))
+        .route("/admin/ensembles/{id}", crate::op_delete!(state, "/admin/ensembles/{id}", admin_delete_ensemble))
         .route(
             "/admin/ensembles/{id}/users/{user_id}",
-            post(admin_add_user_to_ensemble).delete(admin_remove_user_from_ensemble),
+            crate::op_post!(
+                state,
+                "/admin/ensembles/{id}/users/{user_id}",
+                admin_add_user_to_ensemble
+            ),
+        )
+        .route(
+            "/admin/ensembles/{id}/users/{user_id}",
+            crate::op_delete!(
+                state,
+                "/admin/ensembles/{id}/users/{user_id}",
+                admin_remove_user_from_ensemble
+            ),
         )
         .route(
             "/admin/ensembles/{id}/users",
-            patch(admin_update_ensemble_members),
+            crate::op_patch!(state, "/admin/ensembles/{id}/users", admin_update_ensemble_members),
         )
+        .route("/admin/musics", crate::op_get!(state, "/admin/musics", admin_list_musics))
+        .route("/admin/musics", crate::op_post!(state, "/admin/musics", admin_upload_music))
+        .route("/admin/musics/{id}", crate::op_patch!(state, "/admin/musics/{id}", admin_update_music))
         .route(
-            "/admin/musics",
-            get(admin_list_musics).post(admin_upload_music),
+            "/admin/musics/{id}/playtime",
+            crate::op_get!(state, "/admin/musics/{id}/playtime", admin_music_playtime),
         )
-        .route("/admin/musics/{id}", patch(admin_update_music))
-        .route("/admin/musics/{id}/playtime", get(admin_music_playtime))
-        .route("/admin/musics/{id}/move", post(admin_move_music))
+        .route("/admin/musics/{id}/move", crate::op_post!(state, "/admin/musics/{id}/move", admin_move_music))
         .route(
             "/admin/musics/{id}/ensembles/{ensemble_id}",
-            post(admin_add_music_to_ensemble).delete(admin_remove_music_from_ensemble),
+            crate::op_post!(
+                state,
+                "/admin/musics/{id}/ensembles/{ensemble_id}",
+                admin_add_music_to_ensemble
+            ),
+        )
+        .route(
+            "/admin/musics/{id}/ensembles/{ensemble_id}",
+            crate::op_delete!(
+                state,
+                "/admin/musics/{id}/ensembles/{ensemble_id}",
+                admin_remove_music_from_ensemble
+            ),
         )
         .route(
             "/admin/musics/{id}/ensembles",
-            patch(admin_update_music_ensembles),
+            crate::op_patch!(state, "/admin/musics/{id}/ensembles", admin_update_music_ensembles),
         )
-        .route("/admin/musics/{id}/delete", post(admin_delete_music))
-        .route("/admin/musics/{id}/retry", post(admin_retry_render))
+        .route("/admin/musics/{id}/delete", crate::op_post!(state, "/admin/musics/{id}/delete", admin_delete_music))
+        .route("/admin/musics/{id}/retry", crate::op_post!(state, "/admin/musics/{id}/retry", admin_retry_render))
 }
 
 async fn read_field_bytes_with_progress(
