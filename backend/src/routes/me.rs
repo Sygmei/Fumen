@@ -88,7 +88,10 @@ async fn update_my_profile(
                 _ => "jpg",
             };
             let key = format!("avatars/{}.{}", user_id, ext);
-            state.storage.upload_bytes(&key, avatar_bytes, &content_type).await?;
+            state
+                .storage
+                .upload_bytes(&key, avatar_bytes, &content_type)
+                .await?;
             Some(key)
         } else {
             existing.avatar_image_key.clone()
@@ -108,7 +111,8 @@ async fn update_my_profile(
     let updated = auth::find_user_by_id(&state.db_rw, &user_id)
         .await?
         .ok_or_else(|| AppError::not_found("User not found"))?;
-    let user_response = auth::user_record_to_response(&state.db_rw, &state.storage, updated).await?;
+    let user_response =
+        auth::user_record_to_response(&state.db_rw, &state.storage, updated).await?;
 
     Ok(Json(CurrentUserResponse {
         session_expires_at: Some(auth::exp_to_timestamp(auth_context.access_token_exp)),
@@ -221,7 +225,10 @@ async fn current_user_library(
             created_at: music_record.created_at,
         };
 
-        if let Some(ensemble) = ensembles.iter_mut().find(|ensemble| ensemble.id == ensemble_id) {
+        if let Some(ensemble) = ensembles
+            .iter_mut()
+            .find(|ensemble| ensemble.id == ensemble_id)
+        {
             ensemble.scores.push(score);
         } else {
             ensembles.push(UserLibraryEnsembleResponse {

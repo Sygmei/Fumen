@@ -224,6 +224,7 @@ struct TrackInfo {
 // Public async entry points
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(skip(config, output_dir), fields(input_path = %input_path.display()))]
 pub async fn generate_midi(
     config: &AppConfig,
     input_path: &Path,
@@ -240,6 +241,7 @@ pub async fn generate_midi(
     .await
 }
 
+#[tracing::instrument(skip(config, output_dir), fields(input_path = %input_path.display()))]
 pub async fn generate_musicxml(
     config: &AppConfig,
     input_path: &Path,
@@ -256,6 +258,7 @@ pub async fn generate_musicxml(
     .await
 }
 
+#[tracing::instrument(skip(config, output_dir), fields(input_path = %input_path.display()))]
 pub async fn generate_audio(
     config: &AppConfig,
     input_path: &Path,
@@ -279,6 +282,10 @@ pub async fn generate_audio(
 ///
 /// Returns `(stems, status, error_message)`.
 /// `status` is one of `"unavailable"`, `"ready"`, or `"failed"`.
+#[tracing::instrument(
+    skip(config, output_dir),
+    fields(input_path = %input_path.display(), quality_profile = %quality_profile.as_str())
+)]
 pub async fn generate_stems(
     config: &AppConfig,
     input_path: &Path,
@@ -297,6 +304,10 @@ pub async fn generate_stems(
     generate_stems_with_musescore(config, input_path, output_dir, quality_profile).await
 }
 
+#[tracing::instrument(
+    skip(config, output_dir),
+    fields(input_path = %input_path.display(), quality_profile = %quality_profile.as_str())
+)]
 async fn generate_stems_with_musescore(
     config: &AppConfig,
     input_path: &Path,
@@ -405,8 +416,8 @@ async fn generate_stems_with_musescore(
         let track_name = track_info.track_name.clone();
         let track_label = track_name.clone();
         let program = track_info.program;
-        let instrument_name = gm_instrument_name(track_info.program, track_info.is_percussion)
-            .to_owned();
+        let instrument_name =
+            gm_instrument_name(track_info.program, track_info.is_percussion).to_owned();
         let drum_map = track_info.is_percussion.then(|| {
             drumset_mappings
                 .get(&normalize_track_lookup_key(&track_info.track_name))
@@ -742,6 +753,7 @@ fn build_stem_midi(original: &[u8], tempo_chunk: &[u8], instrument_chunk: &[u8])
     out
 }
 
+#[tracing::instrument(skip(config, output_dir), fields(input_path = %input_path.display()))]
 async fn load_or_generate_preview_midi(
     config: &AppConfig,
     input_path: &Path,
@@ -967,6 +979,14 @@ fn file_name(path: &Path) -> Result<&str> {
 // MuseScore conversion helper
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(
+    skip(config),
+    fields(
+        input_path = %input_path.display(),
+        output_path = %output_path.display(),
+        format = extension
+    )
+)]
 async fn convert_with_musescore(
     config: &AppConfig,
     input_path: &Path,
@@ -1066,6 +1086,14 @@ fn sanitize_musescore_output(output: &str) -> String {
         .join("\n")
 }
 
+#[tracing::instrument(
+    fields(
+        ffmpeg_binary = ffmpeg_binary,
+        input_path = %input_path.display(),
+        output_path = %output_path.display(),
+        quality_profile = %quality_profile.as_str()
+    )
+)]
 async fn recompress_ogg_stem(
     ffmpeg_binary: &str,
     input_path: &Path,

@@ -3,9 +3,9 @@ use crate::services::{auth, music};
 use crate::{AppError, AppState, sanitize_content_disposition};
 use axum::{
     Json, Router,
+    extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::Response,
-    extract::{Path, State},
     routing::{get, post},
 };
 use bytes::Bytes;
@@ -122,7 +122,8 @@ async fn public_music_download(
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
-    let (bytes, content_type, content_encoding) = state.storage.get_bytes(&record.object_key).await?;
+    let (bytes, content_type, content_encoding) =
+        state.storage.get_bytes(&record.object_key).await?;
     Ok(binary_response(
         bytes,
         content_type.unwrap_or(record.content_type),
@@ -191,7 +192,8 @@ async fn public_music_stem_audio(
         .await;
     }
 
-    let (bytes, content_type, content_encoding) = state.storage.get_bytes(&stem.storage_key).await?;
+    let (bytes, content_type, content_encoding) =
+        state.storage.get_bytes(&stem.storage_key).await?;
     Ok(binary_response(
         bytes,
         content_type.unwrap_or_else(|| "audio/ogg".to_owned()),
@@ -212,7 +214,9 @@ async fn report_public_music_playtime(
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
     if payload.tracks.is_empty() {
-        return Err(AppError::bad_request("No playtime increments were provided"));
+        return Err(AppError::bad_request(
+            "No playtime increments were provided",
+        ));
     }
 
     let stems = music::find_public_stems(&state.db_ro, &state.db_rw, &record.id).await?;
@@ -234,20 +238,17 @@ async fn report_public_music_playtime(
             ));
         }
         if !valid_track_indices.contains(&track.track_index) {
-            return Err(AppError::bad_request("Unknown track index in playtime report"));
+            return Err(AppError::bad_request(
+                "Unknown track index in playtime report",
+            ));
         }
 
         *normalized.entry(track.track_index).or_insert(0.0) += track.seconds;
     }
 
     let normalized = normalized.into_iter().collect::<Vec<_>>();
-    music::add_user_track_playtime(
-        &state.db_rw,
-        &auth_context.user.id,
-        &record.id,
-        &normalized,
-    )
-    .await?;
+    music::add_user_track_playtime(&state.db_rw, &auth_context.user.id, &record.id, &normalized)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -275,7 +276,9 @@ fn binary_response(
 
     if let Some(content_encoding) = content_encoding {
         if let Ok(value) = HeaderValue::from_str(&content_encoding) {
-            response.headers_mut().insert(header::CONTENT_ENCODING, value);
+            response
+                .headers_mut()
+                .insert(header::CONTENT_ENCODING, value);
         }
     }
 

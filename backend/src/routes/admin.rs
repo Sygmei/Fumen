@@ -20,6 +20,7 @@ use axum::{
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 use tokio::fs;
+use tracing::Instrument;
 use uuid::Uuid;
 
 pub(super) fn routes() -> Router<AppState> {
@@ -46,7 +47,10 @@ pub(super) fn routes() -> Router<AppState> {
             "/admin/ensembles/{id}/users/{user_id}",
             post(admin_add_user_to_ensemble).delete(admin_remove_user_from_ensemble),
         )
-        .route("/admin/ensembles/{id}/users", patch(admin_update_ensemble_members))
+        .route(
+            "/admin/ensembles/{id}/users",
+            patch(admin_update_ensemble_members),
+        )
         .route(
             "/admin/musics",
             get(admin_list_musics).post(admin_upload_music),
@@ -58,7 +62,10 @@ pub(super) fn routes() -> Router<AppState> {
             "/admin/musics/{id}/ensembles/{ensemble_id}",
             post(admin_add_music_to_ensemble).delete(admin_remove_music_from_ensemble),
         )
-        .route("/admin/musics/{id}/ensembles", patch(admin_update_music_ensembles))
+        .route(
+            "/admin/musics/{id}/ensembles",
+            patch(admin_update_music_ensembles),
+        )
         .route("/admin/musics/{id}/delete", post(admin_delete_music))
         .route("/admin/musics/{id}/retry", post(admin_retry_render))
 }
@@ -169,7 +176,9 @@ async fn admin_create_user(
     .execute(&state.db_rw)
     .await?;
 
-    Ok(Json(auth::user_record_to_response(&state.db_rw, &state.storage, record).await?))
+    Ok(Json(
+        auth::user_record_to_response(&state.db_rw, &state.storage, record).await?,
+    ))
 }
 
 async fn admin_create_user_login_link(
@@ -344,7 +353,10 @@ async fn admin_update_user(
                 _ => "jpg",
             };
             let key = format!("avatars/{}.{}", id, ext);
-            state.storage.upload_bytes(&key, avatar_bytes, &content_type).await?;
+            state
+                .storage
+                .upload_bytes(&key, avatar_bytes, &content_type)
+                .await?;
             Some(key)
         } else {
             existing.avatar_image_key.clone()
@@ -405,7 +417,8 @@ async fn admin_list_ensembles(
         ensembles
             .into_iter()
             .filter(|ensemble| {
-                auth_context.has_global_power() || auth_context.can_edit_ensemble_scores(&ensemble.id)
+                auth_context.has_global_power()
+                    || auth_context.can_edit_ensemble_scores(&ensemble.id)
             })
             .map(|ensemble| AdminEnsembleResponse {
                 id: ensemble.id.clone(),
@@ -432,7 +445,10 @@ async fn admin_create_ensemble(
     }
 
     let name = normalize_name(&payload.name, "Ensemble names", 2, 64)?;
-    if music::find_ensemble_by_name(&state.db_rw, &name).await?.is_some() {
+    if music::find_ensemble_by_name(&state.db_rw, &name)
+        .await?
+        .is_some()
+    {
         return Err(AppError::conflict("That ensemble already exists"));
     }
 
@@ -521,7 +537,8 @@ async fn admin_add_user_to_ensemble(
     let target_user = ensure_membership_entities_exist(&state.db_rw, &id, &user_id).await?;
     auth::ensure_can_manage_ensemble(&auth_context, &id)?;
 
-    let role = auth::validate_target_membership_role(&auth_context, &target_user, payload.role.trim())?;
+    let role =
+        auth::validate_target_membership_role(&auth_context, &target_user, payload.role.trim())?;
 
     sqlx::query(
         "INSERT INTO user_ensemble_memberships (user_id, ensemble_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, ensemble_id) DO UPDATE SET role = EXCLUDED.role",
@@ -620,11 +637,13 @@ async fn admin_update_ensemble_members(
     }
 
     for user_id in to_remove {
-        sqlx::query("DELETE FROM user_ensemble_memberships WHERE user_id = $1 AND ensemble_id = $2")
-            .bind(&user_id)
-            .bind(&id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "DELETE FROM user_ensemble_memberships WHERE user_id = $1 AND ensemble_id = $2",
+        )
+        .bind(&user_id)
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;
@@ -639,8 +658,13 @@ async fn admin_add_music_to_ensemble(
 ) -> Result<StatusCode, AppError> {
     let auth_context = auth::require_admin_context(&state, &headers).await?;
     music::ensure_music_and_ensemble_exist(&state.db_rw, &id, &ensemble_id).await?;
-    music::ensure_can_manage_music_and_target_ensemble(&state.db_rw, &auth_context, &id, &ensemble_id)
-        .await?;
+    music::ensure_can_manage_music_and_target_ensemble(
+        &state.db_rw,
+        &auth_context,
+        &id,
+        &ensemble_id,
+    )
+    .await?;
 
     sqlx::query(
         "INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -659,11 +683,19 @@ async fn admin_remove_music_from_ensemble(
     Path((id, ensemble_id)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
     let auth_context = auth::require_admin_context(&state, &headers).await?;
-    music::ensure_can_manage_music_and_target_ensemble(&state.db_rw, &auth_context, &id, &ensemble_id)
-        .await?;
+    music::ensure_can_manage_music_and_target_ensemble(
+        &state.db_rw,
+        &auth_context,
+        &id,
+        &ensemble_id,
+    )
+    .await?;
 
     let linked_ensemble_ids = music::fetch_music_ensemble_ids(&state.db_rw, &id).await?;
-    if linked_ensemble_ids.len() <= 1 && linked_ensemble_ids.iter().any(|value| value == &ensemble_id)
+    if linked_ensemble_ids.len() <= 1
+        && linked_ensemble_ids
+            .iter()
+            .any(|value| value == &ensemble_id)
     {
         return Err(AppError::bad_request(
             "A score must belong to at least one ensemble",
@@ -814,6 +846,7 @@ async fn admin_list_musics(
     Ok(Json(visible_items))
 }
 
+#[tracing::instrument(skip(state, headers, multipart))]
 async fn admin_upload_music(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -833,7 +866,10 @@ async fn admin_upload_music(
 
     while let Some(mut field) = multipart.next_field().await? {
         let field_name = field.name().map(str::to_owned);
-        tracing::info!(field = field_name.as_deref().unwrap_or("<unnamed>"), "score upload field received");
+        tracing::info!(
+            field = field_name.as_deref().unwrap_or("<unnamed>"),
+            "score upload field received"
+        );
 
         match field_name.as_deref() {
             Some("title") => title = Some(field.text().await?.trim().to_owned()),
@@ -1035,28 +1071,31 @@ async fn admin_upload_music(
     let render_quality_profile = quality_profile;
     let render_bytes = bytes;
     let render_filename = safe_filename.clone();
-    tokio::spawn(async move {
-        if let Err(error) = process_uploaded_music(
-            render_state,
-            render_music_id.clone(),
-            render_quality_profile,
-            render_bytes,
-            render_filename,
-        )
-        .await
-        {
-            tracing::error!(music_id = %render_music_id, error = ?error, "score upload processing failed");
-            if let Err(mark_error) =
-                mark_music_processing_failed(&failure_state, &render_music_id, error.message.clone()).await
+    tokio::spawn(
+        async move {
+            if let Err(error) = process_uploaded_music(
+                render_state,
+                render_music_id.clone(),
+                render_quality_profile,
+                render_bytes,
+                render_filename,
+            )
+            .await
             {
-                tracing::error!(
-                    music_id = %render_music_id,
-                    error = ?mark_error,
-                    "failed to mark score upload as failed"
-                );
+                tracing::error!(music_id = %render_music_id, error = ?error, "score upload processing failed");
+                if let Err(mark_error) =
+                    mark_music_processing_failed(&failure_state, &render_music_id, error.message.clone()).await
+                {
+                    tracing::error!(
+                        music_id = %render_music_id,
+                        error = ?mark_error,
+                        "failed to mark score upload as failed"
+                    );
+                }
             }
         }
-    });
+        .in_current_span(),
+    );
 
     Ok(Json(music::record_to_admin_response(
         &state.config,
@@ -1068,6 +1107,10 @@ async fn admin_upload_music(
     )))
 }
 
+#[tracing::instrument(
+    skip(state, bytes),
+    fields(music_id = %music_id, quality_profile = %quality_profile.as_str(), filename = %safe_filename)
+)]
 async fn process_uploaded_music(
     state: AppState,
     music_id: String,
@@ -1149,6 +1192,7 @@ async fn process_uploaded_music(
     Ok(())
 }
 
+#[tracing::instrument(skip(state, error), fields(music_id = %music_id))]
 async fn mark_music_processing_failed(
     state: &AppState,
     music_id: &str,
@@ -1172,6 +1216,7 @@ async fn mark_music_processing_failed(
     Ok(())
 }
 
+#[tracing::instrument(skip(state, headers), fields(music_id = %id))]
 async fn admin_retry_render(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1183,7 +1228,8 @@ async fn admin_retry_render(
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     music::ensure_can_manage_music(&state.db_rw, &auth_context, &id).await?;
-    let quality_profile = audio::StemQualityProfile::from_stored_or_default(&record.quality_profile);
+    let quality_profile =
+        audio::StemQualityProfile::from_stored_or_default(&record.quality_profile);
 
     let (score_bytes, _, _) = state.storage.get_bytes(&record.object_key).await?;
 
@@ -1259,7 +1305,8 @@ async fn admin_retry_render(
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
     let stems_total = music::fetch_stems_total(&state.db_rw, &id).await;
-    let (ensemble_ids, ensemble_names) = music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
+    let (ensemble_ids, ensemble_names) =
+        music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
     Ok(Json(music::record_to_admin_response(
         &state.config,
         &state.storage,
@@ -1361,7 +1408,8 @@ async fn admin_update_music(
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
     let stems_total = music::fetch_stems_total(&state.db_rw, &id).await;
-    let (ensemble_ids, ensemble_names) = music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
+    let (ensemble_ids, ensemble_names) =
+        music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
     Ok(Json(music::record_to_admin_response(
         &state.config,
         &state.storage,
@@ -1415,7 +1463,8 @@ async fn admin_move_music(
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     let stems_total = music::fetch_stems_total(&state.db_rw, &id).await;
-    let (ensemble_ids, ensemble_names) = music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
+    let (ensemble_ids, ensemble_names) =
+        music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
     Ok(Json(music::record_to_admin_response(
         &state.config,
         &state.storage,

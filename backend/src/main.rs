@@ -6,12 +6,13 @@ mod routes;
 mod schemas;
 mod services;
 mod storage;
+mod telemetry;
 
 pub(crate) use app::{
-    ACCESS_TOKEN_TTL_SECONDS, AppError, AppRole, AppState, AuthContext, EnsembleRole, LOGIN_LINK_TTL_MINUTES,
-    ensure_membership_entities_exist, format_timestamp, generate_auth_token,
-    generate_public_token, normalize_music_icon, normalize_name, normalize_public_id,
-    normalize_username, parse_quality_profile, sanitize_content_disposition,
+    ACCESS_TOKEN_TTL_SECONDS, AppError, AppRole, AppState, AuthContext, EnsembleRole,
+    LOGIN_LINK_TTL_MINUTES, ensure_membership_entities_exist, format_timestamp,
+    generate_auth_token, generate_public_token, normalize_music_icon, normalize_name,
+    normalize_public_id, normalize_username, parse_quality_profile, sanitize_content_disposition,
     sanitize_filename, utc_now_string,
 };
 
@@ -19,7 +20,11 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::DefaultBodyLimit,
-    http::HeaderValue,
+    http::{
+        HeaderValue,
+        header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
+    },
+    middleware,
     response::IntoResponse,
     routing::get,
 };
@@ -37,18 +42,14 @@ use tower_http::{
     compression::CompressionLayer,
     cors::{AllowOrigin, Any, CorsLayer},
     services::{ServeDir, ServeFile},
+    trace::TraceLayer,
 };
 use tracing::info;
 use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "fumen_backend=info,tower_http=info".to_owned()),
-        )
-        .init();
+    let _telemetry = telemetry::init()?;
 
     let config = AppConfig::from_env()?;
     match &config.storage {
@@ -78,6 +79,13 @@ async fn main() -> Result<()> {
         .nest("/api", api_routes(state.clone()))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(CompressionLayer::new())
+        .layer(middleware::map_response(append_trace_id_header))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(telemetry::make_http_request_span)
+                .on_response(telemetry::on_http_response)
+                .on_failure(telemetry::on_http_failure),
+        )
         .layer(cors_layer);
 
     let frontend_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../frontend/dist");
@@ -107,8 +115,22 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn append_trace_id_header(
+    mut response: axum::response::Response,
+) -> axum::response::Response {
+    if let Some(trace_id) = telemetry::current_trace_id_header_value() {
+        response
+            .headers_mut()
+            .insert(telemetry::TRACE_ID_HEADER_NAME, trace_id);
+    }
+
+    response
+}
+
 fn build_cors_layer(config: &AppConfig) -> Result<CorsLayer> {
-    let base = CorsLayer::new().allow_headers(Any).allow_methods(Any);
+    let base = CorsLayer::new()
+        .allow_headers([AUTHORIZATION, ACCEPT, CONTENT_TYPE])
+        .allow_methods(Any);
 
     match &config.cors_allowed_origins {
         None => Ok(base.allow_origin(Any)),
@@ -331,12 +353,7 @@ async fn ensure_schema(db: &PgPool) -> Result<()> {
     .await?;
     ensure_stems_column(db, "size_bytes", "BIGINT NOT NULL DEFAULT 0").await?;
     ensure_stems_column(db, "drum_map_json", "TEXT").await?;
-    ensure_music_column(
-        db,
-        "directory_id",
-        "TEXT NOT NULL DEFAULT ''",
-    )
-    .await?;
+    ensure_music_column(db, "directory_id", "TEXT NOT NULL DEFAULT ''").await?;
     ensure_music_column(
         db,
         "owner_user_id",

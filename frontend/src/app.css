@@ -2655,8 +2655,12 @@ h3 {
   right: auto;
   width: var(--l, 0%);
   border-radius: 0;
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
   transition: width 60ms linear;
+}
+
+.channel-strip.global-strip .channel-gauge-fill {
+  background: linear-gradient(90deg, rgba(196, 43, 13, 0.92), rgba(224, 61, 30, 0.78));
 }
 
 .channel-fader input[type='range'] {

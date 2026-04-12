@@ -122,7 +122,11 @@ fn resolve_user_avatar_url(
         .or_else(|| avatar_image_key.map(|_| format!("/api/users/{user_id}/avatar")))
 }
 
-fn resolve_music_public_url(config: &AppConfig, public_token: &str, public_id: Option<&str>) -> String {
+fn resolve_music_public_url(
+    config: &AppConfig,
+    public_token: &str,
+    public_id: Option<&str>,
+) -> String {
     public_id
         .map(|public_id| config.public_url_for(public_id))
         .unwrap_or_else(|| config.public_url_for(public_token))
@@ -473,7 +477,7 @@ pub(crate) async fn find_public_stem(
         .bind(music_id)
         .bind(track_index)
         .fetch_optional(db_fallback)
-    .await?)
+        .await?)
 }
 
 pub(crate) async fn add_user_track_playtime(
@@ -512,6 +516,7 @@ pub(crate) async fn add_user_track_playtime(
     Ok(())
 }
 
+#[tracing::instrument(skip(db, storage), fields(music_id = %music_id))]
 pub(crate) async fn build_admin_music_playtime_response(
     db: &PgPool,
     storage: &Storage,
@@ -568,9 +573,8 @@ pub(crate) async fn build_admin_music_playtime_response(
             track.total_seconds += row.total_seconds;
         }
 
-        let entry = leaderboard
-            .entry(row.user_id.clone())
-            .or_insert_with(|| MusicPlaytimeLeaderboardEntryResponse {
+        let entry = leaderboard.entry(row.user_id.clone()).or_insert_with(|| {
+            MusicPlaytimeLeaderboardEntryResponse {
                 user_id: row.user_id.clone(),
                 username: row.username.clone(),
                 display_name: row.display_name.clone(),
@@ -581,7 +585,8 @@ pub(crate) async fn build_admin_music_playtime_response(
                 ),
                 best_track_seconds: 0.0,
                 track_totals: Vec::new(),
-            });
+            }
+        });
         entry.best_track_seconds = entry.best_track_seconds.max(row.total_seconds);
         entry.track_totals.push(MusicPlaytimeTrackSummaryResponse {
             track_index: row.track_index,
@@ -626,6 +631,7 @@ pub(crate) async fn build_admin_music_playtime_response(
     })
 }
 
+#[tracing::instrument(skip(config, storage, db), fields(user_id = %user_id))]
 pub(crate) async fn build_admin_user_metadata_playtime_response(
     config: &AppConfig,
     storage: &Storage,
@@ -676,7 +682,11 @@ pub(crate) async fn build_admin_user_metadata_playtime_response(
             title: row.title,
             icon: row.icon,
             icon_image_url,
-            public_url: resolve_music_public_url(config, &row.public_token, row.public_id.as_deref()),
+            public_url: resolve_music_public_url(
+                config,
+                &row.public_token,
+                row.public_id.as_deref(),
+            ),
             total_seconds: row.total_seconds,
         });
     }
@@ -684,6 +694,10 @@ pub(crate) async fn build_admin_user_metadata_playtime_response(
     Ok((total_seconds, score_playtimes))
 }
 
+#[tracing::instrument(
+    skip(state, stems, error),
+    fields(music_id = %music_id, stem_count = stems.len(), stems_status = status)
+)]
 pub(crate) async fn store_stems(
     state: &AppState,
     music_id: &str,
@@ -790,6 +804,7 @@ pub(crate) async fn build_public_stem_infos(
     Ok(resolved_infos)
 }
 
+#[tracing::instrument(skip(state, outcome), fields(music_id = %music_id, kind = kind))]
 pub(crate) async fn store_conversion(
     state: &AppState,
     music_id: &str,
@@ -995,6 +1010,7 @@ pub(crate) fn record_to_public_response(
     }
 }
 
+#[tracing::instrument(skip(state), fields(music_id = %music_id))]
 pub(crate) async fn delete_music_record_and_assets(
     state: &AppState,
     music_id: &str,
@@ -1051,4 +1067,3 @@ fn gzip_bytes(bytes: &Bytes) -> Result<Bytes, AppError> {
     let compressed = encoder.finish().map_err(AppError::from)?;
     Ok(Bytes::from(compressed))
 }
-

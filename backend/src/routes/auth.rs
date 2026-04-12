@@ -1,4 +1,6 @@
-use crate::schemas::{AccessTokenRefreshResponse, AuthTokenResponse, ExchangeLoginTokenRequest, RefreshTokenRequest};
+use crate::schemas::{
+    AccessTokenRefreshResponse, AuthTokenResponse, ExchangeLoginTokenRequest, RefreshTokenRequest,
+};
 use crate::services::auth;
 use crate::{AppError, AppState, utc_now_string};
 use axum::{Json, Router, extract::State, routing::post};
