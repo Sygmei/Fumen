@@ -87,7 +87,16 @@
     typeof window !== "undefined"
       ? window.localStorage.getItem("app-enable-count-in") === "true"
       : false;
+  const storedCountInMeasures =
+    typeof window !== "undefined"
+      ? Number(window.localStorage.getItem("app-count-in-measures") ?? "1")
+      : 1;
   let enableCountIn = $state(storedCountInEnabled);
+  let countInMeasures = $state(
+    Number.isFinite(storedCountInMeasures) && storedCountInMeasures > 0
+      ? Math.floor(storedCountInMeasures)
+      : 1,
+  );
 
   function handleMyAccount() {
     accountModalOpen = true;
@@ -101,6 +110,14 @@
     enableCountIn = value;
     if (typeof window !== "undefined") {
       window.localStorage.setItem("app-enable-count-in", String(value));
+    }
+  }
+
+  function setCountInMeasures(value: number) {
+    const normalized = Math.max(1, Math.floor(value || 1));
+    countInMeasures = normalized;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("app-count-in-measures", String(normalized));
     }
   }
 
@@ -475,7 +492,7 @@
 </script>
 
 {#if route.kind === "public"}
-  <ListenPage accessKey={route.accessKey} {enableCountIn} />
+  <ListenPage accessKey={route.accessKey} {enableCountIn} {countInMeasures} />
 {:else if route.kind === "admin"}
   <main class="page admin-shell">
   <AdminPage
@@ -557,7 +574,9 @@
 {#if appConfigModalOpen}
   <AppConfigModal
     enableCountIn={enableCountIn}
+    countInMeasures={countInMeasures}
     onToggleCountIn={setEnableCountIn}
+    onChangeCountInMeasures={setCountInMeasures}
     onClose={() => {
       appConfigModalOpen = false;
     }}

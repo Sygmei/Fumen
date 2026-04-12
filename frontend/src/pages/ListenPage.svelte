@@ -18,9 +18,11 @@
     let {
         accessKey,
         enableCountIn = false,
+        countInMeasures = 1,
     }: {
         accessKey: string;
         enableCountIn?: boolean;
+        countInMeasures?: number;
     } = $props();
 
     let publicMusic = $state<PublicMusic | null>(null);
@@ -245,11 +247,13 @@
                     bpm: 120,
                     beatsPerBar: 4,
                 };
+                const countInBars = Math.max(1, Math.floor(countInMeasures || 1));
                 const beatSeconds =
                     countInInfo.bpm > 0 ? 60 / countInInfo.bpm : 0.5;
                 await player.play({
-                    startDelaySeconds: beatSeconds * countInInfo.beatsPerBar,
-                    countInBeats: countInInfo.beatsPerBar,
+                    startDelaySeconds:
+                        beatSeconds * countInInfo.beatsPerBar * countInBars,
+                    countInBeats: countInInfo.beatsPerBar * countInBars,
                     beatSeconds,
                 });
                 playbackState = "counting-in";
