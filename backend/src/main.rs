@@ -2,6 +2,7 @@ mod app;
 mod audio;
 mod config;
 mod models;
+mod openapi;
 mod routes;
 mod schemas;
 mod services;
@@ -45,6 +46,8 @@ use tower_http::{
     trace::TraceLayer,
 };
 use tracing::info;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 #[tokio::main]
@@ -77,6 +80,7 @@ async fn main() -> Result<()> {
     };
     let mut app = Router::new()
         .nest("/api", api_routes(state.clone()))
+        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(CompressionLayer::new())
         .layer(middleware::map_response(append_trace_id_header))

@@ -1,13 +1,21 @@
-mod admin;
-mod auth;
-mod me;
-mod public;
+pub(crate) mod admin;
+pub(crate) mod auth;
+pub(crate) mod me;
+pub(crate) mod public;
 
 use axum::{Json, Router, response::IntoResponse, routing::get};
 
-use crate::AppState;
+use crate::{AppState, schemas::HealthResponse};
 
-async fn health() -> impl IntoResponse {
+#[utoipa::path(
+    get,
+    path = "/api/health",
+    tag = "system",
+    responses(
+        (status = 200, description = "Backend health status", body = HealthResponse)
+    )
+)]
+pub(crate) async fn health() -> impl IntoResponse {
     Json(serde_json::json!({ "ok": true }))
 }
 

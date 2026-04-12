@@ -1,5 +1,6 @@
 use crate::schemas::{
-    AccessTokenRefreshResponse, AuthTokenResponse, ExchangeLoginTokenRequest, RefreshTokenRequest,
+    AccessTokenRefreshResponse, AuthTokenResponse, ErrorResponse, ExchangeLoginTokenRequest,
+    RefreshTokenRequest,
 };
 use crate::services::auth;
 use crate::{AppError, AppState, utc_now_string};
@@ -12,7 +13,19 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/auth/refresh", post(refresh_access_token))
 }
 
-async fn exchange_login_token(
+#[utoipa::path(
+    post,
+    path = "/api/auth/exchange",
+    tag = "auth",
+    request_body = ExchangeLoginTokenRequest,
+    responses(
+        (status = 200, description = "Exchange login token for session tokens", body = AuthTokenResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Invalid or expired login token", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn exchange_login_token(
     State(state): State<AppState>,
     Json(payload): Json<ExchangeLoginTokenRequest>,
 ) -> Result<Json<AuthTokenResponse>, AppError> {
@@ -73,7 +86,19 @@ async fn exchange_login_token(
     }))
 }
 
-async fn refresh_access_token(
+#[utoipa::path(
+    post,
+    path = "/api/auth/refresh",
+    tag = "auth",
+    request_body = RefreshTokenRequest,
+    responses(
+        (status = 200, description = "Refresh access token", body = AccessTokenRefreshResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Invalid or revoked refresh token", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn refresh_access_token(
     State(state): State<AppState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Result<Json<AccessTokenRefreshResponse>, AppError> {

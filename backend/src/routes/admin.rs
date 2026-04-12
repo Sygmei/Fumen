@@ -1,8 +1,10 @@
 use crate::models::{EnsembleRecord, MusicRecord, UserEnsembleMembershipRecord, UserRecord};
 use crate::schemas::{
     AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicResponse,
-    AdminUserMetadataResponse, CreateEnsembleRequest, CreateUserRequest, EnsembleMemberResponse,
-    LoginLinkResponse, MoveMusicRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest,
+    AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest,
+    AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, CreateEnsembleRequest,
+    CreateUserRequest, EnsembleMemberResponse, ErrorResponse, LoginLinkResponse,
+    MoveMusicRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest,
     UpdateMusicEnsemblesRequest, UserResponse,
 };
 use crate::services::{auth, music};
@@ -122,7 +124,18 @@ async fn read_field_bytes_with_progress(
     Ok(Bytes::from(data))
 }
 
-async fn admin_list_users(
+#[utoipa::path(
+    get,
+    path = "/api/admin/users",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List users", body = [UserResponse]),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_list_users(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<UserResponse>>, AppError> {
@@ -147,7 +160,21 @@ async fn admin_list_users(
     Ok(Json(users))
 }
 
-async fn admin_create_user(
+#[utoipa::path(
+    post,
+    path = "/api/admin/users",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    request_body = CreateUserRequest,
+    responses(
+        (status = 200, description = "Created user", body = UserResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 409, description = "Username already exists", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_create_user(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<CreateUserRequest>,
@@ -196,7 +223,22 @@ async fn admin_create_user(
     ))
 }
 
-async fn admin_create_user_login_link(
+#[utoipa::path(
+    post,
+    path = "/api/admin/users/{id}/login-link",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "User identifier")
+    ),
+    responses(
+        (status = 200, description = "Login link for target user", body = LoginLinkResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "User not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_create_user_login_link(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -213,7 +255,22 @@ async fn admin_create_user_login_link(
     ))
 }
 
-async fn admin_user_metadata(
+#[utoipa::path(
+    get,
+    path = "/api/admin/users/{id}/metadata",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "User identifier")
+    ),
+    responses(
+        (status = 200, description = "Administrative metadata for a user", body = AdminUserMetadataResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "User not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_user_metadata(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -243,7 +300,22 @@ async fn admin_user_metadata(
     }))
 }
 
-async fn admin_delete_user(
+#[utoipa::path(
+    delete,
+    path = "/api/admin/users/{id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "User identifier")
+    ),
+    responses(
+        (status = 204, description = "User deleted"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "User not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_delete_user(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -262,7 +334,24 @@ async fn admin_delete_user(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_update_user(
+#[utoipa::path(
+    patch,
+    path = "/api/admin/users/{id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "User identifier")
+    ),
+    request_body(content = AdminUpdateUserMultipartRequest, content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "Updated user", body = UserResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "User not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_update_user(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -400,7 +489,18 @@ async fn admin_update_user(
     ))
 }
 
-async fn admin_list_ensembles(
+#[utoipa::path(
+    get,
+    path = "/api/admin/ensembles",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List ensembles", body = [AdminEnsembleResponse]),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_list_ensembles(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<AdminEnsembleResponse>>, AppError> {
@@ -447,7 +547,21 @@ async fn admin_list_ensembles(
     ))
 }
 
-async fn admin_create_ensemble(
+#[utoipa::path(
+    post,
+    path = "/api/admin/ensembles",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    request_body = CreateEnsembleRequest,
+    responses(
+        (status = 200, description = "Created ensemble", body = AdminEnsembleResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 409, description = "Ensemble already exists", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_create_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<CreateEnsembleRequest>,
@@ -505,7 +619,22 @@ async fn admin_create_ensemble(
     }))
 }
 
-async fn admin_delete_ensemble(
+#[utoipa::path(
+    delete,
+    path = "/api/admin/ensembles/{id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Ensemble identifier")
+    ),
+    responses(
+        (status = 204, description = "Ensemble deleted"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Ensemble not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_delete_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -542,7 +671,25 @@ async fn admin_delete_ensemble(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_add_user_to_ensemble(
+#[utoipa::path(
+    post,
+    path = "/api/admin/ensembles/{id}/users/{user_id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Ensemble identifier"),
+        ("user_id" = String, Path, description = "User identifier")
+    ),
+    request_body = UpdateEnsembleMemberRequest,
+    responses(
+        (status = 204, description = "User added to ensemble"),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "User or ensemble not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_add_user_to_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, user_id)): Path<(String, String)>,
@@ -567,7 +714,23 @@ async fn admin_add_user_to_ensemble(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_remove_user_from_ensemble(
+#[utoipa::path(
+    delete,
+    path = "/api/admin/ensembles/{id}/users/{user_id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Ensemble identifier"),
+        ("user_id" = String, Path, description = "User identifier")
+    ),
+    responses(
+        (status = 204, description = "User removed from ensemble"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "User or ensemble not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_remove_user_from_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, user_id)): Path<(String, String)>,
@@ -588,7 +751,24 @@ async fn admin_remove_user_from_ensemble(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_update_ensemble_members(
+#[utoipa::path(
+    patch,
+    path = "/api/admin/ensembles/{id}/users",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Ensemble identifier")
+    ),
+    request_body = UpdateEnsembleMembersRequest,
+    responses(
+        (status = 204, description = "Ensemble memberships updated"),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "User or ensemble not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_update_ensemble_members(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -666,7 +846,23 @@ async fn admin_update_ensemble_members(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_add_music_to_ensemble(
+#[utoipa::path(
+    post,
+    path = "/api/admin/musics/{id}/ensembles/{ensemble_id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Music identifier"),
+        ("ensemble_id" = String, Path, description = "Ensemble identifier")
+    ),
+    responses(
+        (status = 204, description = "Score linked to ensemble"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music or ensemble not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_add_music_to_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, ensemble_id)): Path<(String, String)>,
@@ -692,7 +888,24 @@ async fn admin_add_music_to_ensemble(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_remove_music_from_ensemble(
+#[utoipa::path(
+    delete,
+    path = "/api/admin/musics/{id}/ensembles/{ensemble_id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Music identifier"),
+        ("ensemble_id" = String, Path, description = "Ensemble identifier")
+    ),
+    responses(
+        (status = 204, description = "Score unlinked from ensemble"),
+        (status = 400, description = "The score must remain in at least one ensemble", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music or ensemble not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_remove_music_from_ensemble(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, ensemble_id)): Path<(String, String)>,
@@ -726,7 +939,24 @@ async fn admin_remove_music_from_ensemble(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_update_music_ensembles(
+#[utoipa::path(
+    patch,
+    path = "/api/admin/musics/{id}/ensembles",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Music identifier")
+    ),
+    request_body = UpdateMusicEnsemblesRequest,
+    responses(
+        (status = 204, description = "Score ensemble links updated"),
+        (status = 400, description = "The score must remain in at least one ensemble", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music or ensemble not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_update_music_ensembles(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -814,7 +1044,18 @@ async fn admin_update_music_ensembles(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn admin_list_musics(
+#[utoipa::path(
+    get,
+    path = "/api/admin/musics",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List scores", body = [AdminMusicResponse]),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_list_musics(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<AdminMusicResponse>>, AppError> {
@@ -862,7 +1103,21 @@ async fn admin_list_musics(
 }
 
 #[tracing::instrument(skip(state, headers, multipart))]
-async fn admin_upload_music(
+#[utoipa::path(
+    post,
+    path = "/api/admin/musics",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    request_body(content = AdminUploadMusicMultipartRequest, content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "Uploaded score", body = AdminMusicResponse),
+        (status = 400, description = "Invalid upload request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Ensemble not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_upload_music(
     State(state): State<AppState>,
     headers: HeaderMap,
     mut multipart: Multipart,
@@ -1232,7 +1487,22 @@ async fn mark_music_processing_failed(
 }
 
 #[tracing::instrument(skip(state, headers), fields(music_id = %id))]
-async fn admin_retry_render(
+#[utoipa::path(
+    post,
+    path = "/api/admin/musics/{id}/retry",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Music identifier")
+    ),
+    responses(
+        (status = 200, description = "Re-rendered score assets", body = AdminMusicResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_retry_render(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -1332,7 +1602,24 @@ async fn admin_retry_render(
     )))
 }
 
-async fn admin_update_music(
+#[utoipa::path(
+    patch,
+    path = "/api/admin/musics/{id}",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Music identifier")
+    ),
+    request_body(content = AdminUpdateMusicMultipartRequest, content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "Updated score metadata", body = AdminMusicResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_update_music(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -1435,7 +1722,24 @@ async fn admin_update_music(
     )))
 }
 
-async fn admin_move_music(
+#[utoipa::path(
+    post,
+    path = "/api/admin/musics/{id}/move",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Music identifier")
+    ),
+    request_body = MoveMusicRequest,
+    responses(
+        (status = 200, description = "Moved score to a new ensemble", body = AdminMusicResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music or ensemble not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_move_music(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -1490,7 +1794,22 @@ async fn admin_move_music(
     )))
 }
 
-async fn admin_music_playtime(
+#[utoipa::path(
+    get,
+    path = "/api/admin/musics/{id}/playtime",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Music identifier")
+    ),
+    responses(
+        (status = 200, description = "Score playtime summary", body = AdminMusicPlaytimeResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_music_playtime(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -1511,7 +1830,22 @@ async fn admin_music_playtime(
     ))
 }
 
-async fn admin_delete_music(
+#[utoipa::path(
+    post,
+    path = "/api/admin/musics/{id}/delete",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Music identifier")
+    ),
+    responses(
+        (status = 204, description = "Score deleted"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_delete_music(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,

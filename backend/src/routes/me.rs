@@ -1,6 +1,6 @@
 use crate::schemas::{
-    CurrentUserResponse, LoginLinkResponse, UserLibraryEnsembleResponse, UserLibraryResponse,
-    UserLibraryScoreResponse,
+    CurrentUserResponse, ErrorResponse, LoginLinkResponse, UpdateMyProfileMultipartRequest,
+    UserLibraryEnsembleResponse, UserLibraryResponse, UserLibraryScoreResponse,
 };
 use crate::services::{auth, music};
 use crate::{AppError, AppState};
@@ -23,7 +23,18 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/users/{user_id}/avatar", get(user_avatar))
 }
 
-async fn current_user(
+#[utoipa::path(
+    get,
+    path = "/api/me",
+    tag = "me",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Current authenticated user", body = CurrentUserResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn current_user(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<CurrentUserResponse>, AppError> {
@@ -34,7 +45,21 @@ async fn current_user(
     }))
 }
 
-async fn update_my_profile(
+#[utoipa::path(
+    patch,
+    path = "/api/me/profile",
+    tag = "me",
+    security(("bearer_auth" = [])),
+    request_body(content = UpdateMyProfileMultipartRequest, content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "Updated current user profile", body = CurrentUserResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "User not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn update_my_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
     mut multipart: Multipart,
@@ -120,7 +145,20 @@ async fn update_my_profile(
     }))
 }
 
-async fn user_avatar(
+#[utoipa::path(
+    get,
+    path = "/api/users/{user_id}/avatar",
+    tag = "me",
+    params(
+        ("user_id" = String, Path, description = "User identifier")
+    ),
+    responses(
+        (status = 200, description = "Avatar image", content_type = "image/*"),
+        (status = 404, description = "Avatar not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn user_avatar(
     State(state): State<AppState>,
     Path(user_id): Path<String>,
 ) -> Result<Response, AppError> {
@@ -157,7 +195,18 @@ async fn user_avatar(
         .unwrap())
 }
 
-async fn current_user_library(
+#[utoipa::path(
+    get,
+    path = "/api/me/library",
+    tag = "me",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Current user's score library", body = UserLibraryResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn current_user_library(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<UserLibraryResponse>, AppError> {
@@ -242,7 +291,18 @@ async fn current_user_library(
     Ok(Json(UserLibraryResponse { ensembles }))
 }
 
-async fn create_my_login_link(
+#[utoipa::path(
+    post,
+    path = "/api/me/login-link",
+    tag = "me",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Create a new login link for the current user", body = LoginLinkResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn create_my_login_link(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<LoginLinkResponse>, AppError> {
@@ -252,7 +312,18 @@ async fn create_my_login_link(
     ))
 }
 
-async fn me_logout(
+#[utoipa::path(
+    post,
+    path = "/api/me/logout",
+    tag = "me",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 204, description = "Logout completed"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn me_logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {

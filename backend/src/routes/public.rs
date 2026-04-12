@@ -1,4 +1,4 @@
-use crate::schemas::{PublicMusicResponse, ReportPlaytimeRequest, StemInfo};
+use crate::schemas::{ErrorResponse, PublicMusicResponse, ReportPlaytimeRequest, StemInfo};
 use crate::services::{auth, music};
 use crate::{AppError, AppState, sanitize_content_disposition};
 use axum::{
@@ -30,7 +30,20 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/public/{access_key}/icon", get(public_music_icon))
 }
 
-async fn public_music(
+#[utoipa::path(
+    get,
+    path = "/api/public/{access_key}",
+    tag = "public",
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    responses(
+        (status = 200, description = "Public score metadata", body = PublicMusicResponse),
+        (status = 404, description = "Music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn public_music(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Json<PublicMusicResponse>, AppError> {
@@ -45,7 +58,20 @@ async fn public_music(
     )))
 }
 
-async fn public_music_audio(
+#[utoipa::path(
+    get,
+    path = "/api/public/{access_key}/audio",
+    tag = "public",
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    responses(
+        (status = 200, description = "Audio preview stream", content_type = "audio/mpeg"),
+        (status = 404, description = "Audio preview or score not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn public_music_audio(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
@@ -66,7 +92,20 @@ async fn public_music_audio(
     ))
 }
 
-async fn public_music_midi(
+#[utoipa::path(
+    get,
+    path = "/api/public/{access_key}/midi",
+    tag = "public",
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    responses(
+        (status = 200, description = "MIDI file", content_type = "audio/midi"),
+        (status = 404, description = "MIDI export or score not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn public_music_midi(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
@@ -90,7 +129,20 @@ async fn public_music_midi(
     ))
 }
 
-async fn public_music_musicxml(
+#[utoipa::path(
+    get,
+    path = "/api/public/{access_key}/musicxml",
+    tag = "public",
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    responses(
+        (status = 200, description = "MusicXML file", content_type = "application/xml"),
+        (status = 404, description = "MusicXML export or score not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn public_music_musicxml(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
@@ -114,7 +166,20 @@ async fn public_music_musicxml(
     ))
 }
 
-async fn public_music_download(
+#[utoipa::path(
+    get,
+    path = "/api/public/{access_key}/download",
+    tag = "public",
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    responses(
+        (status = 200, description = "Original score file", content_type = "application/octet-stream"),
+        (status = 404, description = "Score not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn public_music_download(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
@@ -135,7 +200,20 @@ async fn public_music_download(
     ))
 }
 
-async fn public_music_icon(
+#[utoipa::path(
+    get,
+    path = "/api/public/{access_key}/icon",
+    tag = "public",
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    responses(
+        (status = 200, description = "Score icon image", content_type = "image/*"),
+        (status = 404, description = "Icon or score not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn public_music_icon(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Response, AppError> {
@@ -156,7 +234,20 @@ async fn public_music_icon(
     ))
 }
 
-async fn public_music_stems(
+#[utoipa::path(
+    get,
+    path = "/api/public/{access_key}/stems",
+    tag = "public",
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    responses(
+        (status = 200, description = "Available stems", body = [StemInfo]),
+        (status = 404, description = "Music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn public_music_stems(
     State(state): State<AppState>,
     Path(access_key): Path<String>,
 ) -> Result<Json<Vec<StemInfo>>, AppError> {
@@ -169,7 +260,23 @@ async fn public_music_stems(
     ))
 }
 
-async fn public_music_stem_audio(
+#[utoipa::path(
+    get,
+    path = "/api/public/{access_key}/stems/{track_index}",
+    tag = "public",
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id"),
+        ("track_index" = i64, Path, description = "Stem track index")
+    ),
+    responses(
+        (status = 200, description = "Stem audio stream", content_type = "audio/ogg"),
+        (status = 206, description = "Partial stem audio stream", content_type = "audio/ogg"),
+        (status = 404, description = "Stem or score not found", body = ErrorResponse),
+        (status = 416, description = "Invalid range", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn public_music_stem_audio(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((access_key, track_index)): Path<(String, i64)>,
@@ -202,7 +309,24 @@ async fn public_music_stem_audio(
     ))
 }
 
-async fn report_public_music_playtime(
+#[utoipa::path(
+    post,
+    path = "/api/public/{access_key}/playtime",
+    tag = "public",
+    security(("bearer_auth" = [])),
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    request_body = ReportPlaytimeRequest,
+    responses(
+        (status = 204, description = "Playtime recorded"),
+        (status = 400, description = "Invalid playtime payload", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Stem or score not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn report_public_music_playtime(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(access_key): Path<String>,
