@@ -69,7 +69,22 @@ async fn read_field_bytes_with_progress(
     let mut total_bytes = 0usize;
     let mut next_log_at = LOG_STEP_BYTES;
 
-    while let Some(chunk) = field.chunk().await? {
+    tracing::info!(
+        field = field_name,
+        file_name = file_name.unwrap_or(""),
+        "score upload starting field read"
+    );
+
+    while let Some(chunk) = field.chunk().await.map_err(|error| {
+        tracing::warn!(
+            field = field_name,
+            file_name = file_name.unwrap_or(""),
+            bytes_read = total_bytes,
+            error = %error,
+            "score upload field read failed"
+        );
+        AppError::from(error)
+    })? {
         total_bytes += chunk.len();
         data.extend_from_slice(&chunk);
 
