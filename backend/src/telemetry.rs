@@ -18,6 +18,7 @@ use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
     trace::{Sampler, SdkTracerProvider},
 };
+use reqwest::Client;
 use std::{collections::HashMap, env, time::Duration};
 use tower_http::classify::ServerErrorsFailureClass;
 use tracing::{Span, field::Empty};
@@ -192,6 +193,7 @@ fn build_tracer_provider(
 ) -> Result<SdkTracerProvider> {
     let exporter = SpanExporter::builder()
         .with_http()
+        .with_http_client(Client::new())
         .with_endpoint(traces_url)
         .with_headers(parse_key_value_pairs(
             env::var("OTEL_EXPORTER_OTLP_HEADERS").ok(),
