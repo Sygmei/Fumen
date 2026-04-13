@@ -1,26 +1,62 @@
 <script lang="ts">
+    import { onMount } from "svelte";
     import BaseModal from "./BaseModal.svelte";
-    import { prettyDate } from "../lib/utils";
+    import type { LoginLinkResponse } from "../../adapters/fumen-backend/src/models";
+    import { prettyDate } from "../../lib/utils";
+    import QRCode from "qrcode";
 
-    const {
+    let {
         title,
-        qrDataUrl,
-        isLoading = false,
-        link,
-        expiresAt,
-        onClose,
+        loadLink,
+        onClose = () => {},
         eyebrow = "Temporary access",
         linkLabel = "Connection link",
+        modalId,
     }: {
         title: string;
-        qrDataUrl: string;
-        isLoading?: boolean;
-        link: string;
-        expiresAt: string;
-        onClose: () => void;
+        loadLink: () => Promise<LoginLinkResponse>;
+        onClose?: () => void;
         eyebrow?: string;
         linkLabel?: string;
+        modalId?: string;
     } = $props();
+
+    let qrDataUrl = $state("");
+    let isLoading = $state(true);
+    let link = $state("");
+    let expiresAt = $state("");
+
+    onMount(() => {
+        let cancelled = false;
+
+        const run = async () => {
+            isLoading = true;
+            try {
+                const linkResponse = await loadLink();
+                if (cancelled) return;
+                link = linkResponse.connection_url;
+                expiresAt = linkResponse.expires_at;
+                qrDataUrl = await QRCode.toDataURL(linkResponse.connection_url, {
+                    width: 360,
+                    margin: 1,
+                    color: {
+                        dark: "#111111",
+                        light: "#0000",
+                    },
+                });
+            } finally {
+                if (!cancelled) {
+                    isLoading = false;
+                }
+            }
+        };
+
+        void run();
+
+        return () => {
+            cancelled = true;
+        };
+    });
 
     function placeholderCell(index: number) {
         const hash = Array.from(`${link}:${index}`).reduce(
@@ -36,7 +72,13 @@
     }
 </script>
 
-<BaseModal {onClose} size="large" title={eyebrow} subtitle={title}>
+<BaseModal
+    {onClose}
+    size="large"
+    title={eyebrow}
+    subtitle={title}
+    {modalId}
+>
     {#if qrDataUrl}
         <img class="qr-preview" src={qrDataUrl} alt={title} />
     {:else if isLoading}

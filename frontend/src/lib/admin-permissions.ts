@@ -1,4 +1,9 @@
-import type { AdminMusic, AppUser, Ensemble, EnsembleRole, GlobalRole } from "./api";
+import type {
+    AdminEnsembleResponse as Ensemble,
+    AdminMusicResponse as AdminMusic,
+    UserResponse as AppUser,
+} from "../adapters/fumen-backend/src/models";
+import type { EnsembleRole, GlobalRole } from "./roles";
 
 export function canAccessAdmin(user: AppUser | null): boolean {
     return !!user && user.role !== "user";

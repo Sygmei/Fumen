@@ -1,4 +1,4 @@
-import { STEM_QUALITY_PROFILES } from './api'
+import { STEM_QUALITY_PROFILES } from './stem-quality'
 
 export function prettyDate(value: string): string {
     return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(

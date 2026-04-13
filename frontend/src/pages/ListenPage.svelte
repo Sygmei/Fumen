@@ -1,13 +1,12 @@
 <script lang="ts">
     import { onDestroy, onMount, tick } from "svelte";
+    import type { PublicMusicResponse as PublicMusic } from "../adapters/fumen-backend/src/models";
     import {
         ApiError,
-        fetchPublicMusic,
-        fetchStems,
+        authenticatedApiClient,
         hasAuth,
-        reportPublicMusicPlaytime,
-        type PublicMusic,
-    } from "../lib/api";
+        publicApiClient,
+    } from "../lib/auth-client";
     import { StemMixerPlayer, type StemTrack } from "../lib/stem-mixer";
     import { ScoreViewer } from "../lib/score-viewer";
     import { formatTime } from "../lib/utils";
@@ -98,7 +97,9 @@
         playtimeReportingDisabled = false;
 
         try {
-            const music = await fetchPublicMusic(key);
+            const music = await publicApiClient.publicMusic(
+                encodeURIComponent(key),
+            );
             publicMusic = music;
             publicLoading = false;
             await tick();
@@ -178,7 +179,9 @@
         stemLoadProgress = 0;
 
         try {
-            const stems = await fetchStems(key);
+            const stems = await publicApiClient.publicMusicStems(
+                encodeURIComponent(key),
+            );
             if (stems.length === 0) {
                 midiPlayerError = "No stems available for this score";
                 return;
@@ -526,7 +529,7 @@
         playtimePending = {};
 
         try {
-            await reportPublicMusicPlaytime(
+            await authenticatedApiClient.reportPublicMusicPlaytime(
                 accessKey,
                 { tracks },
                 { keepalive },

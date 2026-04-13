@@ -1,33 +1,30 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick } from "svelte";
-  import QRCode from "qrcode";
-  import QrScanner from "qr-scanner";
-  import qrWorkerUrl from "qr-scanner/qr-scanner-worker.min?url";
+  import { onMount } from "svelte";
   import {
+    authenticatedApiClient,
     clearAuth,
-    createMyLoginLink,
-    exchangeLoginToken,
-    fetchCurrentUser,
-    fetchUserLibrary,
     initAuth,
     isPageUnloading,
-    listEnsembles,
-    logout,
+    publicApiClient,
     setOnSessionExpired,
     setOnTokenRefreshed,
-    type AppUser,
-    type LoginLinkResponse,
-    type UserLibraryEnsemble,
-  } from "./lib/api";
+  } from "./lib/auth-client";
+  import ModalStore from "./components/modals/ModalStore.svelte";
+  import {
+    showAccountModal,
+    showAppConfigModal,
+    showCredentialModal,
+    showScannerModal,
+  } from "./components/modals";
+  import type {
+    LoginLinkResponse,
+    UserLibraryEnsembleResponse as UserLibraryEnsemble,
+    UserResponse as AppUser,
+  } from "./adapters/fumen-backend/src/models";
   import ListenPage from "./pages/ListenPage.svelte";
   import AdminPage from "./pages/AdminPage.svelte";
   import HomePage from "./pages/HomePage.svelte";
-  import CredentialModal from "./components/CredentialModal.svelte";
-  import AppConfigModal from "./components/AppConfigModal.svelte";
-  import ScannerModal from "./components/ScannerModal.svelte";
-  import AccountModal from "./components/AccountModal.svelte";
   import { parseJwtSub } from "./lib/utils";
-  (QrScanner as unknown as { WORKER_PATH: string }).WORKER_PATH = qrWorkerUrl;
 
   type AppRoute =
     | { kind: "user" }
@@ -66,23 +63,6 @@
   let userSuccess = $state("");
   let userLibrary = $state<UserLibraryEnsemble[]>([]);
   let connectionBusy = $state(false);
-
-  let credentialModalOpen = $state(false);
-  let credentialModalTitle = $state("");
-  let credentialLink = $state("");
-  let credentialExpiresAt = $state("");
-  let credentialQrDataUrl = $state("");
-  let credentialQrLoading = $state(false);
-  let credentialEyebrow = $state("Temporary access");
-  let credentialLinkLabel = $state("Connection link");
-
-  let scannerOpen = $state(false);
-  let scannerError = $state("");
-  let scannerVideo = $state<HTMLVideoElement | null>(null);
-  let qrScanner: QrScanner | null = null;
-
-  let accountModalOpen = $state(false);
-  let appConfigModalOpen = $state(false);
   const storedCountInEnabled =
     typeof window !== "undefined"
       ? window.localStorage.getItem("app-enable-count-in") === "true"
@@ -99,11 +79,22 @@
   );
 
   function handleMyAccount() {
-    accountModalOpen = true;
+    if (!currentUser) return;
+    showAccountModal({
+      currentUser,
+      onSaved: (user) => {
+        currentUser = user;
+      },
+    });
   }
 
   function handleAppConfig() {
-    appConfigModalOpen = true;
+    showAppConfigModal({
+      enableCountIn,
+      countInMeasures,
+      onToggleCountIn: setEnableCountIn,
+      onChangeCountInMeasures: setCountInMeasures,
+    });
   }
 
   function setEnableCountIn(value: boolean) {
@@ -162,10 +153,6 @@
     };
   });
 
-  onDestroy(() => {
-    closeScanner();
-  });
-
   function resolveRoute(pathname: string): AppRoute {
     const publicMatch = pathname.match(/^\/listen\/([^/]+)$/);
     if (publicMatch) {
@@ -215,13 +202,13 @@
     userLoading = true;
 
     try {
-      const response = await fetchCurrentUser();
-      let library = await fetchUserLibrary();
+      const response = await authenticatedApiClient.currentUser();
+      let library = await authenticatedApiClient.currentUserLibrary();
       if (
         response.user.role === "admin" ||
         response.user.role === "superadmin"
       ) {
-        const adminEnsembles = await listEnsembles();
+        const adminEnsembles = await authenticatedApiClient.adminListEnsembles();
         const libraryById = new Map(
           library.ensembles.map((ensemble) => [ensemble.id, ensemble]),
         );
@@ -234,7 +221,7 @@
         };
       }
       currentUser = response.user;
-      userSessionExpiresAt = response.session_expires_at;
+      userSessionExpiresAt = response.session_expires_at ?? null;
       userLibrary = library.ensembles;
       userError = "";
     } catch (error) {
@@ -294,14 +281,13 @@
     userSuccess = "";
 
     try {
-      const response = await exchangeLoginToken(token);
+      const response = await publicApiClient.exchangeLoginToken({ token });
       persistUserSession(
         response.refresh_token,
         response.access_token,
         response.user,
         response.access_token_expires_at,
       );
-      closeScanner();
       if (fromRoute || route.kind !== "user") {
         navigate("/", true);
       }
@@ -316,34 +302,6 @@
     }
   }
 
-  function extractConnectionToken(value: string): string | null {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-
-    try {
-      const parsed = new URL(trimmed, window.location.origin);
-      const match = parsed.pathname.match(/^\/connect\/([^/]+)$/);
-      if (match) {
-        return decodeURIComponent(match[1]);
-      }
-    } catch {
-      // Ignore malformed URLs and try local patterns below.
-    }
-
-    const pathMatch = trimmed.match(/^\/connect\/([^/]+)$/);
-    if (pathMatch) {
-      return decodeURIComponent(pathMatch[1]);
-    }
-
-    if (/^[a-zA-Z0-9]+$/.test(trimmed)) {
-      return trimmed;
-    }
-
-    return null;
-  }
-
   async function handleShowMyQr() {
     if (!refreshToken || !currentUser) {
       userError = "Sign in first.";
@@ -354,9 +312,10 @@
     userSuccess = "";
 
     try {
-      await showCredentialModal(`QR code for ${currentUser.username}`, () =>
-        createMyLoginLink(),
-      );
+      showCredentialModal({
+        title: `QR code for ${currentUser.username}`,
+        loadLink: () => authenticatedApiClient.createMyLoginLink(),
+      });
       userSuccess = "QR code ready.";
     } catch (error) {
       userError =
@@ -364,30 +323,9 @@
     }
   }
 
-  async function handleCopyMyLink() {
-    if (!refreshToken || !currentUser) {
-      userError = "Sign in first.";
-      return;
-    }
-
-    userError = "";
-    userSuccess = "";
-
-    try {
-      const response = await createMyLoginLink();
-      await navigator.clipboard.writeText(response.connection_url);
-      userSuccess = "Connection link copied to clipboard.";
-    } catch (error) {
-      userError =
-        error instanceof Error
-          ? error.message
-          : "Unable to create connection link";
-    }
-  }
-
   async function logoutUser() {
     try {
-      await logout();
+      await authenticatedApiClient.meLogout();
     } catch {
       // best-effort: clear locally regardless
     }
@@ -396,35 +334,17 @@
     userError = "";
   }
 
-  async function showCredentialModal(
+  async function openCredentialModal(
     title: string,
     loadLink: () => Promise<LoginLinkResponse>,
     options?: { eyebrow?: string; linkLabel?: string },
   ) {
-    credentialModalTitle = title;
-    credentialEyebrow = options?.eyebrow ?? "Temporary access";
-    credentialLinkLabel = options?.linkLabel ?? "Connection link";
-    credentialModalOpen = true;
-    credentialQrLoading = true;
-    credentialQrDataUrl = "";
-    credentialLink = "";
-    credentialExpiresAt = "";
-
-    try {
-      const linkResponse = await loadLink();
-      credentialLink = linkResponse.connection_url;
-      credentialExpiresAt = linkResponse.expires_at;
-      credentialQrDataUrl = await QRCode.toDataURL(linkResponse.connection_url, {
-        width: 360,
-        margin: 1,
-        color: {
-          dark: "#111111",
-          light: "#0000",
-        },
-      });
-    } finally {
-      credentialQrLoading = false;
-    }
+    showCredentialModal({
+      title,
+      loadLink,
+      eyebrow: options?.eyebrow,
+      linkLabel: options?.linkLabel,
+    });
   }
 
   function navigate(pathname: string, replace = false) {
@@ -443,51 +363,9 @@
   }
 
   async function openScanner() {
-    scannerError = "";
-    scannerOpen = true;
-    await tick();
-
-    if (!scannerVideo) {
-      scannerError = "Camera preview is unavailable on this device.";
-      return;
-    }
-
-    try {
-      qrScanner?.destroy();
-      qrScanner = new QrScanner(
-        scannerVideo,
-        (result) => {
-          const value = typeof result === "string" ? result : result.data;
-          void handleScannedValue(value);
-        },
-        {
-          highlightScanRegion: true,
-          highlightCodeOutline: true,
-        },
-      );
-      await qrScanner.start();
-    } catch (error) {
-      scannerError =
-        error instanceof Error ? error.message : "Unable to start the camera";
-    }
-  }
-
-  async function handleScannedValue(value: string) {
-    const token = extractConnectionToken(value);
-    if (!token) {
-      scannerError = "That QR code is not a valid Fumen connection link.";
-      return;
-    }
-
-    closeScanner();
-    await completeConnectionFromToken(token);
-  }
-
-  function closeScanner() {
-    qrScanner?.stop();
-    qrScanner?.destroy();
-    qrScanner = null;
-    scannerOpen = false;
+    showScannerModal({
+      onConnectToken: (token) => completeConnectionFromToken(token),
+    });
   }
 </script>
 
@@ -500,7 +378,7 @@
       {userLoading}
       preloadedUsername={storedUsername}
       onShowQr={handleShowMyQr}
-      onShowCredential={showCredentialModal}
+      onShowCredential={openCredentialModal}
       onLogout={logoutUser}
       onMyAccount={handleMyAccount}
       onAppConfig={handleAppConfig}
@@ -533,52 +411,4 @@
   </div>
 {/if}
 
-{#if credentialModalOpen}
-  <CredentialModal
-    title={credentialModalTitle}
-    eyebrow={credentialEyebrow}
-    linkLabel={credentialLinkLabel}
-    qrDataUrl={credentialQrDataUrl}
-    isLoading={credentialQrLoading}
-    link={credentialLink}
-    expiresAt={credentialExpiresAt}
-    onClose={() => {
-      credentialModalOpen = false;
-      credentialQrLoading = false;
-      credentialQrDataUrl = "";
-      credentialLink = "";
-      credentialExpiresAt = "";
-    }}
-  />
-{/if}
-
-{#if scannerOpen}
-  <ScannerModal
-    error={scannerError}
-    onClose={closeScanner}
-    bind:videoEl={scannerVideo}
-  />
-{/if}
-
-{#if accountModalOpen && currentUser}
-  <AccountModal
-    {currentUser}
-    onClose={() => { accountModalOpen = false; }}
-    onSaved={(user) => {
-      currentUser = user;
-      accountModalOpen = false;
-    }}
-  />
-{/if}
-
-{#if appConfigModalOpen}
-  <AppConfigModal
-    enableCountIn={enableCountIn}
-    countInMeasures={countInMeasures}
-    onToggleCountIn={setEnableCountIn}
-    onChangeCountInMeasures={setCountInMeasures}
-    onClose={() => {
-      appConfigModalOpen = false;
-    }}
-  />
-{/if}
+<ModalStore />

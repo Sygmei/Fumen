@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { Snippet } from "svelte";
-    import type { AppUser } from "../lib/api";
+    import type { UserResponse as AppUser } from "../adapters/fumen-backend/src/models";
     import TopBar from "./TopBar.svelte";
     import { canAccessAdmin } from "../lib/admin-permissions";
 

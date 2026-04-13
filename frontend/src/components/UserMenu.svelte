@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { AppUser } from "../lib/api";
+    import type { UserResponse as AppUser } from "../adapters/fumen-backend/src/models";
     import {
         House,
         LogOut,

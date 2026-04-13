@@ -1,21 +1,31 @@
 <script lang="ts">
     import BaseModal from "./BaseModal.svelte";
-    import type { AppUser } from "../lib/api";
-    import { updateMyProfile, compressImageToJpeg } from "../lib/api";
+    import type {
+        UpdateMyProfileMultipartRequest,
+        UserResponse as AppUser,
+    } from "../../adapters/fumen-backend/src/models";
+    import { authenticatedApiClient } from "../../lib/auth-client";
+    import { compressImageToJpeg } from "../../lib/image";
+    import { closeModal } from "./modalState";
     import { Camera } from "@lucide/svelte";
 
     const {
         currentUser,
-        onClose,
         onSaved,
+        onClose = () => {},
+        modalId,
     }: {
         currentUser: AppUser;
-        onClose: () => void;
+        onClose?: () => void;
         onSaved: (user: AppUser) => void;
+        modalId?: string;
     } = $props();
 
-    let displayName = $state(currentUser.display_name ?? "");
-    let avatarPreview = $state<string | null>(currentUser.avatar_url);
+    const initialDisplayName = currentUser.display_name ?? "";
+    const initialAvatarPreview = currentUser.avatar_url ?? null;
+
+    let displayName = $state(initialDisplayName);
+    let avatarPreview = $state<string | null>(initialAvatarPreview);
     let avatarFile = $state<File | null>(null);
     let clearAvatar = $state(false);
     let saving = $state(false);
@@ -53,12 +63,14 @@
         saving = true;
         errorMsg = "";
         try {
-            const resp = await updateMyProfile({
-                displayName: displayName.trim() || null,
-                avatarFile: avatarFile,
-                clearAvatar,
-            });
+            const payload = {
+                display_name: displayName.trim() || undefined,
+                avatar_file: avatarFile ?? undefined,
+                clear_avatar: clearAvatar || undefined,
+            } as unknown as UpdateMyProfileMultipartRequest;
+            const resp = await authenticatedApiClient.updateMyProfile(payload);
             onSaved(resp.user);
+            closeModal();
         } catch (err) {
             errorMsg = err instanceof Error ? err.message : "Failed to save.";
         } finally {
@@ -67,7 +79,13 @@
     }
 </script>
 
-<BaseModal title="Profile" subtitle="My account" size="small" {onClose}>
+<BaseModal
+    title="Profile"
+    subtitle="My account"
+    size="small"
+    {onClose}
+    {modalId}
+>
     {#snippet children()}
         <form class="flex flex-col gap-5 p-6" onsubmit={(e) => { e.preventDefault(); handleSave(); }}>
             <!-- Avatar row -->

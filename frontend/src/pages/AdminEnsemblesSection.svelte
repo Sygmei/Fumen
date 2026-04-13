@@ -1,18 +1,18 @@
 <script lang="ts">
-    import {
-        createEnsemble,
-        deleteEnsemble,
-        setEnsembleMembers,
-        setMusicEnsembles,
-        type AdminMusic,
-        type AppUser,
-        type Ensemble,
-        type EnsembleRole,
-    } from "../lib/api";
-    import BaseModal from "../components/BaseModal.svelte";
-    import CustomSelect from "../components/CustomSelect.svelte";
-    import ConfirmModal from "../components/ConfirmModal.svelte";
+    import type {
+        AdminEnsembleResponse as Ensemble,
+        AdminMusicResponse as AdminMusic,
+        UserResponse as AppUser,
+    } from "../adapters/fumen-backend/src/models";
+    import { authenticatedApiClient } from "../lib/auth-client";
     import AdminRecordCard from "../components/AdminRecordCard.svelte";
+    import {
+        showConfirmModal,
+        showModal,
+    } from "../components/modals";
+    import CreateEnsembleModal from "../components/modals/CreateEnsembleModal.svelte";
+    import ManageEnsembleMembersModal from "../components/modals/ManageEnsembleMembersModal.svelte";
+    import ManageEnsembleScoresModal from "../components/modals/ManageEnsembleScoresModal.svelte";
     import {
         Search,
         Plus,
@@ -20,22 +20,14 @@
         UserPlus,
         Music,
         Users,
-        Pencil,
-        User,
-        UserCog,
     } from "@lucide/svelte";
     import {
         canCreateEnsembles,
         canManageEnsembleMembers,
         canDeleteEnsembleRecord,
         canManageEnsembleScores,
-        allowedEnsembleRolesForUser,
     } from "../lib/admin-permissions";
-
-    type ManagedMemberDraftRole = "none" | EnsembleRole;
-    type MobileRolePickerTarget =
-        | { kind: "member"; userId: string }
-        | { kind: "invite"; userId: string };
+    import type { EnsembleMemberAssignment } from "../components/modals/types";
 
     let {
         currentUser,
@@ -60,40 +52,7 @@
     // Search
     let ensembleSearchQuery = $state("");
 
-    // Create modal
-    let showCreateEnsembleModal = $state(false);
-    let newEnsembleName = $state("");
-    let creatingEnsemble = $state(false);
     let deletingEnsembleFor = $state("");
-
-    // Manage members
-    let managingEnsembleId = $state("");
-    let currentMemberSearchQuery = $state("");
-    let addMemberSearchQuery = $state("");
-    let inviteRoles = $state<Record<string, EnsembleRole>>({});
-    let originalManagedMemberRoles = $state<
-        Record<string, ManagedMemberDraftRole>
-    >({});
-    let managedMemberDraftRoles = $state<
-        Record<string, ManagedMemberDraftRole>
-    >({});
-    let savingManagedMembers = $state(false);
-    let mobileRolePickerTarget = $state<MobileRolePickerTarget | null>(null);
-    let mobileRolePickerValue = $state<EnsembleRole>("user");
-
-    // Manage ensemble scores
-    let managingEnsembleScoresId = $state("");
-    let currentEnsembleScoreSearchQuery = $state("");
-    let addEnsembleScoreSearchQuery = $state("");
-    let originalEnsembleScoreMusicIds = $state<string[]>([]);
-    let stagedEnsembleScoreMusicIds = $state<string[]>([]);
-    let savingEnsembleScores = $state(false);
-
-    // Confirm
-    let confirmMessage = $state("");
-    let confirmLabel = $state("");
-    let confirmAction = $state<(() => Promise<void>) | null>(null);
-    let confirmBusy = $state(false);
 
     // Derived
     const filteredEnsembles = $derived.by(() => {
@@ -111,204 +70,25 @@
         );
     });
 
-    const activeManagedEnsemble = $derived(
-        ensembles.find((e) => e.id === managingEnsembleId) ?? null,
-    );
-
-    const activeManagedScoreEnsemble = $derived(
-        ensembles.find((e) => e.id === managingEnsembleScoresId) ?? null,
-    );
-
-    const mobileRolePickerUser = $derived.by(() => {
-        if (!mobileRolePickerTarget) return null;
-        return (
-            allUsers.find((user) => user.id === mobileRolePickerTarget.userId) ??
-            null
-        );
-    });
-
-    const mobileRolePickerOptions = $derived.by(() => {
-        if (!mobileRolePickerUser) return [];
-        return ensembleRoleOptionsForUser(mobileRolePickerUser);
-    });
-
-    function managedMemberRoleForUser(userId: string): ManagedMemberDraftRole {
-        return managedMemberDraftRoles[userId] ?? "none";
-    }
-
-    const filteredManagedMembers = $derived.by(() => {
-        if (!activeManagedEnsemble) return [];
-        const query = currentMemberSearchQuery.trim().toLowerCase();
-        return allUsers
-            .map((user) => ({
-                user_id: user.id,
-                role: managedMemberRoleForUser(user.id),
-                user,
-            }))
-            .filter(
-                (
-                    e,
-                ): e is {
-                    user_id: string;
-                    role: EnsembleRole;
-                    user: AppUser;
-                } => e.role !== "none",
-            )
-            .sort((a, b) => a.user.username.localeCompare(b.user.username))
-            .filter((e) =>
-                !query
-                    ? true
-                    : [e.user.username, e.role]
-                          .join(" ")
-                          .toLowerCase()
-                          .includes(query),
-            );
-    });
-
-    const filteredAvailableEnsembleUsers = $derived.by(() => {
-        if (!activeManagedEnsemble) return [];
-        const query = addMemberSearchQuery.trim().toLowerCase();
-        return [...allUsers]
-            .filter(
-                (u) =>
-                    managedMemberRoleForUser(u.id) === "none" &&
-                    allowedEnsembleRolesForUser(u, currentUser).length > 0,
-            )
-            .sort((a, b) => a.username.localeCompare(b.username))
-            .filter((u) =>
-                !query
-                    ? true
-                    : [u.username, u.role]
-                          .join(" ")
-                          .toLowerCase()
-                          .includes(query),
-            );
-    });
-
-    const filteredManagedEnsembleScores = $derived.by(() => {
-        if (!activeManagedScoreEnsemble) return [];
-        const query = currentEnsembleScoreSearchQuery.trim().toLowerCase();
-        return [...allMusics]
-            .filter((m) => stagedEnsembleScoreMusicIds.includes(m.id))
-            .sort((a, b) => a.title.localeCompare(b.title))
-            .filter((m) =>
-                !query
-                    ? true
-                    : [m.title, m.public_id ?? "", ...m.ensemble_names]
-                          .join(" ")
-                          .toLowerCase()
-                          .includes(query),
-            );
-    });
-
-    const filteredAvailableEnsembleScores = $derived.by(() => {
-        if (!activeManagedScoreEnsemble) return [];
-        const query = addEnsembleScoreSearchQuery.trim().toLowerCase();
-        return [...allMusics]
-            .filter((m) => !stagedEnsembleScoreMusicIds.includes(m.id))
-            .sort((a, b) => a.title.localeCompare(b.title))
-            .filter((m) =>
-                !query
-                    ? true
-                    : [m.title, m.public_id ?? "", ...m.ensemble_names]
-                          .join(" ")
-                          .toLowerCase()
-                          .includes(query),
-            );
-    });
-
-    // Role helpers
-    function memberRoleLabel(role: EnsembleRole) {
-        if (role === "manager") return "Manager";
-        if (role === "editor") return "Editor";
-        return "Member";
-    }
-
-    function ensembleRoleDescription(role: EnsembleRole) {
-        if (role === "manager")
-            return "Can manage ensemble members and score access.";
-        if (role === "editor")
-            return "Can add scores and manage only their own uploads.";
-        return "Can access scores shared with the ensemble.";
-    }
-
-    function ensembleRoleIconComponent(role: EnsembleRole) {
-        if (role === "manager") return Users;
-        if (role === "editor") return Pencil;
-        return User;
-    }
-
-    function ensembleRoleOptionsForUser(user: AppUser) {
-        return allowedEnsembleRolesForUser(user, currentUser).map((role) => ({
-            value: role,
-            label: memberRoleLabel(role),
-            description: ensembleRoleDescription(role),
-            iconComponent: ensembleRoleIconComponent(role),
-            tone: role,
-        }));
-    }
-
-    // Confirm helpers
-    function openConfirm(
-        msg: string,
-        label: string,
-        action: () => Promise<void>,
-    ) {
-        confirmMessage = msg;
-        confirmLabel = label;
-        confirmAction = action;
-    }
-
-    function closeConfirm() {
-        if (confirmBusy) return;
-        confirmMessage = "";
-        confirmAction = null;
-    }
-
-    async function executeConfirm() {
-        if (!confirmAction) return;
-        confirmBusy = true;
-        try {
-            await confirmAction();
-        } finally {
-            confirmBusy = false;
-            closeConfirm();
-        }
-    }
-
     // Create ensemble
     function openCreateEnsembleModal() {
-        newEnsembleName = "";
-        showCreateEnsembleModal = true;
+        showModal(CreateEnsembleModal, {
+            onCreate: handleCreateEnsemble,
+        });
     }
 
-    function closeCreateEnsembleModal() {
-        if (creatingEnsemble) return;
-        showCreateEnsembleModal = false;
-        newEnsembleName = "";
-    }
-
-    async function handleCreateEnsemble() {
-        const trimmed = newEnsembleName.trim();
-        if (!trimmed) {
-            onError("Choose an ensemble name first.");
-            return;
-        }
-        creatingEnsemble = true;
+    async function handleCreateEnsemble(name: string) {
         try {
-            const ensemble = await createEnsemble(trimmed);
+            const ensemble = await authenticatedApiClient.adminCreateEnsemble({ name });
             onEnsembleCreated(ensemble);
-            newEnsembleName = "";
-            showCreateEnsembleModal = false;
             onSuccess(`Ensemble ${ensemble.name} created.`);
         } catch (error) {
-            onError(
+            const message =
                 error instanceof Error
                     ? error.message
-                    : "Unable to create ensemble",
-            );
-        } finally {
-            creatingEnsemble = false;
+                    : "Unable to create ensemble";
+            onError(message);
+            throw error instanceof Error ? error : new Error(message);
         }
     }
 
@@ -316,7 +96,7 @@
     async function deleteEnsembleAccount(ensemble: Ensemble) {
         deletingEnsembleFor = ensemble.id;
         try {
-            await deleteEnsemble(ensemble.id);
+            await authenticatedApiClient.adminDeleteEnsemble(ensemble.id);
             await onRefresh();
             onSuccess(`Ensemble ${ensemble.name} deleted.`);
         } catch (error) {
@@ -331,204 +111,74 @@
     }
 
     function handleDeleteEnsemble(ensemble: Ensemble) {
-        openConfirm(`Delete ensemble ${ensemble.name}?`, "Delete", () =>
-            deleteEnsembleAccount(ensemble),
-        );
+        showConfirmModal({
+            title: `Delete ensemble ${ensemble.name}`,
+            message: `Delete ensemble ${ensemble.name}?`,
+            confirmText: "Delete",
+            variant: "danger",
+            onConfirm: () => deleteEnsembleAccount(ensemble),
+        });
     }
 
     // Manage members
-    function buildEnsembleMemberRoleMap(ensemble: Ensemble) {
-        return Object.fromEntries(
-            ensemble.members.map((m) => [m.user_id, m.role]),
-        ) as Record<string, ManagedMemberDraftRole>;
-    }
-
     function openManageMembersModal(ensemble: Ensemble) {
-        managingEnsembleId = ensemble.id;
-        currentMemberSearchQuery = "";
-        addMemberSearchQuery = "";
-        originalManagedMemberRoles = buildEnsembleMemberRoleMap(ensemble);
-        managedMemberDraftRoles = buildEnsembleMemberRoleMap(ensemble);
-        inviteRoles = {};
-        savingManagedMembers = false;
+        showModal(ManageEnsembleMembersModal, {
+            ensemble,
+            allUsers,
+            currentUser,
+            onSave: saveManagedEnsembleChanges,
+        });
     }
 
-    function closeManageMembersModal() {
-        if (savingManagedMembers) return;
-        managingEnsembleId = "";
-        currentMemberSearchQuery = "";
-        addMemberSearchQuery = "";
-        originalManagedMemberRoles = {};
-        managedMemberDraftRoles = {};
-        inviteRoles = {};
-        mobileRolePickerTarget = null;
-    }
-
-    function stageManagedMemberRole(
-        userId: string,
-        role: ManagedMemberDraftRole,
+    async function saveManagedEnsembleChanges(
+        ensembleId: string,
+        members: EnsembleMemberAssignment[],
     ) {
-        managedMemberDraftRoles = {
-            ...managedMemberDraftRoles,
-            [userId]: role,
-        };
-    }
-
-    function hasManagedMemberChanges(): boolean {
-        const keys = new Set([
-            ...Object.keys(originalManagedMemberRoles),
-            ...Object.keys(managedMemberDraftRoles),
-        ]);
-        for (const userId of keys) {
-            if (
-                (originalManagedMemberRoles[userId] ?? "none") !==
-                (managedMemberDraftRoles[userId] ?? "none")
-            )
-                return true;
-        }
-        return false;
-    }
-
-    async function saveManagedEnsembleChanges() {
-        const ensembleId = managingEnsembleId;
-        if (!ensembleId || !hasManagedMemberChanges()) return;
-        savingManagedMembers = true;
         try {
-            const members = Object.entries(managedMemberDraftRoles)
-                .filter(([, role]) => role !== "none")
-                .map(([userId, role]) => ({
-                    userId,
-                    role: role as EnsembleRole,
-                }))
-                .sort((left, right) => left.userId.localeCompare(right.userId));
-            await setEnsembleMembers(ensembleId, members);
+            await authenticatedApiClient.adminUpdateEnsembleMembers(ensembleId, {
+                members: members.map((member) => ({
+                    user_id: member.userId,
+                    role: member.role,
+                })),
+            });
             await onRefresh();
-            originalManagedMemberRoles = { ...managedMemberDraftRoles };
             onSuccess("Ensemble members updated.");
-            savingManagedMembers = false;
-            closeManageMembersModal();
-            return;
         } catch (error) {
-            onError(
+            const message =
                 error instanceof Error
                     ? error.message
-                    : "Unable to update ensemble members",
-            );
-        } finally {
-            savingManagedMembers = false;
+                    : "Unable to update ensemble members";
+            onError(message);
+            throw error instanceof Error ? error : new Error(message);
         }
-    }
-
-    async function handleAddUserToManagedEnsemble(userId: string) {
-        stageManagedMemberRole(
-            userId,
-            inviteRoles[userId] ?? ("user" as EnsembleRole),
-        );
     }
 
     // Manage ensemble scores
     function openManageScoresModal(ensemble: Ensemble) {
-        managingEnsembleScoresId = ensemble.id;
-        currentEnsembleScoreSearchQuery = "";
-        addEnsembleScoreSearchQuery = "";
-        originalEnsembleScoreMusicIds = allMusics
-            .filter((m) => m.ensemble_ids.includes(ensemble.id))
-            .map((m) => m.id);
-        stagedEnsembleScoreMusicIds = [...originalEnsembleScoreMusicIds];
-        savingEnsembleScores = false;
+        showModal(ManageEnsembleScoresModal, {
+            ensemble,
+            allMusics,
+            onSave: saveEnsembleScores,
+        });
     }
 
-    function closeManageScoresModal() {
-        if (savingEnsembleScores) return;
-        managingEnsembleScoresId = "";
-        currentEnsembleScoreSearchQuery = "";
-        addEnsembleScoreSearchQuery = "";
-        originalEnsembleScoreMusicIds = [];
-        stagedEnsembleScoreMusicIds = [];
-    }
-
-    function inviteRoleForUser(user: AppUser): EnsembleRole {
-        return (
-            inviteRoles[user.id] ??
-            allowedEnsembleRolesForUser(user, currentUser)[0] ??
-            "user"
-        );
-    }
-
-    function openMobileRolePicker(
-        kind: MobileRolePickerTarget["kind"],
-        user: AppUser,
-        role: EnsembleRole,
+    async function saveEnsembleScores(
+        ensembleId: string,
+        musicIds: string[],
     ) {
-        mobileRolePickerTarget = { kind, userId: user.id };
-        mobileRolePickerValue = role;
-    }
-
-    function closeMobileRolePicker() {
-        mobileRolePickerTarget = null;
-    }
-
-    function applyMobileRolePicker() {
-        if (!mobileRolePickerTarget) return;
-        const { kind, userId } = mobileRolePickerTarget;
-        if (kind === "member") {
-            stageManagedMemberRole(userId, mobileRolePickerValue);
-        } else {
-            inviteRoles = {
-                ...inviteRoles,
-                [userId]: mobileRolePickerValue,
-            };
-        }
-        closeMobileRolePicker();
-    }
-
-    function toggleStagedEnsembleScore(musicId: string, shouldAdd: boolean) {
-        if (shouldAdd) {
-            stagedEnsembleScoreMusicIds = [
-                ...stagedEnsembleScoreMusicIds,
-                musicId,
-            ];
-        } else {
-            stagedEnsembleScoreMusicIds = stagedEnsembleScoreMusicIds.filter(
-                (id) => id !== musicId,
-            );
-        }
-    }
-
-    function hasManagedScoreChanges(): boolean {
-        const orig = new Set(originalEnsembleScoreMusicIds);
-        const staged = new Set(stagedEnsembleScoreMusicIds);
-        if (orig.size !== staged.size) return true;
-        return [...staged].some((id) => !orig.has(id));
-    }
-
-    async function saveEnsembleScores() {
-        if (!managingEnsembleScoresId) return;
-        const orig = new Set(originalEnsembleScoreMusicIds);
-        const staged = new Set(stagedEnsembleScoreMusicIds);
-        if (orig.size === staged.size && [...staged].every((id) => orig.has(id))) {
-            closeManageScoresModal();
-            return;
-        }
-        savingEnsembleScores = true;
         try {
-            await setMusicEnsembles(
-                managingEnsembleScoresId,
-                [...staged].sort((left, right) => left.localeCompare(right)),
-            );
+            await authenticatedApiClient.adminUpdateMusicEnsembles(ensembleId, {
+                ensemble_ids: musicIds,
+            });
             await onRefresh();
             onSuccess("Ensemble scores updated.");
-            savingEnsembleScores = false;
-            closeManageScoresModal();
-            return;
         } catch (error) {
-            onError(
+            const message =
                 error instanceof Error
                     ? error.message
-                    : "Failed to update scores",
-            );
-        } finally {
-            savingEnsembleScores = false;
+                    : "Failed to update scores";
+            onError(message);
+            throw error instanceof Error ? error : new Error(message);
         }
     }
 </script>
@@ -663,423 +313,3 @@
         {/if}
     </div>
 </section>
-
-{#if showCreateEnsembleModal}
-    {#snippet createEnsembleFooter()}
-        <div class="actions admin-user-modal-actions">
-            <button
-                class="button ghost"
-                type="button"
-                disabled={creatingEnsemble}
-                onclick={closeCreateEnsembleModal}>Cancel</button
-            >
-            <button
-                class="button"
-                type="button"
-                disabled={creatingEnsemble}
-                onclick={() => void handleCreateEnsemble()}
-            >
-                {creatingEnsemble ? "Creating..." : "Create ensemble"}
-            </button>
-        </div>
-    {/snippet}
-    <BaseModal
-        onClose={closeCreateEnsembleModal}
-        size="medium"
-        cardClass="admin-user-modal"
-        title="Create"
-        subtitle="New ensemble"
-        footer={createEnsembleFooter}
-    >
-        <label class="field">
-            <span>Ensemble name</span>
-            <input
-                bind:value={newEnsembleName}
-                placeholder="example: Strings"
-                onkeydown={(e) => {
-                    if (e.key === "Enter") void handleCreateEnsemble();
-                    else if (e.key === "Escape") closeCreateEnsembleModal();
-                }}
-            />
-        </label>
-    </BaseModal>
-{/if}
-
-{#if activeManagedEnsemble}
-    {#snippet manageMembersFooter()}
-        <div class="actions admin-user-modal-actions">
-            <button
-                class="button ghost"
-                type="button"
-                disabled={savingManagedMembers}
-                onclick={closeManageMembersModal}>Cancel</button
-            >
-            <button
-                class="button"
-                type="button"
-                disabled={savingManagedMembers || !hasManagedMemberChanges()}
-                onclick={() => void saveManagedEnsembleChanges()}
-            >
-                {savingManagedMembers ? "Saving..." : "Save changes"}
-            </button>
-        </div>
-    {/snippet}
-    <BaseModal
-        onClose={closeManageMembersModal}
-        size="full"
-        cardClass="admin-split-modal"
-        title="Members"
-        subtitle={activeManagedEnsemble.name}
-        footer={manageMembersFooter}
-    >
-        <div class="admin-split-pane">
-            <section class="admin-split-column">
-                <div class="admin-split-header">
-                    <div class="admin-split-header-main">
-                        <h4>Current members</h4>
-                        <label class="field admin-user-search admin-split-search">
-                            <span class="sr-only">Search current members</span>
-                            <div class="admin-user-search-input-wrap">
-                                <Search size={15} aria-hidden="true" />
-                                <input
-                                    bind:value={currentMemberSearchQuery}
-                                    placeholder="Search current members"
-                                />
-                            </div>
-                        </label>
-                        <span class="admin-user-role-pill">
-                            {filteredManagedMembers.length}
-                        </span>
-                    </div>
-                </div>
-                <div class="admin-inline-list">
-                    {#if filteredManagedMembers.length === 0}
-                        <p class="hint">No matching members.</p>
-                    {:else}
-                        {#each filteredManagedMembers as member}
-                            <div class="admin-inline-row">
-                                <div class="admin-inline-copy">
-                                    <strong>{member.user!.username}</strong>
-                                    <span class="admin-user-role-pill">
-                                        {memberRoleLabel(member.role)}
-                                    </span>
-                                </div>
-                                <div class="admin-inline-actions">
-                                    {#if allowedEnsembleRolesForUser(member.user!, currentUser).length > 0}
-                                        <button
-                                            class="button secondary admin-inline-role-btn admin-inline-role-btn-mobile"
-                                            type="button"
-                                            aria-label={`Change role for ${member.user!.username}`}
-                                            title={`Change role for ${member.user!.username}`}
-                                            onclick={() =>
-                                                openMobileRolePicker(
-                                                    "member",
-                                                    member.user!,
-                                                    member.role,
-                                                )}
-                                        >
-                                            <UserCog
-                                                size={17}
-                                                strokeWidth={2.25}
-                                                aria-hidden="true"
-                                            />
-                                        </button>
-                                        <div
-                                            class="admin-member-role-select admin-inline-role-select-desktop"
-                                        >
-                                            <CustomSelect
-                                                value={member.role}
-                                                options={ensembleRoleOptionsForUser(
-                                                    member.user!,
-                                                )}
-                                                compact={true}
-                                                showDescriptionInTrigger={false}
-                                                onValueChange={(role) =>
-                                                    stageManagedMemberRole(
-                                                        member.user_id,
-                                                        role as EnsembleRole,
-                                                    )}
-                                            />
-                                        </div>
-                                        <button
-                                            class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
-                                            type="button"
-                                            aria-label={`Remove ${member.user!.username}`}
-                                            title={`Remove ${member.user!.username}`}
-                                            onclick={() =>
-                                                stageManagedMemberRole(
-                                                    member.user_id,
-                                                    "none",
-                                                )}
-                                        >
-                                            <span aria-hidden="true">-</span>
-                                        </button>
-                                    {:else}
-                                        <span class="hint">Locked</span>
-                                    {/if}
-                                </div>
-                            </div>
-                        {/each}
-                    {/if}
-                </div>
-            </section>
-            <section class="admin-split-column">
-                <div class="admin-split-header">
-                    <div class="admin-split-header-main">
-                        <h4>Add members</h4>
-                        <label class="field admin-user-search admin-split-search">
-                            <span class="sr-only">Search available users</span>
-                            <div class="admin-user-search-input-wrap">
-                                <Search size={15} aria-hidden="true" />
-                                <input
-                                    bind:value={addMemberSearchQuery}
-                                    placeholder="Search available users"
-                                />
-                            </div>
-                        </label>
-                        <span class="admin-user-role-pill">
-                            {filteredAvailableEnsembleUsers.length}
-                        </span>
-                    </div>
-                </div>
-                <div class="admin-inline-list">
-                    {#if filteredAvailableEnsembleUsers.length === 0}
-                        <p class="hint">No available users.</p>
-                    {:else}
-                        {#each filteredAvailableEnsembleUsers as user}
-                            <div class="admin-inline-row">
-                                <div class="admin-inline-copy">
-                                    <strong>{user.username}</strong>
-                                    <span class="admin-user-role-pill"
-                                        >{user.role}</span
-                                    >
-                                </div>
-                                <div class="admin-inline-actions">
-                                    <button
-                                        class="button secondary admin-inline-role-btn admin-inline-role-btn-mobile"
-                                        type="button"
-                                        aria-label={`Change role for ${user.username}`}
-                                        title={`Change role for ${user.username}`}
-                                        onclick={() =>
-                                            openMobileRolePicker(
-                                                "invite",
-                                                user,
-                                                inviteRoleForUser(user),
-                                            )}
-                                    >
-                                        <UserCog size={15} aria-hidden="true" />
-                                    </button>
-                                    <div
-                                        class="admin-member-role-select admin-inline-role-select-desktop"
-                                    >
-                                        <CustomSelect
-                                            value={inviteRoleForUser(user)}
-                                            options={ensembleRoleOptionsForUser(
-                                                user,
-                                            )}
-                                            compact={true}
-                                            showDescriptionInTrigger={false}
-                                            onValueChange={(role) => {
-                                                inviteRoles = {
-                                                    ...inviteRoles,
-                                                    [user.id]:
-                                                        role as EnsembleRole,
-                                                };
-                                            }}
-                                        />
-                                    </div>
-                                    <button
-                                        class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
-                                        type="button"
-                                        aria-label={`Add ${user.username}`}
-                                        title={`Add ${user.username}`}
-                                        onclick={() =>
-                                            void handleAddUserToManagedEnsemble(
-                                                user.id,
-                                            )}
-                                    >
-                                        <span aria-hidden="true">+</span>
-                                    </button>
-                                </div>
-                            </div>
-                        {/each}
-                    {/if}
-                </div>
-            </section>
-        </div>
-    </BaseModal>
-{/if}
-
-{#if activeManagedScoreEnsemble}
-    {#snippet manageScoresFooter()}
-        <div class="actions admin-user-modal-actions">
-            <button
-                class="button ghost"
-                type="button"
-                disabled={savingEnsembleScores}
-                onclick={closeManageScoresModal}>Cancel</button
-            >
-            <button
-                class="button"
-                type="button"
-                disabled={savingEnsembleScores || !hasManagedScoreChanges()}
-                onclick={() => void saveEnsembleScores()}
-            >
-                {savingEnsembleScores ? "Saving..." : "Save changes"}
-            </button>
-        </div>
-    {/snippet}
-    <BaseModal
-        onClose={closeManageScoresModal}
-        size="full"
-        cardClass="admin-split-modal"
-        title="Scores"
-        subtitle={activeManagedScoreEnsemble.name}
-        footer={manageScoresFooter}
-    >
-        <div class="admin-split-pane">
-            <section class="admin-split-column">
-                <div class="admin-split-header">
-                    <div class="admin-split-header-main">
-                        <h4>Current scores</h4>
-                        <label class="field admin-user-search admin-split-search">
-                            <span class="sr-only">Search current scores</span>
-                            <div class="admin-user-search-input-wrap">
-                                <Search size={15} aria-hidden="true" />
-                                <input
-                                    bind:value={currentEnsembleScoreSearchQuery}
-                                    placeholder="Search current scores"
-                                />
-                            </div>
-                        </label>
-                        <span class="admin-user-role-pill">
-                            {filteredManagedEnsembleScores.length}
-                        </span>
-                    </div>
-                </div>
-                <div class="admin-inline-list">
-                    {#if filteredManagedEnsembleScores.length === 0}
-                        <p class="hint">No matching scores in this ensemble.</p>
-                    {:else}
-                        {#each filteredManagedEnsembleScores as music}
-                            <div class="admin-inline-row admin-inline-row-score">
-                                <div class="admin-inline-copy">
-                                    <strong>{music.title}</strong>
-                                </div>
-                                <div class="admin-inline-actions">
-                                    <button
-                                        class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
-                                        type="button"
-                                        disabled={savingEnsembleScores}
-                                        aria-label={`Remove ${music.title}`}
-                                        title={`Remove ${music.title}`}
-                                        onclick={() =>
-                                            toggleStagedEnsembleScore(
-                                                music.id,
-                                                false,
-                                            )}
-                                    >
-                                        <span aria-hidden="true">-</span>
-                                    </button>
-                                </div>
-                            </div>
-                        {/each}
-                    {/if}
-                </div>
-            </section>
-            <section class="admin-split-column">
-                <div class="admin-split-header">
-                    <div class="admin-split-header-main">
-                        <h4>Add scores</h4>
-                        <label class="field admin-user-search admin-split-search">
-                            <span class="sr-only">Search available scores</span>
-                            <div class="admin-user-search-input-wrap">
-                                <Search size={15} aria-hidden="true" />
-                                <input
-                                    bind:value={addEnsembleScoreSearchQuery}
-                                    placeholder="Search available scores"
-                                />
-                            </div>
-                        </label>
-                        <span class="admin-user-role-pill">
-                            {filteredAvailableEnsembleScores.length}
-                        </span>
-                    </div>
-                </div>
-                <div class="admin-inline-list">
-                    {#if filteredAvailableEnsembleScores.length === 0}
-                        <p class="hint">No available scores.</p>
-                    {:else}
-                        {#each filteredAvailableEnsembleScores as music}
-                            <div class="admin-inline-row admin-inline-row-score">
-                                <div class="admin-inline-copy">
-                                    <strong>{music.title}</strong>
-                                </div>
-                                <div class="admin-inline-actions">
-                                    <button
-                                        class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
-                                        type="button"
-                                        disabled={savingEnsembleScores}
-                                        aria-label={`Add ${music.title}`}
-                                        title={`Add ${music.title}`}
-                                        onclick={() =>
-                                            toggleStagedEnsembleScore(
-                                                music.id,
-                                                true,
-                                            )}
-                                    >
-                                        <span aria-hidden="true">+</span>
-                                    </button>
-                                </div>
-                            </div>
-                        {/each}
-                    {/if}
-                </div>
-            </section>
-        </div>
-    </BaseModal>
-{/if}
-
-{#if mobileRolePickerTarget && mobileRolePickerUser}
-    {#snippet mobileRolePickerFooter()}
-        <div class="actions admin-user-modal-actions">
-            <button
-                class="button ghost"
-                type="button"
-                onclick={closeMobileRolePicker}
-            >
-                Cancel
-            </button>
-            <button class="button" type="button" onclick={applyMobileRolePicker}>
-                Apply
-            </button>
-        </div>
-    {/snippet}
-    <BaseModal
-        onClose={closeMobileRolePicker}
-        size="small"
-        cardClass="admin-role-picker-modal"
-        title="Role"
-        subtitle={mobileRolePickerUser.display_name ??
-            `@${mobileRolePickerUser.username}`}
-        footer={mobileRolePickerFooter}
-    >
-        <CustomSelect
-            label="Role"
-            bind:value={mobileRolePickerValue}
-            options={mobileRolePickerOptions}
-            compact={true}
-            showDescriptionInTrigger={false}
-        />
-    </BaseModal>
-{/if}
-
-{#if confirmAction}
-    <ConfirmModal
-        title={confirmMessage}
-        {confirmLabel}
-        busy={confirmBusy}
-        onConfirm={executeConfirm}
-        onClose={closeConfirm}
-    />
-{/if}

@@ -1,6 +1,9 @@
 <script lang="ts">
     import ScoreIcon from "../components/ScoreIcon.svelte";
-    import type { AppUser, UserLibraryEnsemble } from "../lib/api";
+    import type {
+        UserLibraryEnsembleResponse as UserLibraryEnsemble,
+        UserResponse as AppUser,
+    } from "../adapters/fumen-backend/src/models";
     import TopBar from "../components/TopBar.svelte";
     import { QrCode } from "@lucide/svelte";
 

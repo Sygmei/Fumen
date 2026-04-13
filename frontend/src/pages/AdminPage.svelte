@@ -1,14 +1,11 @@
 ﻿<script lang="ts">
-    import {
-        createAdminUserLoginLink,
-        listEnsembles,
-        listMusics,
-        listUsers,
-        type AdminMusic,
-        type AppUser,
-        type Ensemble,
-        type LoginLinkResponse,
-    } from "../lib/api";
+    import type {
+        AdminEnsembleResponse as Ensemble,
+        AdminMusicResponse as AdminMusic,
+        LoginLinkResponse,
+        UserResponse as AppUser,
+    } from "../adapters/fumen-backend/src/models";
+    import { authenticatedApiClient } from "../lib/auth-client";
     import AdminLayout from "../components/AdminLayout.svelte";
     import AdminUsersSection from "./AdminUsersSection.svelte";
     import AdminEnsemblesSection from "./AdminEnsemblesSection.svelte";
@@ -108,9 +105,9 @@
         adminError = "";
         try {
             const [musicItems, userItems, ensembleItems] = await Promise.all([
-                listMusics(),
-                listUsers(),
-                listEnsembles(),
+                authenticatedApiClient.adminListMusics(),
+                authenticatedApiClient.adminListUsers(),
+                authenticatedApiClient.adminListEnsembles(),
             ]);
             musics = musicItems;
             adminUsers = userItems;
@@ -128,7 +125,7 @@
     async function handleShowUserQr(user: AppUser) {
         await onShowCredential(
             `QR code for ${user.username}`,
-            () => createAdminUserLoginLink(user.id),
+            () => authenticatedApiClient.adminCreateUserLoginLink(user.id),
         );
     }
 

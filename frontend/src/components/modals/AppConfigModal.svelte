@@ -7,13 +7,15 @@
         countInMeasures,
         onToggleCountIn,
         onChangeCountInMeasures,
-        onClose,
+        onClose = () => {},
+        modalId,
     }: {
         enableCountIn: boolean;
         countInMeasures: number;
         onToggleCountIn: (value: boolean) => void;
         onChangeCountInMeasures: (value: number) => void;
-        onClose: () => void;
+        onClose?: () => void;
+        modalId?: string;
     } = $props();
 </script>
 
@@ -23,6 +25,7 @@
     size="small"
     cardClass="app-config-modal"
     {onClose}
+    {modalId}
 >
     <section class="grid gap-3">
         <div class="flex items-center gap-2.5">
