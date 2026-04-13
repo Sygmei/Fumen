@@ -11,7 +11,7 @@ aws-sdk-s3 = "1.96.0"
 axum = { version = "0.8.4", features = ["multipart"] }
 bytes = "1.10.1"
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
-diesel = { version = "2.3.7", features = ["postgres"] }
+diesel = { version = "2.3.7", features = ["postgres_backend"] }
 diesel-async = { version = "0.8.0", features = ["bb8", "migrations", "postgres"] }
 diesel_migrations = { version = "2.3.1", features = ["postgres"] }
 flate2 = "1.1.0"
