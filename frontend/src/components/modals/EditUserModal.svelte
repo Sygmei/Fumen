@@ -1,11 +1,15 @@
 <script lang="ts">
     import { Pencil, User } from "@lucide/svelte";
-    import type { UserResponse as AppUser } from "../../adapters/fumen-backend/src/models";
-    import { canDeleteUserAccount, isSuperadmin } from "../../lib/admin-permissions";
-    import { compressImageToJpeg } from "../../lib/image";
-    import type { GlobalRole } from "../../lib/roles";
+    import type { UserResponse as AppUser } from "$backend/models";
+    import { canDeleteUserAccount, isSuperadmin } from "$lib/admin-permissions";
+    import {
+        AVATAR_IMAGE_SIZE,
+        AVATAR_UPLOAD_MAX_BYTES,
+        compressImageToJpeg,
+    } from "$lib/image";
+    import type { GlobalRole } from "$lib/roles";
     import BaseModal from "./BaseModal.svelte";
-    import CustomSelect from "../CustomSelect.svelte";
+    import CustomSelect from "$components/CustomSelect.svelte";
     import { closeModal } from "./modalState";
     import type { GlobalRoleOption, UserEditDraft } from "./types";
 
@@ -23,7 +27,6 @@
         modalId?: string;
     } = $props();
 
-    const MAX_AVATAR_BYTES = 1 * 1024 * 1024;
     const initialRole = (
         user.role === "superadmin" ? "admin" : user.role
     ) as Exclude<GlobalRole, "superadmin">;
@@ -44,14 +47,14 @@
         const input = event.currentTarget as HTMLInputElement;
         const file = input.files?.[0];
         if (!file) return;
-        if (file.size > MAX_AVATAR_BYTES) {
-            errorMsg = "Image must be under 1 MB.";
+        if (file.size > AVATAR_UPLOAD_MAX_BYTES) {
+            errorMsg = "Image must be under 10 MB.";
             input.value = "";
             return;
         }
 
         errorMsg = "";
-        const compressed = await compressImageToJpeg(file, 256);
+        const compressed = await compressImageToJpeg(file, AVATAR_IMAGE_SIZE);
         avatarFile = compressed;
         clearAvatar = false;
         const reader = new FileReader();

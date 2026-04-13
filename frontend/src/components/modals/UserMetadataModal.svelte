@@ -3,8 +3,8 @@
     import type {
         AdminUserMetadataResponse as AdminUserMetadata,
         UserResponse as AppUser,
-    } from "../../adapters/fumen-backend/src/models";
-    import { formatPlaytimeDuration, prettyDate } from "../../lib/utils";
+    } from "$backend/models";
+    import { formatPlaytimeDuration, prettyDate } from "$lib/utils";
     import BaseModal from "./BaseModal.svelte";
 
     let {

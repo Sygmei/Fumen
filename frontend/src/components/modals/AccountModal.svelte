@@ -3,9 +3,13 @@
     import type {
         UpdateMyProfileMultipartRequest,
         UserResponse as AppUser,
-    } from "../../adapters/fumen-backend/src/models";
-    import { authenticatedApiClient } from "../../lib/auth-client";
-    import { compressImageToJpeg } from "../../lib/image";
+    } from "$backend/models";
+    import { authenticatedApiClient } from "$lib/auth-client";
+    import {
+        AVATAR_IMAGE_SIZE,
+        AVATAR_UPLOAD_MAX_BYTES,
+        compressImageToJpeg,
+    } from "$lib/image";
     import { closeModal } from "./modalState";
     import { Camera } from "@lucide/svelte";
 
@@ -31,21 +35,19 @@
     let saving = $state(false);
     let errorMsg = $state("");
 
-    const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1 MB
-
     async function handleAvatarChange(event: Event) {
         const input = event.currentTarget as HTMLInputElement;
         const file = input.files?.[0];
         if (!file) return;
 
-        if (file.size > MAX_FILE_SIZE) {
-            errorMsg = "Image must be under 1 MB.";
+        if (file.size > AVATAR_UPLOAD_MAX_BYTES) {
+            errorMsg = "Image must be under 10 MB.";
             input.value = "";
             return;
         }
 
         errorMsg = "";
-        const compressed = await compressImageToJpeg(file, 256);
+        const compressed = await compressImageToJpeg(file, AVATAR_IMAGE_SIZE);
         avatarFile = compressed;
         clearAvatar = false;
         const reader = new FileReader();

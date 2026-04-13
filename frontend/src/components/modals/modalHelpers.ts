@@ -1,7 +1,7 @@
 import type {
     LoginLinkResponse,
     UserResponse,
-} from "../../adapters/fumen-backend/src/models";
+} from "$backend/models";
 import AccountModal from "./AccountModal.svelte";
 import AppConfigModal from "./AppConfigModal.svelte";
 import ConfirmModal from "./ConfirmModal.svelte";

@@ -1,12 +1,12 @@
 <script lang="ts">
     import { Users } from "@lucide/svelte";
-    import type { AdminEnsembleResponse as Ensemble } from "../../adapters/fumen-backend/src/models";
+    import type { AdminEnsembleResponse as Ensemble } from "$backend/models";
     import {
         STEM_QUALITY_PROFILES,
         type StemQualityProfile,
-    } from "../../lib/stem-quality";
+    } from "$lib/stem-quality";
     import BaseModal from "./BaseModal.svelte";
-    import CustomSelect from "../CustomSelect.svelte";
+    import CustomSelect from "$components/CustomSelect.svelte";
     import ScoreEnsemblePickerModal from "./ScoreEnsemblePickerModal.svelte";
     import { closeModal, pushModal } from "./modalState";
     import type { UploadScoreDraft } from "./types";

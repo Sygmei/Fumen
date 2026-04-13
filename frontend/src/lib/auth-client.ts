@@ -1,5 +1,5 @@
-import { ApiClient as GeneratedApiClient } from '../adapters/fumen-backend/src'
-import type { ErrorResponse } from '../adapters/fumen-backend/src/models'
+import { ApiClient as GeneratedApiClient } from '$backend'
+import type { ErrorResponse } from '$backend/models'
 
 type RuntimeConfig = {
   apiBaseUrl?: string

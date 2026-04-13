@@ -1,6 +1,9 @@
+export const AVATAR_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+export const AVATAR_IMAGE_SIZE = 256
+
 export async function compressImageToJpeg(
   file: File,
-  size = 256,
+  size = AVATAR_IMAGE_SIZE,
   quality = 0.88,
 ): Promise<File> {
   return new Promise((resolve, reject) => {

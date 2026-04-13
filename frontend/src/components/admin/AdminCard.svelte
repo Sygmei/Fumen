@@ -2,35 +2,53 @@
     import type { Snippet } from "svelte";
 
     let {
-        avatar,
-        main,
-        actions,
+        cardClass = "",
+        body,
+        footer,
+        footerClass = "",
     }: {
-        avatar?: Snippet;
-        main: Snippet;
-        actions: Snippet;
+        cardClass?: string;
+        body: Snippet;
+        footer?: Snippet;
+        footerClass?: string;
     } = $props();
 </script>
 
-<article class="music-card admin-record-card">
-    <div class="admin-record-main">
-        <div class="admin-record-avatar" aria-hidden="true">
-            {#if avatar}
-                {@render avatar()}
-            {/if}
-        </div>
-        <div class="admin-record-copy">
-            {@render main()}
-        </div>
+<article class={`music-card admin-card ${cardClass}`.trim()}>
+    <div class="admin-card-accent" aria-hidden="true"></div>
+    <div class="admin-card-body">
+        {@render body()}
     </div>
-
-    <div class="admin-record-actions">
-        {@render actions()}
-    </div>
+    {#if footer}
+        <div class={`admin-card-footer ${footerClass}`.trim()}>
+            {@render footer()}
+        </div>
+    {/if}
 </article>
 
 <style>
-    .admin-record-card {
+    .admin-card {
+        position: relative;
+        overflow: hidden;
+    }
+
+    .admin-card-accent {
+        position: absolute;
+        inset: 0 auto auto 0;
+        width: 100%;
+        height: 3px;
+        background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+        opacity: 0.98;
+        pointer-events: none;
+    }
+
+    .admin-card-body,
+    .admin-card-footer {
+        position: relative;
+        z-index: 1;
+    }
+
+    :global(.admin-record-card) {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
         grid-template-areas: "main actions";
@@ -40,15 +58,23 @@
         height: 114px;
         min-height: 114px;
         max-height: 114px;
-        padding: 10px 14px !important;
+        padding: 14px !important;
         overflow: hidden;
         align-self: stretch;
         justify-self: stretch;
         min-width: 0;
     }
 
-    .admin-record-main {
+    :global(.admin-record-card .admin-card-body) {
         grid-area: main;
+        min-width: 0;
+    }
+
+    :global(.admin-record-card .admin-card-footer) {
+        grid-area: actions;
+    }
+
+    :global(.admin-record-main) {
         display: flex;
         align-items: center;
         gap: 10px;
@@ -56,7 +82,7 @@
         flex: 1 1 auto;
     }
 
-    .admin-record-avatar {
+    :global(.admin-record-avatar) {
         display: grid;
         place-items: center;
         width: 2rem;
@@ -72,13 +98,21 @@
         border-radius: inherit;
     }
 
-    .admin-record-copy {
+    :global(.admin-record-avatar-gradient) {
+        background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.14), transparent 60%),
+            linear-gradient(90deg, var(--accent), var(--accent-hover));
+        color: white;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    }
+
+    :global(.admin-record-copy) {
         display: grid;
         gap: 4px;
         min-width: 0;
     }
 
-    .admin-record-copy :global(h3) {
+    :global(.admin-record-copy h3) {
         margin: 0;
         font-size: 0.95rem;
         overflow: hidden;
@@ -86,13 +120,7 @@
         white-space: nowrap;
     }
 
-    .admin-record-copy :global(.admin-user-role-pill) {
-        width: fit-content;
-        max-width: 100%;
-    }
-
-    .admin-record-actions {
-        grid-area: actions;
+    :global(.admin-record-actions) {
         display: grid;
         grid-template-columns: repeat(4, 34px);
         gap: 8px;
@@ -102,7 +130,7 @@
         align-self: center;
     }
 
-    .admin-record-actions :global(.button) {
+    :global(.admin-record-actions .button) {
         width: 34px;
         min-width: 34px;
         height: 34px;
@@ -112,13 +140,13 @@
         line-height: 1;
     }
 
-    .admin-record-actions :global(.button svg) {
+    :global(.admin-record-actions .button svg) {
         display: block;
         flex-shrink: 0;
     }
 
     @media (max-width: 760px) {
-        .admin-record-card {
+        :global(.admin-record-card) {
             grid-template-columns: 1fr;
             grid-template-rows: minmax(0, 1fr) auto;
             grid-template-areas:
@@ -130,7 +158,7 @@
             max-height: none;
         }
 
-        .admin-record-actions {
+        :global(.admin-record-actions) {
             width: 100%;
             min-width: 0;
             justify-content: stretch;
@@ -138,7 +166,7 @@
             grid-template-columns: repeat(4, minmax(0, 1fr));
         }
 
-        .admin-record-actions :global(.button) {
+        :global(.admin-record-actions .button) {
             width: 100%;
             min-width: 0;
         }

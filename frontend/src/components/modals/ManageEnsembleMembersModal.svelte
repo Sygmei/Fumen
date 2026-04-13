@@ -9,11 +9,11 @@
     import type {
         AdminEnsembleResponse as Ensemble,
         UserResponse as AppUser,
-    } from "../../adapters/fumen-backend/src/models";
-    import { allowedEnsembleRolesForUser } from "../../lib/admin-permissions";
-    import type { EnsembleRole } from "../../lib/roles";
+    } from "$backend/models";
+    import { allowedEnsembleRolesForUser } from "$lib/admin-permissions";
+    import type { EnsembleRole } from "$lib/roles";
     import BaseModal from "./BaseModal.svelte";
-    import CustomSelect from "../CustomSelect.svelte";
+    import CustomSelect from "$components/CustomSelect.svelte";
     import EnsembleRolePickerModal from "./EnsembleRolePickerModal.svelte";
     import { closeModal, pushModal } from "./modalState";
     import type {

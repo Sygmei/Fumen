@@ -1,53 +1,47 @@
 <script lang="ts">
     import type { Snippet } from "svelte";
-    import type { UserResponse as AppUser } from "../adapters/fumen-backend/src/models";
-    import TopBar from "./TopBar.svelte";
-    import { canAccessAdmin } from "../lib/admin-permissions";
+    import { goto } from "$app/navigation";
+    import { page } from "$app/state";
+    import TopBar from "$components/TopBar.svelte";
+    import { canAccessAdmin } from "$lib/admin-permissions";
+    import { appShell } from "$lib/app-shell.svelte";
+    import {
+        AdminState,
+        getAdminSectionFromPath,
+        getAdminSectionPath,
+        getPreferredAdminSection,
+        getVisibleAdminSectionItems,
+        setAdminStateContext,
+        type AdminSection,
+    } from "$lib/admin-state.svelte";
 
-    type AdminSection = "users" | "ensembles" | "scores";
+    let { children }: { children: Snippet } = $props();
 
-    let {
-        currentUser,
-        userLoading,
-        preloadedUsername,
-        adminLoading,
-        adminError,
-        adminSuccess,
-        adminSection,
-        visibleSectionItems,
-        sectionCounts,
-        onShowQr,
-        onLogout,
-        onMyAccount,
-        onAppConfig,
-        onSectionChange,
-        children,
-    }: {
-        currentUser: AppUser | null;
-        userLoading: boolean;
-        preloadedUsername: string;
-        adminLoading: boolean;
-        adminError: string;
-        adminSuccess: string;
-        adminSection: AdminSection;
-        visibleSectionItems: Array<{ id: AdminSection; label: string; eyebrow: string }>;
-        sectionCounts: { users: number; ensembles: number; scores: number };
-        onShowQr?: () => void;
-        onLogout: () => void;
-        onMyAccount?: () => void;
-        onAppConfig?: () => void;
-        onSectionChange: (section: AdminSection) => void;
-        children: Snippet;
-    } = $props();
+    const adminState = setAdminStateContext(new AdminState());
+
+    const currentSection = $derived.by(() =>
+        getAdminSectionFromPath(page.url.pathname),
+    );
+
+    const visibleAdminSectionItems = $derived(
+        getVisibleAdminSectionItems(appShell.currentUser),
+    );
+
+    const sectionCounts = $derived({
+        users: adminState.adminUsers.length,
+        ensembles: adminState.ensembles.length,
+        scores: adminState.musics.length,
+    });
 
     const currentSectionLabel = $derived(
-        visibleSectionItems.find((s) => s.id === adminSection)?.label ??
-            visibleSectionItems[0]?.label ??
-            "Admin"
+        visibleAdminSectionItems.find((section) => section.id === currentSection)
+            ?.label ??
+            visibleAdminSectionItems[0]?.label ??
+            "Admin",
     );
 
     const mobileMenuItems = $derived(
-        visibleSectionItems.map((section) => ({
+        visibleAdminSectionItems.map((section) => ({
             id: section.id,
             label: section.label,
             eyebrow: section.eyebrow,
@@ -57,16 +51,77 @@
                     : section.id === "ensembles"
                       ? `${sectionCounts.ensembles} groups`
                       : `${sectionCounts.scores} scores`,
-        }))
+        })),
     );
 
     const isInitialLoading = $derived(
-        (userLoading && !currentUser) ||
-            (adminLoading &&
+        (appShell.userLoading && !appShell.currentUser) ||
+            (adminState.adminLoading &&
                 sectionCounts.users === 0 &&
                 sectionCounts.ensembles === 0 &&
-                sectionCounts.scores === 0)
+                sectionCounts.scores === 0),
     );
+
+    $effect(() => {
+        const currentUser = appShell.currentUser;
+
+        if (!currentUser || !canAccessAdmin(currentUser)) {
+            adminState.clear();
+            return;
+        }
+
+        void adminState.ensureLoadedFor(currentUser.id);
+    });
+
+    $effect(() => {
+        const currentUser = appShell.currentUser;
+
+        if (!currentUser || !canAccessAdmin(currentUser)) {
+            return;
+        }
+
+        if (visibleAdminSectionItems.some((section) => section.id === currentSection)) {
+            return;
+        }
+
+        void goto(getAdminSectionPath(getPreferredAdminSection(currentUser)), {
+            replaceState: true,
+            noScroll: true,
+            keepFocus: true,
+        });
+    });
+
+    $effect(() => {
+        const shouldPollForProcessing =
+            currentSection === "scores" &&
+            adminState.musics.some((music) =>
+                [
+                    music.audio_status,
+                    music.midi_status,
+                    music.musicxml_status,
+                    music.stems_status,
+                ].includes("processing"),
+            );
+
+        if (!shouldPollForProcessing) {
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            if (currentSection === "scores") {
+                void adminState.refresh();
+            }
+        }, 5000);
+
+        return () => window.clearInterval(timer);
+    });
+
+    function navigateToSection(section: AdminSection) {
+        void goto(getAdminSectionPath(section), {
+            noScroll: true,
+            keepFocus: true,
+        });
+    }
 </script>
 
 {#if isInitialLoading}
@@ -79,10 +134,10 @@
             <span></span>
         </div>
         <p class="loading-eq-label">
-            {preloadedUsername ? `Hello, ${preloadedUsername}` : "Fumen"}
+            {appShell.preloadedUsername ? `Hello, ${appShell.preloadedUsername}` : "Fumen"}
         </p>
     </div>
-{:else if !currentUser}
+{:else if !appShell.currentUser}
     <section class="min-h-dvh grid place-items-center p-6">
         <div class="music-card w-[min(680px,100%)] grid gap-6">
             <div>
@@ -102,15 +157,15 @@
             </p>
         </div>
     </section>
-{:else if !canAccessAdmin(currentUser)}
+{:else if !canAccessAdmin(appShell.currentUser)}
     <section class="min-h-dvh grid place-items-center p-6">
         <div class="music-card w-[min(680px,100%)] grid gap-6">
             <div>
                 <p class="eyebrow">Fumen • Admin</p>
                 <h1>Control room</h1>
                 <p class="lede">
-                    {currentUser.username} is signed in, but this account does not
-                    have admin access.
+                    {appShell.currentUser.username} is signed in, but this
+                    account does not have admin access.
                 </p>
             </div>
             <div class="flex items-center gap-4 flex-wrap">
@@ -125,17 +180,17 @@
                 { label: "Fumen", href: "/" },
                 { label: currentSectionLabel },
             ]}
-            {currentUser}
+            currentUser={appShell.currentUser}
             userHomeHref="/"
-            {onShowQr}
-            {onLogout}
-            {onMyAccount}
-            {onAppConfig}
+            onShowQr={() => void appShell.handleShowMyQr()}
+            onLogout={() => void appShell.logoutUser()}
+            onMyAccount={() => appShell.handleMyAccount()}
+            onAppConfig={() => appShell.handleAppConfig()}
             mobileMenuItems={mobileMenuItems}
-            mobileMenuActiveId={adminSection}
+            mobileMenuActiveId={currentSection}
             mobileMenuAriaLabel="Admin sections"
             onMobileMenuSelect={(sectionId) =>
-                onSectionChange(sectionId as AdminSection)}
+                navigateToSection(sectionId as AdminSection)}
         />
 
         <div
@@ -146,11 +201,11 @@
                     class="grid gap-0 border-t border-(--border-strong) !mx-0"
                     aria-label="Admin sections"
                 >
-                    {#each visibleSectionItems as section}
+                    {#each visibleAdminSectionItems as section}
                         <button
                             class="admin-nav-button"
-                            class:is-active={adminSection === section.id}
-                            onclick={() => onSectionChange(section.id)}
+                            class:is-active={currentSection === section.id}
+                            onclick={() => navigateToSection(section.id)}
                         >
                             <span class="admin-nav-eyebrow">{section.eyebrow}</span>
                             <strong>{section.label}</strong>
@@ -173,13 +228,13 @@
     </section>
 {/if}
 
-{#if adminError || adminSuccess}
+{#if adminState.adminError || adminState.adminSuccess}
     <div class="toast-stack" aria-live="polite" aria-atomic="true">
-        {#if adminError}
-            <p class="status error toast">{adminError}</p>
+        {#if adminState.adminError}
+            <p class="status error toast">{adminState.adminError}</p>
         {/if}
-        {#if adminSuccess}
-            <p class="status success toast">{adminSuccess}</p>
+        {#if adminState.adminSuccess}
+            <p class="status success toast">{adminState.adminSuccess}</p>
         {/if}
     </div>
 {/if}

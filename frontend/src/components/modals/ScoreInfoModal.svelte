@@ -4,14 +4,14 @@
         AdminMusicPlaytimeResponse as AdminMusicPlaytime,
         AdminMusicResponse as AdminMusic,
         UserResponse as AppUser,
-    } from "../../adapters/fumen-backend/src/models";
-    import { canEditOwnedScore } from "../../lib/admin-permissions";
+    } from "$backend/models";
+    import { canEditOwnedScore } from "$lib/admin-permissions";
     import {
         formatBytes,
         formatPlaytimeDuration,
         prettyDate,
         qualityProfileLabel,
-    } from "../../lib/utils";
+    } from "$lib/utils";
     import BaseModal from "./BaseModal.svelte";
 
     let {

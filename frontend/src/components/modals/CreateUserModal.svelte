@@ -2,7 +2,7 @@
     import BaseModal from "./BaseModal.svelte";
     import CustomSelect from "../CustomSelect.svelte";
     import { closeModal } from "./modalState";
-    import type { GlobalRole } from "../../lib/roles";
+    import type { GlobalRole } from "$lib/roles";
     import type { GlobalRoleOption } from "./types";
 
     let {

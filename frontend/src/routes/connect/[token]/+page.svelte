@@ -1,40 +1,25 @@
 <script lang="ts">
-    import ScoreIcon from "../components/ScoreIcon.svelte";
-    import type {
-        UserLibraryEnsembleResponse as UserLibraryEnsemble,
-        UserResponse as AppUser,
-    } from "../adapters/fumen-backend/src/models";
-    import TopBar from "../components/TopBar.svelte";
+    import { page } from "$app/state";
+    import ScoreIcon from "$components/ScoreIcon.svelte";
+    import TopBar from "$components/TopBar.svelte";
+    import { appShell } from "$lib/app-shell.svelte";
     import { QrCode } from "@lucide/svelte";
 
-    let {
-        routeKind,
-        currentUser,
-        userLoading,
-        userLibrary,
-        connectionBusy,
-        preloadedUsername,
-        onLogout,
-        onShowQr,
-        onOpenScanner,
-        onMyAccount,
-        onAppConfig,
-    }: {
-        routeKind: string;
-        currentUser: AppUser | null;
-        userLoading: boolean;
-        preloadedUsername: string;
-        userLibrary: UserLibraryEnsemble[];
-        connectionBusy: boolean;
-        onLogout: () => Promise<void>;
-        onShowQr: () => Promise<void>;
-        onOpenScanner: () => void;
-        onMyAccount?: () => void;
-        onAppConfig?: () => void;
-    } = $props();
+    const token = $derived(page.params.token);
+    let attemptedToken = $state("");
+
+    $effect(() => {
+        if (token && attemptedToken !== token) {
+            attemptedToken = token;
+            void appShell.completeConnectionFromToken(token, true);
+        }
+    });
 
     function canAccessAdmin() {
-        return currentUser?.role !== undefined && currentUser.role !== "user";
+        return (
+            appShell.currentUser?.role !== undefined &&
+            appShell.currentUser.role !== "user"
+        );
     }
 
     function ensembleAccent(name: string) {
@@ -61,11 +46,8 @@
     }
 </script>
 
-<main
-    class="page home-shell"
-    class:home-landing-shell={!currentUser && routeKind !== "connect"}
->
-    {#if userLoading && !currentUser}
+<main class="page home-shell">
+    {#if appShell.userLoading && !appShell.currentUser}
         <div class="home-loading-overlay">
             <div class="loading-eq" aria-label="Loading">
                 <span></span>
@@ -75,37 +57,36 @@
                 <span></span>
             </div>
             <p class="loading-eq-label">
-                {preloadedUsername ? `Hello, ${preloadedUsername}` : "Fumen"}
+                {appShell.preloadedUsername
+                    ? `Hello, ${appShell.preloadedUsername}`
+                    : "Fumen"}
             </p>
         </div>
     {:else}
         <TopBar
             breadcrumbs={[{ label: "Fumen", href: "/" }]}
-            {currentUser}
+            currentUser={appShell.currentUser}
             adminHref={canAccessAdmin() ? "/admin" : undefined}
-            onShowQr={() => void onShowQr()}
-            onLogout={() => void onLogout()}
-            {onMyAccount}
-            {onAppConfig}
-            showBrandTitleOnMobile={!currentUser && routeKind !== "connect"}
+            onShowQr={() => void appShell.handleShowMyQr()}
+            onLogout={() => void appShell.logoutUser()}
+            onMyAccount={() => appShell.handleMyAccount()}
+            onAppConfig={() => appShell.handleAppConfig()}
+            showBrandTitleOnMobile={false}
         />
         <section
             class="content-panel home-grid"
-            class:home-landing-stage={!currentUser && routeKind !== "connect"}
-            class:home-library-stage={!!currentUser}
+            class:home-library-stage={!!appShell.currentUser}
         >
-            {#if routeKind === "connect"}
+            {#if appShell.connectionBusy || (appShell.userLoading && !appShell.currentUser)}
                 <div class="music-card connect-card">
                     <p class="meta-label">Connection</p>
                     <h2>Finishing sign-in</h2>
                     <p class="lede">
                         We are validating your temporary connection link.
                     </p>
-                    {#if connectionBusy || userLoading}<p class="status">
-                            Connecting...
-                        </p>{/if}
+                    <p class="status">Connecting...</p>
                 </div>
-            {:else if currentUser}
+            {:else if appShell.currentUser}
                 <div class="music-card library-card">
                     <div class="card-header library-header">
                         <div class="library-header-copy">
@@ -117,13 +98,13 @@
                             </p>
                         </div>
                     </div>
-                    {#if userLibrary.length === 0}
+                    {#if appShell.userLibrary.length === 0}
                         <p class="hint">
                             No scores are available for your ensembles yet.
                         </p>
                     {:else}
                         <div class="directory-stack library-accordion">
-                            {#each userLibrary as ensemble, index}
+                            {#each appShell.userLibrary as ensemble, index}
                                 <details
                                     class="directory-panel ensemble-accordion"
                                     open={index === 0}
@@ -148,9 +129,7 @@
                                             aria-hidden="true"
                                         ></span>
                                     </summary>
-                                    <div
-                                        class="score-link-list library-score-grid"
-                                    >
+                                    <div class="score-link-list library-score-grid">
                                         {#if ensemble.scores.length === 0}
                                             <p class="hint">
                                                 No scores are available for this
@@ -162,17 +141,13 @@
                                                     class="score-link-row"
                                                     href={score.public_url}
                                                 >
-                                                    <span
-                                                        class="score-link-title"
-                                                    >
+                                                    <span class="score-link-title">
                                                         <ScoreIcon
                                                             variant="library"
                                                             icon={score.icon}
                                                             imageUrl={score.icon_image_url}
                                                         />
-                                                        <span
-                                                            >{score.title}</span
-                                                        >
+                                                        <span>{score.title}</span>
                                                     </span>
                                                 </a>
                                             {/each}
@@ -197,10 +172,10 @@
                         <div class="landing-actions">
                             <button
                                 class="button landing-cta"
-                                onclick={() => onOpenScanner()}
+                                onclick={() => appShell.openScanner()}
                             >
                                 <QrCode size={18} aria-hidden="true" />
-                                {connectionBusy
+                                {appShell.connectionBusy
                                     ? "Opening camera..."
                                     : "Scan QR code"}
                             </button>

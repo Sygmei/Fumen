@@ -1,28 +1,22 @@
 <script lang="ts">
     import { onDestroy, onMount, tick } from "svelte";
-    import type { PublicMusicResponse as PublicMusic } from "../adapters/fumen-backend/src/models";
+    import { page } from "$app/state";
+    import type { PublicMusicResponse as PublicMusic } from "$backend/models";
     import {
         ApiError,
         authenticatedApiClient,
         hasAuth,
         publicApiClient,
-    } from "../lib/auth-client";
-    import { StemMixerPlayer, type StemTrack } from "../lib/stem-mixer";
-    import { ScoreViewer } from "../lib/score-viewer";
-    import { formatTime } from "../lib/utils";
-    import Mixer from "../components/Mixer.svelte";
-    import ScoreIcon from "../components/ScoreIcon.svelte";
-    import { Download, ChevronDown, Pause, Play, Square } from '@lucide/svelte';
+    } from "$lib/auth-client";
+    import { StemMixerPlayer, type StemTrack } from "$lib/stem-mixer";
+    import { ScoreViewer } from "$lib/score-viewer";
+    import { formatTime } from "$lib/utils";
+    import Mixer from "$components/Mixer.svelte";
+    import ScoreIcon from "$components/ScoreIcon.svelte";
+    import { appShell } from "$lib/app-shell.svelte";
+    import { Download, ChevronDown, Pause, Play, Square } from "@lucide/svelte";
 
-    let {
-        accessKey,
-        enableCountIn = false,
-        countInMeasures = 1,
-    }: {
-        accessKey: string;
-        enableCountIn?: boolean;
-        countInMeasures?: number;
-    } = $props();
+    const accessKey = $derived(page.params.accessKey);
 
     let publicMusic = $state<PublicMusic | null>(null);
     let publicLoading = $state(false);
@@ -196,7 +190,9 @@
                     fullStemUrl: stem.full_stem_url,
                     durationSeconds: stem.duration_seconds,
                 })),
-                (progress) => { stemLoadProgress = progress; },
+                (progress) => {
+                    stemLoadProgress = progress;
+                },
             );
             stemPlayer.setLevelMultiplier(15);
             stemPlaybackReady = stemPlayer.isReadyToPlay();
@@ -243,14 +239,17 @@
             }
 
             const shouldCountIn =
-                enableCountIn &&
+                appShell.enableCountIn &&
                 playbackPosition <= 0.01;
             if (shouldCountIn) {
                 const countInInfo = scoreViewer?.getCountInInfo() ?? {
                     bpm: 120,
                     beatsPerBar: 4,
                 };
-                const countInBars = Math.max(1, Math.floor(countInMeasures || 1));
+                const countInBars = Math.max(
+                    1,
+                    Math.floor(appShell.countInMeasures || 1),
+                );
                 const beatSeconds =
                     countInInfo.bpm > 0 ? 60 / countInInfo.bpm : 0.5;
                 await player.play({
@@ -356,7 +355,8 @@
 
             const muted = !track.muted;
             const anySoloed = soloedTrackIds.size > 0;
-            const effectiveMuted = muted || (anySoloed && !soloedTrackIds.has(trackId));
+            const effectiveMuted =
+                muted || (anySoloed && !soloedTrackIds.has(trackId));
             if (stemPlayer) {
                 stemPlayer.setTrackMuted(trackId, effectiveMuted);
             }
@@ -376,7 +376,8 @@
 
         const anySoloed = newSoloedIds.size > 0;
         for (const track of mixerTracks) {
-            const effectiveMuted = track.muted || (anySoloed && !newSoloedIds.has(track.id));
+            const effectiveMuted =
+                track.muted || (anySoloed && !newSoloedIds.has(track.id));
             if (stemPlayer) {
                 stemPlayer.setTrackMuted(track.id, effectiveMuted);
             }
@@ -393,8 +394,9 @@
             if (stemPlayer) {
                 stemPlayer.synchronizePlayback();
                 const levels: Record<string, number> = {};
-                for (const track of mixerTracks)
+                for (const track of mixerTracks) {
                     levels[track.id] = stemPlayer.getLevel(track.id);
+                }
                 trackLevels = levels;
             }
             if (playbackState === "counting-in" && playbackPosition > 0.01) {
@@ -581,7 +583,7 @@
                                 <Download size={15} strokeWidth={2.2} />
                                 <span class="download-menu-label">Download</span>
                                 <ChevronDown class="chevron" size={12} strokeWidth={2.5} />
-                                </button>
+                            </button>
                             {#if downloadMenuOpen && publicMusic}
                                 <div class="download-dropdown">
                                     {#if publicMusic.audio_stream_url}
@@ -589,8 +591,7 @@
                                             class="download-item"
                                             href={publicMusic.audio_stream_url}
                                             download
-                                            onclick={() =>
-                                                (downloadMenuOpen = false)}
+                                            onclick={() => (downloadMenuOpen = false)}
                                             >Download Audio</a
                                         >
                                     {/if}
@@ -599,8 +600,7 @@
                                             class="download-item"
                                             href={publicMusic.midi_download_url}
                                             download
-                                            onclick={() =>
-                                                (downloadMenuOpen = false)}
+                                            onclick={() => (downloadMenuOpen = false)}
                                             >Download MIDI</a
                                         >
                                     {/if}
@@ -608,8 +608,7 @@
                                         class="download-item"
                                         href={publicMusic.download_url}
                                         download
-                                        onclick={() =>
-                                            (downloadMenuOpen = false)}
+                                        onclick={() => (downloadMenuOpen = false)}
                                         >Download MuseScore</a
                                     >
                                 </div>
@@ -618,8 +617,7 @@
                     </div>
                     <div
                         class="score-scroll-area"
-                        class:score-scroll-area-loading={scoreLoading &&
-                            !scoreError}
+                        class:score-scroll-area-loading={scoreLoading && !scoreError}
                     >
                         <div class="score-scroll-inner">
                             <div
@@ -674,8 +672,9 @@
                                 midiLoading ||
                                 !stemPlaybackReady}
                             aria-label="Stop"
-                            ><Square size={14} fill="currentColor" strokeWidth={0} /></button
                         >
+                            <Square size={14} fill="currentColor" strokeWidth={0} />
+                        </button>
                         <div class="playbar-progress">
                             <input
                                 class="playbar-track"
@@ -693,9 +692,7 @@
                             />
                         </div>
                         <span class="playbar-time"
-                            >{formatTime(playbackPosition)}<span
-                                class="playbar-sep"
-                            >
+                            >{formatTime(playbackPosition)}<span class="playbar-sep">
                                 /
                             </span>{formatTime(playbackDuration)}</span
                         >

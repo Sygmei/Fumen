@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { EnsembleRole } from "../../lib/roles";
+    import type { EnsembleRole } from "$lib/roles";
     import BaseModal from "./BaseModal.svelte";
     import CustomSelect from "../CustomSelect.svelte";
     import { closeModal } from "./modalState";

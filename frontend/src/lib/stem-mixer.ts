@@ -92,12 +92,12 @@ export class StemMixerPlayer {
       let arrayBuffer: ArrayBuffer
       if (response.body && contentLength > 0) {
         const reader = response.body.getReader()
-        const chunks: Uint8Array[] = []
+        const chunks: BlobPart[] = []
         let received = 0
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-          chunks.push(value)
+          chunks.push(value.slice().buffer)
           received += value.byteLength
           stemBytes.set(stem.id, { loaded: received, total: contentLength })
           reportProgress()

@@ -2,9 +2,9 @@ import type { Component } from "svelte";
 import type {
     AdminMusicResponse as AdminMusic,
     UserResponse as AppUser,
-} from "../../adapters/fumen-backend/src/models";
-import type { EnsembleRole, GlobalRole } from "../../lib/roles";
-import type { StemQualityProfile } from "../../lib/stem-quality";
+} from "$backend/models";
+import type { EnsembleRole, GlobalRole } from "$lib/roles";
+import type { StemQualityProfile } from "$lib/stem-quality";
 
 export interface SelectOption {
     value: string;

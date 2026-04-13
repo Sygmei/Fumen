@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { AdminMusicResponse as AdminMusic } from "../../adapters/fumen-backend/src/models";
+    import type { AdminMusicResponse as AdminMusic } from "$backend/models";
     import BaseModal from "./BaseModal.svelte";
     import { closeModal } from "./modalState";
     import type { EditScoreDraft } from "./types";

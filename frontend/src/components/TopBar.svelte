@@ -1,5 +1,5 @@
 <script lang="ts">
-    import type { UserResponse as AppUser } from "../adapters/fumen-backend/src/models";
+    import type { UserResponse as AppUser } from "$backend/models";
     import { Menu, LayoutGrid } from "@lucide/svelte";
     import UserMenu from "./UserMenu.svelte";
 

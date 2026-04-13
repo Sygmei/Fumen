@@ -3,7 +3,7 @@
     import type {
         AdminEnsembleResponse as Ensemble,
         AdminMusicResponse as AdminMusic,
-    } from "../../adapters/fumen-backend/src/models";
+    } from "$backend/models";
     import BaseModal from "./BaseModal.svelte";
     import { closeModal } from "./modalState";
 

@@ -11,6 +11,7 @@ node_modules
 .tools
 .generated
 generated
+.svelte-kit
 dist
 dist-ssr
 *.local

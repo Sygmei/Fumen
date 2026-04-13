@@ -1,8 +1,8 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import BaseModal from "./BaseModal.svelte";
-    import type { LoginLinkResponse } from "../../adapters/fumen-backend/src/models";
-    import { prettyDate } from "../../lib/utils";
+    import type { LoginLinkResponse } from "$backend/models";
+    import { prettyDate } from "$lib/utils";
     import QRCode from "qrcode";
 
     let {
