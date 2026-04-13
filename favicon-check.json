@@ -1,0 +1,78 @@
+{
+  "head": "\n    <meta charset=\"utf-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n    <link href=\"/_app/immutable/entry/start.snYOsWTd.js\" rel=\"modulepreload\">\n\t\t<link href=\"/_app/immutable/chunks/O910ke-B.js\" rel=\"modulepreload\">\n\t\t<link href=\"/_app/immutable/chunks/Ce26cuUz.js\" rel=\"modulepreload\">\n\t\t<link href=\"/_app/immutable/chunks/mY0RCdAF.js\" rel=\"modulepreload\">\n\t\t<link href=\"/_app/immutable/entry/app.DJAsYWkT.js\" rel=\"modulepreload\">\n\t\t<link href=\"/_app/immutable/chunks/CsaauQz1.js\" rel=\"modulepreload\">\n\t\t\n  <link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/nodes/0.CDBaY2kk.js\"><link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/chunks/4TH7mVvw.js\"><link rel=\"stylesheet\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/assets/app-shell.bBX7sHw-.css\"><link rel=\"stylesheet\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/assets/0.2XycL-81.css\"><link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/nodes/1.rdWJXhVt.js\"><link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/chunks/Xa1jfPxH.js\"><link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/nodes/3.DxiRfAg-.js\"><link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/chunks/82_Kb42T.js\"><link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/chunks/BCZ63Ykz.js\"><link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/chunks/2MNI3dW0.js\"><link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/chunks/D5DA0X8B.js\"><link rel=\"modulepreload\" as=\"script\" crossorigin=\"\" href=\"https://fumen.lehang.art/_app/immutable/chunks/CPGjzGtI.js\">",
+  "iconHref": null,
+  "links": [
+    {
+      "rel": "modulepreload",
+      "href": "/_app/immutable/entry/start.snYOsWTd.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "/_app/immutable/chunks/O910ke-B.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "/_app/immutable/chunks/Ce26cuUz.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "/_app/immutable/chunks/mY0RCdAF.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "/_app/immutable/entry/app.DJAsYWkT.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "/_app/immutable/chunks/CsaauQz1.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/nodes/0.CDBaY2kk.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/chunks/4TH7mVvw.js"
+    },
+    {
+      "rel": "stylesheet",
+      "href": "https://fumen.lehang.art/_app/immutable/assets/app-shell.bBX7sHw-.css"
+    },
+    {
+      "rel": "stylesheet",
+      "href": "https://fumen.lehang.art/_app/immutable/assets/0.2XycL-81.css"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/nodes/1.rdWJXhVt.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/chunks/Xa1jfPxH.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/nodes/3.DxiRfAg-.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/chunks/82_Kb42T.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/chunks/BCZ63Ykz.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/chunks/2MNI3dW0.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/chunks/D5DA0X8B.js"
+    },
+    {
+      "rel": "modulepreload",
+      "href": "https://fumen.lehang.art/_app/immutable/chunks/CPGjzGtI.js"
+    }
+  ]
+}
