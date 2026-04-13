@@ -82,6 +82,7 @@ RUN groupadd --system --gid "${APP_GID}" app \
 WORKDIR /app
 
 COPY --from=build /tmp/fumen-backend /usr/local/bin/fumen
+COPY backend/migrations /app/backend/migrations
 COPY --from=musescore-build /opt/musescore4 /opt/musescore4
 
 RUN printf '#!/bin/sh\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"\nexport LANG="${LANG:-C.UTF-8}"\nexport LC_ALL="${LC_ALL:-C.UTF-8}"\nexport XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/fumen-musescore-runtime}"\nmkdir -p "$XDG_RUNTIME_DIR"\nexec xvfb-run -a -s "-screen 0 1280x1024x24" /opt/musescore4/AppRun "$@"\n' > /usr/local/bin/musescore4 \
