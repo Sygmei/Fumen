@@ -8,6 +8,9 @@ export default {
     runes: true,
   },
   kit: {
+    files: {
+      assets: 'public',
+    },
     alias: {
       $backend: 'src/adapters/fumen-backend/src',
       $components: 'src/components',
