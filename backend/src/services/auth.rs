@@ -1,5 +1,7 @@
 use crate::config::AppConfig;
-use crate::models::{EnsembleRecord, MusicRecord, UserRecord, UserSessionRecord};
+use crate::db::DbPool;
+use crate::models::{EnsembleRecord, MusicRecord, NewUserLoginLink, UserRecord, UserSessionRecord};
+use crate::schema::{ensembles, user_ensemble_memberships, user_login_links, user_sessions, users};
 use crate::schemas::{LoginLinkResponse, UserResponse};
 use crate::storage::Storage;
 use crate::{
@@ -8,7 +10,9 @@ use crate::{
 };
 use axum::http::{HeaderMap, header};
 use chrono::{Duration, SecondsFormat, Utc};
-use sqlx::PgPool;
+use diesel::OptionalExtension;
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -26,49 +30,54 @@ pub(crate) struct AccessTokenClaims {
     pub(crate) iat: i64,
 }
 
-pub(crate) async fn find_user_by_id(db: &PgPool, id: &str) -> Result<Option<UserRecord>, AppError> {
-    Ok(sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, display_name, avatar_image_key, created_at, is_superadmin, role, created_by_user_id FROM users WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(db)
-    .await?)
+pub(crate) async fn find_user_by_id(db: &DbPool, id: &str) -> Result<Option<UserRecord>, AppError> {
+    let mut conn = db.get().await?;
+    Ok(users::table
+        .find(id)
+        .select(UserRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?)
 }
 
 pub(crate) async fn find_user_by_username(
-    db: &PgPool,
+    db: &DbPool,
     username: &str,
 ) -> Result<Option<UserRecord>, AppError> {
-    Ok(sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, display_name, avatar_image_key, created_at, is_superadmin, role, created_by_user_id FROM users WHERE username = $1",
-    )
-    .bind(username)
-    .fetch_optional(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(users::table
+        .filter(users::username.eq(username))
+        .select(UserRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?)
 }
 
 pub(crate) async fn find_session_by_token(
-    db: &PgPool,
+    db: &DbPool,
     session_token: &str,
 ) -> Result<Option<UserSessionRecord>, AppError> {
-    Ok(sqlx::query_as::<_, UserSessionRecord>(
-        "SELECT id, user_id, session_token, created_at, expires_at FROM user_sessions WHERE session_token = $1",
-    )
-    .bind(session_token)
-    .fetch_optional(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(user_sessions::table
+        .filter(user_sessions::session_token.eq(session_token))
+        .select(UserSessionRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?)
 }
 
 pub(crate) async fn find_user_last_login_at(
-    db: &PgPool,
+    db: &DbPool,
     user_id: &str,
 ) -> Result<Option<String>, AppError> {
-    Ok(sqlx::query_scalar::<_, String>(
-        "SELECT created_at FROM user_sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(user_sessions::table
+        .filter(user_sessions::user_id.eq(user_id))
+        .order(user_sessions::created_at.desc())
+        .select(user_sessions::created_at)
+        .first::<String>(&mut conn)
+        .await
+        .optional()?)
 }
 
 pub(crate) async fn require_user_session(
@@ -371,39 +380,44 @@ pub(crate) fn ensure_can_manage_ensemble(
 }
 
 pub(crate) async fn fetch_managed_ensemble_ids(
-    db: &PgPool,
+    db: &DbPool,
     user_id: &str,
 ) -> Result<Vec<String>, AppError> {
-    Ok(sqlx::query_scalar::<_, String>(
-        "SELECT ensemble_id FROM user_ensemble_memberships WHERE user_id = $1 AND role = 'manager' ORDER BY ensemble_id ASC",
-    )
-    .bind(user_id)
-    .fetch_all(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(user_ensemble_memberships::table
+        .filter(user_ensemble_memberships::user_id.eq(user_id))
+        .filter(user_ensemble_memberships::role.eq("manager"))
+        .order(user_ensemble_memberships::ensemble_id.asc())
+        .select(user_ensemble_memberships::ensemble_id)
+        .load::<String>(&mut conn)
+        .await?)
 }
 
 pub(crate) async fn fetch_editable_ensemble_ids(
-    db: &PgPool,
+    db: &DbPool,
     user_id: &str,
 ) -> Result<Vec<String>, AppError> {
-    Ok(sqlx::query_scalar::<_, String>(
-        "SELECT ensemble_id FROM user_ensemble_memberships WHERE user_id = $1 AND role IN ('manager', 'editor') ORDER BY ensemble_id ASC",
-    )
-    .bind(user_id)
-    .fetch_all(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(user_ensemble_memberships::table
+        .filter(user_ensemble_memberships::user_id.eq(user_id))
+        .filter(user_ensemble_memberships::role.eq_any(["manager", "editor"]))
+        .order(user_ensemble_memberships::ensemble_id.asc())
+        .select(user_ensemble_memberships::ensemble_id)
+        .load::<String>(&mut conn)
+        .await?)
 }
 
-pub(crate) async fn fetch_all_ensemble_ids(db: &PgPool) -> Result<Vec<String>, AppError> {
-    Ok(
-        sqlx::query_scalar::<_, String>("SELECT id FROM ensembles ORDER BY id ASC")
-            .fetch_all(db)
-            .await?,
-    )
+pub(crate) async fn fetch_all_ensemble_ids(db: &DbPool) -> Result<Vec<String>, AppError> {
+    let mut conn = db.get().await?;
+    Ok(ensembles::table
+        .order(ensembles::id.asc())
+        .select(ensembles::id)
+        .load::<String>(&mut conn)
+        .await?)
 }
 
 pub(crate) async fn user_record_to_response(
-    db: &PgPool,
+    db: &DbPool,
     storage: &Storage,
     record: UserRecord,
 ) -> Result<UserResponse, AppError> {
@@ -481,7 +495,7 @@ pub(crate) fn auth_context_to_user_response(auth: &AuthContext, storage: &Storag
 
 #[tracing::instrument(skip(db, config), fields(user_id = %user_id))]
 pub(crate) async fn create_login_link(
-    db: &PgPool,
+    db: &DbPool,
     config: &AppConfig,
     user_id: &str,
 ) -> Result<LoginLinkResponse, AppError> {
@@ -490,19 +504,19 @@ pub(crate) async fn create_login_link(
     let expires_at = format_timestamp(now + Duration::minutes(LOGIN_LINK_TTL_MINUTES));
     let token = generate_auth_token(48);
 
-    sqlx::query(
-        r#"
-        INSERT INTO user_login_links (id, user_id, token, created_at, expires_at)
-        VALUES ($1, $2, $3, $4, $5)
-        "#,
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(user_id)
-    .bind(&token)
-    .bind(&created_at)
-    .bind(&expires_at)
-    .execute(db)
-    .await?;
+    let mut conn = db.get().await?;
+    let login_link_id = Uuid::new_v4().to_string();
+    diesel::insert_into(user_login_links::table)
+        .values(&NewUserLoginLink {
+            id: &login_link_id,
+            user_id,
+            token: &token,
+            created_at: &created_at,
+            expires_at: &expires_at,
+            consumed_at: None,
+        })
+        .execute(&mut conn)
+        .await?;
 
     Ok(LoginLinkResponse {
         connection_url: config.connection_url_for(&token),

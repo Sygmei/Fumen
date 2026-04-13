@@ -1,3 +1,5 @@
+use crate::models::UpdateUserProfile;
+use crate::schema::{user_sessions, users};
 use crate::schemas::{
     CurrentUserResponse, ErrorResponse, LoginLinkResponse, UpdateMyProfileMultipartRequest,
     UserLibraryEnsembleResponse, UserLibraryResponse, UserLibraryScoreResponse,
@@ -11,15 +13,32 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::Response,
 };
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
 
 pub(super) fn routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/me", crate::op_get!(state, "/me", current_user))
-        .route("/me/profile", crate::op_patch!(state, "/me/profile", update_my_profile))
-        .route("/me/library", crate::op_get!(state, "/me/library", current_user_library))
-        .route("/me/login-link", crate::op_post!(state, "/me/login-link", create_my_login_link))
-        .route("/me/logout", crate::op_post!(state, "/me/logout", me_logout))
-        .route("/users/{user_id}/avatar", crate::op_get!(state, "/users/{user_id}/avatar", user_avatar))
+        .route(
+            "/me/profile",
+            crate::op_patch!(state, "/me/profile", update_my_profile),
+        )
+        .route(
+            "/me/library",
+            crate::op_get!(state, "/me/library", current_user_library),
+        )
+        .route(
+            "/me/login-link",
+            crate::op_post!(state, "/me/login-link", create_my_login_link),
+        )
+        .route(
+            "/me/logout",
+            crate::op_post!(state, "/me/logout", me_logout),
+        )
+        .route(
+            "/users/{user_id}/avatar",
+            crate::op_get!(state, "/users/{user_id}/avatar", user_avatar),
+        )
 }
 
 #[utoipa::path(
@@ -124,11 +143,13 @@ pub(crate) async fn update_my_profile(
         existing.avatar_image_key.clone()
     };
 
-    sqlx::query("UPDATE users SET display_name = $1, avatar_image_key = $2 WHERE id = $3")
-        .bind(&new_display_name)
-        .bind(&new_avatar_key)
-        .bind(&user_id)
-        .execute(&state.db_rw)
+    let mut conn = state.db_rw.get().await?;
+    diesel::update(users::table.find(&user_id))
+        .set(UpdateUserProfile {
+            display_name: new_display_name.as_deref(),
+            avatar_image_key: new_avatar_key.as_deref(),
+        })
+        .execute(&mut conn)
         .await?;
 
     // Re-build a fresh auth context so the response has updated fields
@@ -327,9 +348,12 @@ pub(crate) async fn me_logout(
     headers: HeaderMap,
 ) -> Result<StatusCode, AppError> {
     let auth_context = auth::build_auth_context(&state, &headers).await?;
-    sqlx::query("DELETE FROM user_sessions WHERE session_token = $1")
-        .bind(&auth_context.session.session_token)
-        .execute(&state.db_rw)
-        .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::delete(
+        user_sessions::table
+            .filter(user_sessions::session_token.eq(&auth_context.session.session_token)),
+    )
+    .execute(&mut conn)
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -1,9 +1,11 @@
 mod app;
 mod audio;
 mod config;
+mod db;
 mod models;
 mod openapi;
 mod routes;
+mod schema;
 mod schemas;
 mod services;
 mod storage;
@@ -28,14 +30,14 @@ use axum::{
     response::IntoResponse,
 };
 use config::{AppConfig, StorageConfig};
-use models::UserRecord;
+use db::{open_database_pool, run_migrations};
+use diesel::OptionalExtension;
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
+use models::{NewUser, UserRecord};
 use routes::api_routes;
-use sqlx::{
-    PgPool,
-    postgres::{PgConnectOptions, PgPoolOptions},
-};
+use schema::users::dsl as users_dsl;
 use std::fs;
-use std::str::FromStr;
 use std::{net::SocketAddr, path::PathBuf};
 use storage::Storage;
 use tower_http::{
@@ -101,7 +103,6 @@ fn dump_openapi_to_file(output_path: &PathBuf) -> Result<()> {
 }
 
 async fn async_main() -> Result<()> {
-
     let config = AppConfig::from_env()?;
     match &config.storage {
         StorageConfig::Local { root } => {
@@ -112,8 +113,8 @@ async fn async_main() -> Result<()> {
         }
     }
 
+    run_migrations(&config.database_url_admin).await?;
     let db_admin = open_database_pool(&config.database_url_admin, 1, "admin").await?;
-    ensure_schema(&db_admin).await?;
     let superadmin = ensure_superadmin_user(&db_admin, &config).await?;
     let db_rw = open_database_pool(&config.database_url, 5, "read-write").await?;
     let db_ro = open_database_pool(&config.database_url_read_only, 5, "read-only").await?;
@@ -181,336 +182,18 @@ fn build_cors_layer(config: &AppConfig) -> Result<CorsLayer> {
     }
 }
 
-async fn open_database_pool(url: &str, max_connections: u32, role: &str) -> Result<PgPool> {
-    let options = PgConnectOptions::from_str(url)
-        .with_context(|| format!("invalid PostgreSQL connection string for {role} pool"))?
-        .statement_cache_capacity(0);
-
-    Ok(PgPoolOptions::new()
-        .max_connections(max_connections)
-        .connect_with(options)
-        .await?)
-}
-
-async fn ensure_schema(db: &PgPool) -> Result<()> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS directories (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL
+async fn ensure_superadmin_user(db: &db::DbPool, config: &AppConfig) -> Result<UserRecord> {
+    let mut conn = db.get().await?;
+    if let Some(existing) = users_dsl::users
+        .filter(
+            users_dsl::role
+                .eq(AppRole::Superadmin.as_str())
+                .or(users_dsl::is_superadmin.eq(true)),
         )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS musics (
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            icon TEXT,
-            filename TEXT NOT NULL,
-            content_type TEXT NOT NULL,
-            object_key TEXT NOT NULL,
-            audio_object_key TEXT,
-            audio_status TEXT NOT NULL DEFAULT 'unavailable',
-            audio_error TEXT,
-            midi_object_key TEXT,
-            midi_status TEXT NOT NULL DEFAULT 'unavailable',
-            midi_error TEXT,
-            stems_status TEXT NOT NULL DEFAULT 'unavailable',
-            stems_error TEXT,
-            public_token TEXT NOT NULL UNIQUE,
-            public_id TEXT UNIQUE,
-            quality_profile TEXT NOT NULL DEFAULT 'standard',
-            created_at TEXT NOT NULL,
-            directory_id TEXT NOT NULL
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS stems (
-            id BIGSERIAL PRIMARY KEY,
-            music_id TEXT NOT NULL REFERENCES musics(id),
-            track_index BIGINT NOT NULL,
-            track_name TEXT NOT NULL,
-            instrument_name TEXT NOT NULL,
-            storage_key TEXT NOT NULL,
-            size_bytes BIGINT NOT NULL DEFAULT 0,
-            drum_map_json TEXT
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL,
-            is_superadmin BOOLEAN NOT NULL DEFAULT FALSE,
-            role TEXT NOT NULL DEFAULT 'user',
-            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS ensembles (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL,
-            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS user_ensemble_memberships (
-            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            ensemble_id TEXT NOT NULL REFERENCES ensembles(id) ON DELETE CASCADE,
-            role TEXT NOT NULL DEFAULT 'user',
-            PRIMARY KEY (user_id, ensemble_id)
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS directory_ensemble_permissions (
-            directory_id TEXT NOT NULL REFERENCES directories(id) ON DELETE CASCADE,
-            ensemble_id TEXT NOT NULL REFERENCES ensembles(id) ON DELETE CASCADE,
-            PRIMARY KEY (directory_id, ensemble_id)
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS music_ensemble_links (
-            music_id TEXT NOT NULL REFERENCES musics(id) ON DELETE CASCADE,
-            ensemble_id TEXT NOT NULL REFERENCES ensembles(id) ON DELETE CASCADE,
-            PRIMARY KEY (music_id, ensemble_id)
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS user_login_links (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            token TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            consumed_at TEXT
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS user_sessions (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            session_token TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL,
-            expires_at TEXT
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS user_music_track_playtime (
-            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            music_id TEXT NOT NULL REFERENCES musics(id) ON DELETE CASCADE,
-            track_index BIGINT NOT NULL,
-            total_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (user_id, music_id, track_index)
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query("ALTER TABLE user_sessions ALTER COLUMN expires_at DROP NOT NULL")
-        .execute(db)
-        .await?;
-
-    ensure_music_column(db, "audio_object_key", "TEXT").await?;
-    ensure_music_column(db, "icon", "TEXT").await?;
-    ensure_music_column(db, "icon_image_key", "TEXT").await?;
-    ensure_music_column(db, "audio_status", "TEXT NOT NULL DEFAULT 'unavailable'").await?;
-    ensure_music_column(db, "audio_error", "TEXT").await?;
-    ensure_music_column(db, "midi_object_key", "TEXT").await?;
-    ensure_music_column(db, "midi_status", "TEXT NOT NULL DEFAULT 'unavailable'").await?;
-    ensure_music_column(db, "midi_error", "TEXT").await?;
-    ensure_music_column(db, "stems_status", "TEXT NOT NULL DEFAULT 'unavailable'").await?;
-    ensure_music_column(db, "stems_error", "TEXT").await?;
-    ensure_music_column(db, "musicxml_object_key", "TEXT").await?;
-    ensure_music_column(db, "musicxml_status", "TEXT NOT NULL DEFAULT 'unavailable'").await?;
-    ensure_music_column(db, "musicxml_error", "TEXT").await?;
-    ensure_music_column(
-        db,
-        "quality_profile",
-        &format!(
-            "TEXT NOT NULL DEFAULT '{}'",
-            audio::DEFAULT_STEM_QUALITY_PROFILE
-        ),
-    )
-    .await?;
-    ensure_stems_column(db, "size_bytes", "BIGINT NOT NULL DEFAULT 0").await?;
-    ensure_stems_column(db, "drum_map_json", "TEXT").await?;
-    ensure_music_column(db, "directory_id", "TEXT NOT NULL DEFAULT ''").await?;
-    ensure_music_column(
-        db,
-        "owner_user_id",
-        "TEXT REFERENCES users(id) ON DELETE SET NULL",
-    )
-    .await?;
-    ensure_user_column(db, "is_superadmin", "BOOLEAN NOT NULL DEFAULT FALSE").await?;
-    ensure_user_column(db, "role", "TEXT NOT NULL DEFAULT 'user'").await?;
-    ensure_user_column(db, "display_name", "TEXT").await?;
-    ensure_user_column(db, "avatar_image_key", "TEXT").await?;
-    ensure_user_column(db, "display_name", "TEXT").await?;
-    ensure_user_column(db, "avatar_image_key", "TEXT").await?;
-    ensure_user_column(
-        db,
-        "created_by_user_id",
-        "TEXT REFERENCES users(id) ON DELETE SET NULL",
-    )
-    .await?;
-    ensure_ensemble_column(
-        db,
-        "created_by_user_id",
-        "TEXT REFERENCES users(id) ON DELETE SET NULL",
-    )
-    .await?;
-    ensure_user_ensemble_membership_column(db, "role", "TEXT NOT NULL DEFAULT 'user'").await?;
-    sqlx::query(
-        "CREATE UNIQUE INDEX IF NOT EXISTS users_single_superadmin_idx ON users (is_superadmin) WHERE is_superadmin = TRUE",
-    )
-    .execute(db)
-    .await?;
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS user_music_track_playtime_music_idx ON user_music_track_playtime (music_id, user_id)",
-    )
-    .execute(db)
-    .await?;
-    sqlx::query("UPDATE users SET role = 'superadmin' WHERE is_superadmin = TRUE")
-        .execute(db)
-        .await?;
-    sqlx::query(
-        "UPDATE users SET role = 'manager' WHERE role = 'user' AND is_superadmin = FALSE AND EXISTS (SELECT 1 FROM user_ensemble_memberships uem WHERE uem.user_id = users.id AND uem.role = 'admin')",
-    )
-    .execute(db)
-    .await?;
-    sqlx::query(
-        "UPDATE users SET role = 'user' WHERE role IS NULL OR role NOT IN ('superadmin', 'admin', 'manager', 'editor', 'user')",
-    )
-    .execute(db)
-    .await?;
-    sqlx::query("UPDATE users SET is_superadmin = (role = 'superadmin')")
-        .execute(db)
-        .await?;
-    sqlx::query("UPDATE user_ensemble_memberships SET role = 'manager' WHERE role = 'admin'")
-        .execute(db)
-        .await?;
-    sqlx::query(
-        "UPDATE user_ensemble_memberships SET role = 'user' WHERE role IS NULL OR role NOT IN ('user', 'manager', 'editor')",
-    )
-    .execute(db)
-    .await?;
-
-    backfill_music_ensemble_links(db).await?;
-
-    Ok(())
-}
-
-async fn ensure_music_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
-    let query = format!("ALTER TABLE musics ADD COLUMN IF NOT EXISTS {name} {definition}");
-    sqlx::query(&query).execute(db).await?;
-    Ok(())
-}
-
-async fn ensure_user_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
-    let query = format!("ALTER TABLE users ADD COLUMN IF NOT EXISTS {name} {definition}");
-    sqlx::query(&query).execute(db).await?;
-    Ok(())
-}
-
-async fn ensure_ensemble_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
-    let query = format!("ALTER TABLE ensembles ADD COLUMN IF NOT EXISTS {name} {definition}");
-    sqlx::query(&query).execute(db).await?;
-    Ok(())
-}
-
-async fn ensure_user_ensemble_membership_column(
-    db: &PgPool,
-    name: &str,
-    definition: &str,
-) -> Result<()> {
-    let query = format!(
-        "ALTER TABLE user_ensemble_memberships ADD COLUMN IF NOT EXISTS {name} {definition}"
-    );
-    sqlx::query(&query).execute(db).await?;
-    Ok(())
-}
-
-async fn ensure_stems_column(db: &PgPool, name: &str, definition: &str) -> Result<()> {
-    let query = format!("ALTER TABLE stems ADD COLUMN IF NOT EXISTS {name} {definition}");
-    sqlx::query(&query).execute(db).await?;
-    Ok(())
-}
-
-async fn backfill_music_ensemble_links(db: &PgPool) -> Result<()> {
-    sqlx::query(
-        r#"
-        INSERT INTO music_ensemble_links (music_id, ensemble_id)
-        SELECT m.id, dep.ensemble_id
-        FROM musics m
-        JOIN directory_ensemble_permissions dep ON dep.directory_id = m.directory_id
-        ON CONFLICT DO NOTHING
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    Ok(())
-}
-
-async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<UserRecord> {
-    if let Some(existing) = sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, display_name, avatar_image_key, created_at, is_superadmin, role, created_by_user_id FROM users WHERE role = 'superadmin' OR is_superadmin = TRUE LIMIT 1",
-    )
-    .fetch_optional(db)
-    .await?
+        .select(UserRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?
     {
         return Ok(existing);
     }
@@ -519,10 +202,12 @@ async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<UserR
         .map_err(|error| anyhow::anyhow!(error.message))?;
     let mut username = base_username.clone();
 
-    while sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = $1")
-        .bind(&username)
-        .fetch_optional(db)
-        .await?
+    while users_dsl::users
+        .filter(users_dsl::username.eq(&username))
+        .select(users_dsl::id)
+        .first::<String>(&mut conn)
+        .await
+        .optional()?
         .is_some()
     {
         username = format!(
@@ -534,25 +219,27 @@ async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<UserR
     let record = UserRecord {
         id: Uuid::new_v4().to_string(),
         username,
-        display_name: None,
-        avatar_image_key: None,
         created_at: utc_now_string(),
         is_superadmin: true,
         role: AppRole::Superadmin.as_str().to_owned(),
+        display_name: None,
+        avatar_image_key: None,
         created_by_user_id: None,
     };
 
-    sqlx::query(
-        "INSERT INTO users (id, username, created_at, is_superadmin, role, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(&record.id)
-    .bind(&record.username)
-    .bind(&record.created_at)
-    .bind(record.is_superadmin)
-    .bind(&record.role)
-    .bind(&record.created_by_user_id)
-    .execute(db)
-    .await?;
+    diesel::insert_into(users_dsl::users)
+        .values(&NewUser {
+            id: &record.id,
+            username: &record.username,
+            created_at: &record.created_at,
+            is_superadmin: record.is_superadmin,
+            role: &record.role,
+            display_name: record.display_name.as_deref(),
+            avatar_image_key: record.avatar_image_key.as_deref(),
+            created_by_user_id: record.created_by_user_id.as_deref(),
+        })
+        .execute(&mut conn)
+        .await?;
 
     info!("created superadmin user '{}'", record.username);
     Ok(record)

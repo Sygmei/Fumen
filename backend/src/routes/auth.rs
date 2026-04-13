@@ -1,3 +1,5 @@
+use crate::models::NewUserSession;
+use crate::schema::{user_login_links, user_sessions};
 use crate::schemas::{
     AccessTokenRefreshResponse, AuthTokenResponse, ErrorResponse, ExchangeLoginTokenRequest,
     RefreshTokenRequest,
@@ -5,12 +7,21 @@ use crate::schemas::{
 use crate::services::auth;
 use crate::{AppError, AppState, utc_now_string};
 use axum::{Json, Router, extract::State};
+use diesel::OptionalExtension;
+use diesel::prelude::*;
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use uuid::Uuid;
 
 pub(super) fn routes(state: AppState) -> Router<AppState> {
     Router::new()
-        .route("/auth/exchange", crate::op_post!(state, "/auth/exchange", exchange_login_token))
-        .route("/auth/refresh", crate::op_post!(state, "/auth/refresh", refresh_access_token))
+        .route(
+            "/auth/exchange",
+            crate::op_post!(state, "/auth/exchange", exchange_login_token),
+        )
+        .route(
+            "/auth/refresh",
+            crate::op_post!(state, "/auth/refresh", refresh_access_token),
+        )
 }
 
 #[utoipa::path(
@@ -34,41 +45,44 @@ pub(crate) async fn exchange_login_token(
         return Err(AppError::bad_request("Missing login token"));
     }
 
-    let mut transaction = state.db_rw.begin().await?;
     let now = utc_now_string();
-    let user_id = sqlx::query_scalar::<_, String>(
-        r#"
-        UPDATE user_login_links
-        SET consumed_at = $1
-        WHERE token = $2
-          AND consumed_at IS NULL
-          AND expires_at > $1
-        RETURNING user_id
-        "#,
-    )
-    .bind(&now)
-    .bind(token)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or_else(|| AppError::unauthorized("This connection link is invalid or expired"))?;
-
     let session_id = crate::generate_auth_token(64);
+    let session_id_for_tx = session_id.clone();
+    let mut conn = state.db_rw.get().await?;
+    let user_id = conn
+        .transaction::<_, AppError, _>(|tx| {
+            Box::pin(async move {
+                let user_id = diesel::update(
+                    user_login_links::table
+                        .filter(user_login_links::token.eq(token))
+                        .filter(user_login_links::consumed_at.is_null())
+                        .filter(user_login_links::expires_at.gt(&now)),
+                )
+                .set(user_login_links::consumed_at.eq(Some(now.clone())))
+                .returning(user_login_links::user_id)
+                .get_result::<String>(tx)
+                .await
+                .optional()?
+                .ok_or_else(|| {
+                    AppError::unauthorized("This connection link is invalid or expired")
+                })?;
 
-    sqlx::query(
-        r#"
-        INSERT INTO user_sessions (id, user_id, session_token, created_at, expires_at)
-        VALUES ($1, $2, $3, $4, $5)
-        "#,
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(&user_id)
-    .bind(&session_id)
-    .bind(&now)
-    .bind(None::<String>)
-    .execute(&mut *transaction)
-    .await?;
+                let new_session_id = Uuid::new_v4().to_string();
+                diesel::insert_into(user_sessions::table)
+                    .values(&NewUserSession {
+                        id: &new_session_id,
+                        user_id: &user_id,
+                        session_token: &session_id_for_tx,
+                        created_at: &now,
+                        expires_at: None,
+                    })
+                    .execute(tx)
+                    .await?;
 
-    transaction.commit().await?;
+                Ok(user_id)
+            })
+        })
+        .await?;
 
     let user = auth::find_user_by_id(&state.db_rw, &user_id)
         .await?

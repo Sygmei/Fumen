@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS user_music_track_playtime;
+DROP TABLE IF EXISTS user_sessions;
+DROP TABLE IF EXISTS user_login_links;
+DROP TABLE IF EXISTS music_ensemble_links;
+DROP TABLE IF EXISTS directory_ensemble_permissions;
+DROP TABLE IF EXISTS user_ensemble_memberships;
+DROP TABLE IF EXISTS stems;
+DROP TABLE IF EXISTS musics;
+DROP TABLE IF EXISTS ensembles;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS directories;

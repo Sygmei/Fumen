@@ -12,21 +12,58 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 pub(super) fn routes(state: AppState) -> Router<AppState> {
     Router::new()
-        .route("/public/{access_key}", crate::op_get!(state, "/public/{access_key}", public_music))
-        .route("/public/{access_key}/audio", crate::op_get!(state, "/public/{access_key}/audio", public_music_audio))
-        .route("/public/{access_key}/midi", crate::op_get!(state, "/public/{access_key}/midi", public_music_midi))
-        .route("/public/{access_key}/musicxml", crate::op_get!(state, "/public/{access_key}/musicxml", public_music_musicxml))
-        .route("/public/{access_key}/stems", crate::op_get!(state, "/public/{access_key}/stems", public_music_stems))
+        .route(
+            "/public/{access_key}",
+            crate::op_get!(state, "/public/{access_key}", public_music),
+        )
+        .route(
+            "/public/{access_key}/audio",
+            crate::op_get!(state, "/public/{access_key}/audio", public_music_audio),
+        )
+        .route(
+            "/public/{access_key}/midi",
+            crate::op_get!(state, "/public/{access_key}/midi", public_music_midi),
+        )
+        .route(
+            "/public/{access_key}/musicxml",
+            crate::op_get!(
+                state,
+                "/public/{access_key}/musicxml",
+                public_music_musicxml
+            ),
+        )
+        .route(
+            "/public/{access_key}/stems",
+            crate::op_get!(state, "/public/{access_key}/stems", public_music_stems),
+        )
         .route(
             "/public/{access_key}/playtime",
-            crate::op_post!(state, "/public/{access_key}/playtime", report_public_music_playtime),
+            crate::op_post!(
+                state,
+                "/public/{access_key}/playtime",
+                report_public_music_playtime
+            ),
         )
         .route(
             "/public/{access_key}/stems/{track_index}",
-            crate::op_get!(state, "/public/{access_key}/stems/{track_index}", public_music_stem_audio),
+            crate::op_get!(
+                state,
+                "/public/{access_key}/stems/{track_index}",
+                public_music_stem_audio
+            ),
         )
-        .route("/public/{access_key}/download", crate::op_get!(state, "/public/{access_key}/download", public_music_download))
-        .route("/public/{access_key}/icon", crate::op_get!(state, "/public/{access_key}/icon", public_music_icon))
+        .route(
+            "/public/{access_key}/download",
+            crate::op_get!(
+                state,
+                "/public/{access_key}/download",
+                public_music_download
+            ),
+        )
+        .route(
+            "/public/{access_key}/icon",
+            crate::op_get!(state, "/public/{access_key}/icon", public_music_icon),
+        )
 }
 
 #[utoipa::path(

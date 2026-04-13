@@ -1,5 +1,6 @@
 use crate::audio;
 use crate::config::AppConfig;
+use crate::db::{DbPool, DbPoolError};
 use crate::models::{UserRecord, UserSessionRecord};
 use crate::storage::Storage;
 use axum::{
@@ -10,7 +11,6 @@ use axum::{
 };
 use chrono::{SecondsFormat, Utc};
 use rand::{Rng, distr::Alphanumeric};
-use sqlx::PgPool;
 use std::collections::HashSet;
 
 pub(crate) const LOGIN_LINK_TTL_MINUTES: i64 = 5;
@@ -137,8 +137,8 @@ impl AuthContext {
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) config: AppConfig,
-    pub(crate) db_rw: PgPool,
-    pub(crate) db_ro: PgPool,
+    pub(crate) db_rw: DbPool,
+    pub(crate) db_ro: DbPool,
     pub(crate) storage: Storage,
 }
 
@@ -179,8 +179,14 @@ impl From<anyhow::Error> for AppError {
     }
 }
 
-impl From<sqlx::Error> for AppError {
-    fn from(error: sqlx::Error) -> Self {
+impl From<diesel::result::Error> for AppError {
+    fn from(error: diesel::result::Error) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+    }
+}
+
+impl From<DbPoolError> for AppError {
+    fn from(error: DbPoolError) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
     }
 }
@@ -322,7 +328,7 @@ pub(crate) fn normalize_public_id(raw: Option<&str>) -> Result<Option<String>, A
 }
 
 pub(crate) async fn ensure_membership_entities_exist(
-    db: &PgPool,
+    db: &DbPool,
     ensemble_id: &str,
     user_id: &str,
 ) -> Result<UserRecord, AppError> {

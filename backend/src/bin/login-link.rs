@@ -1,16 +1,23 @@
 #[path = "../config.rs"]
 mod config;
+#[allow(dead_code)]
+#[path = "../db.rs"]
+mod db;
+#[allow(dead_code)]
+#[path = "../models.rs"]
+mod models;
+#[path = "../schema.rs"]
+mod schema;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{Duration, SecondsFormat, Utc};
 use config::AppConfig;
+use diesel::OptionalExtension;
+use diesel::prelude::*;
+use diesel_async::RunQueryDsl;
+use models::{NewUser, NewUserLoginLink};
 use qrcode::{QrCode, render::unicode};
 use rand::{Rng, distr::Alphanumeric};
-use sqlx::{
-    FromRow, PgPool,
-    postgres::{PgConnectOptions, PgPoolOptions},
-};
-use std::str::FromStr;
 use uuid::Uuid;
 
 const LOGIN_LINK_TTL_MINUTES: i64 = 5;
@@ -20,13 +27,17 @@ struct CliLoginLink {
     expires_at: String,
 }
 
-#[derive(Debug, FromRow)]
+#[allow(dead_code)]
+#[derive(Debug, Queryable, Selectable, Identifiable)]
+#[diesel(table_name = schema::users)]
 struct CliUserRecord {
     id: String,
     username: String,
     created_at: String,
     is_superadmin: bool,
     role: String,
+    display_name: Option<String>,
+    avatar_image_key: Option<String>,
     created_by_user_id: Option<String>,
 }
 
@@ -46,10 +57,10 @@ async fn async_main() -> Result<()> {
         .ok_or_else(|| anyhow!("usage: cargo run --bin login-link -- <username-or-user-id>"))?;
 
     let config = AppConfig::from_env()?;
-    let db_admin = open_database_pool(&config.database_url_admin, 1, "admin").await?;
-    ensure_cli_schema(&db_admin).await?;
+    db::run_migrations(&config.database_url_admin).await?;
+    let db_admin = db::open_database_pool(&config.database_url_admin, 1, "admin").await?;
     let superadmin = ensure_superadmin_user(&db_admin, &config).await?;
-    let db_rw = open_database_pool(&config.database_url, 5, "read-write").await?;
+    let db_rw = db::open_database_pool(&config.database_url, 5, "read-write").await?;
 
     let user = find_user_by_lookup(&db_rw, &user_lookup)
         .await?
@@ -68,79 +79,20 @@ async fn async_main() -> Result<()> {
     Ok(())
 }
 
-async fn open_database_pool(url: &str, max_connections: u32, role: &str) -> Result<PgPool> {
-    let options = PgConnectOptions::from_str(url)
-        .with_context(|| format!("invalid PostgreSQL connection string for {role} pool"))?
-        .statement_cache_capacity(0);
+async fn ensure_superadmin_user(db: &db::DbPool, config: &AppConfig) -> Result<CliUserRecord> {
+    let mut conn = db.get().await?;
+    use schema::users::dsl as users_dsl;
 
-    Ok(PgPoolOptions::new()
-        .max_connections(max_connections)
-        .connect_with(options)
-        .await?)
-}
-
-async fn ensure_cli_schema(db: &PgPool) -> Result<()> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL,
-            is_superadmin BOOLEAN NOT NULL DEFAULT FALSE,
-            role TEXT NOT NULL DEFAULT 'user',
-            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
+    if let Some(existing) = users_dsl::users
+        .filter(
+            users_dsl::role
+                .eq("superadmin")
+                .or(users_dsl::is_superadmin.eq(true)),
         )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS user_login_links (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            token TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            consumed_at TEXT
-        )
-        "#,
-    )
-    .execute(db)
-    .await?;
-
-    sqlx::query(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin BOOLEAN NOT NULL DEFAULT FALSE",
-    )
-    .execute(db)
-    .await?;
-    sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'")
-        .execute(db)
-        .await?;
-    sqlx::query(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL",
-    )
-    .execute(db)
-    .await?;
-    sqlx::query(
-        "CREATE UNIQUE INDEX IF NOT EXISTS users_single_superadmin_idx ON users (is_superadmin) WHERE is_superadmin = TRUE",
-    )
-    .execute(db)
-    .await?;
-    sqlx::query("UPDATE users SET role = 'superadmin' WHERE is_superadmin = TRUE")
-        .execute(db)
-        .await?;
-
-    Ok(())
-}
-
-async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<CliUserRecord> {
-    if let Some(existing) = sqlx::query_as::<_, CliUserRecord>(
-        "SELECT id, username, created_at, is_superadmin, role, created_by_user_id FROM users WHERE role = 'superadmin' OR is_superadmin = TRUE LIMIT 1",
-    )
-    .fetch_optional(db)
-    .await?
+        .select(CliUserRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?
     {
         return Ok(existing);
     }
@@ -148,10 +100,12 @@ async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<CliUs
     let base_username = normalize_username(&config.superadmin_username)?;
     let mut username = base_username.clone();
 
-    while sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE username = $1")
-        .bind(&username)
-        .fetch_optional(db)
-        .await?
+    while users_dsl::users
+        .filter(users_dsl::username.eq(&username))
+        .select(users_dsl::id)
+        .first::<String>(&mut conn)
+        .await
+        .optional()?
         .is_some()
     {
         username = format!(
@@ -166,58 +120,72 @@ async fn ensure_superadmin_user(db: &PgPool, config: &AppConfig) -> Result<CliUs
         created_at: utc_now_string(),
         is_superadmin: true,
         role: "superadmin".to_owned(),
+        display_name: None,
+        avatar_image_key: None,
         created_by_user_id: None,
     };
 
-    sqlx::query(
-        "INSERT INTO users (id, username, created_at, is_superadmin, role, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(&record.id)
-    .bind(&record.username)
-    .bind(&record.created_at)
-    .bind(record.is_superadmin)
-    .bind(&record.role)
-    .bind(&record.created_by_user_id)
-    .execute(db)
-    .await?;
+    diesel::insert_into(users_dsl::users)
+        .values(&NewUser {
+            id: &record.id,
+            username: &record.username,
+            created_at: &record.created_at,
+            is_superadmin: record.is_superadmin,
+            role: &record.role,
+            display_name: None,
+            avatar_image_key: None,
+            created_by_user_id: None,
+        })
+        .execute(&mut conn)
+        .await?;
 
     Ok(record)
 }
 
-async fn find_user_by_lookup(db: &PgPool, lookup: &str) -> Result<Option<CliUserRecord>> {
-    Ok(sqlx::query_as::<_, CliUserRecord>(
-        r#"
-        SELECT id, username, created_at, is_superadmin, role, created_by_user_id
-        FROM users
-        WHERE username = $1 OR id = $1
-        ORDER BY CASE WHEN username = $1 THEN 0 ELSE 1 END
-        LIMIT 1
-        "#,
-    )
-    .bind(lookup)
-    .fetch_optional(db)
-    .await?)
+async fn find_user_by_lookup(db: &db::DbPool, lookup: &str) -> Result<Option<CliUserRecord>> {
+    let mut conn = db.get().await?;
+    use schema::users::dsl as users_dsl;
+
+    if let Some(found) = users_dsl::users
+        .filter(users_dsl::username.eq(lookup))
+        .select(CliUserRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?
+    {
+        return Ok(Some(found));
+    }
+
+    Ok(users_dsl::users
+        .filter(users_dsl::id.eq(lookup))
+        .select(CliUserRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?)
 }
 
-async fn create_login_link(db: &PgPool, config: &AppConfig, user_id: &str) -> Result<CliLoginLink> {
+async fn create_login_link(
+    db: &db::DbPool,
+    config: &AppConfig,
+    user_id: &str,
+) -> Result<CliLoginLink> {
     let now = Utc::now();
     let created_at = format_timestamp(now);
     let expires_at = format_timestamp(now + Duration::minutes(LOGIN_LINK_TTL_MINUTES));
     let token = generate_auth_token(48);
 
-    sqlx::query(
-        r#"
-        INSERT INTO user_login_links (id, user_id, token, created_at, expires_at)
-        VALUES ($1, $2, $3, $4, $5)
-        "#,
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(user_id)
-    .bind(&token)
-    .bind(&created_at)
-    .bind(&expires_at)
-    .execute(db)
-    .await?;
+    let mut conn = db.get().await?;
+    diesel::insert_into(schema::user_login_links::table)
+        .values(&NewUserLoginLink {
+            id: &Uuid::new_v4().to_string(),
+            user_id,
+            token: &token,
+            created_at: &created_at,
+            expires_at: &expires_at,
+            consumed_at: None,
+        })
+        .execute(&mut conn)
+        .await?;
 
     Ok(CliLoginLink {
         connection_url: config.connection_url_for(&token),

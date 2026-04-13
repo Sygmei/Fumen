@@ -11,6 +11,9 @@ aws-sdk-s3 = "1.96.0"
 axum = { version = "0.8.4", features = ["multipart"] }
 bytes = "1.10.1"
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
+diesel = { version = "2.3.7", features = ["postgres"] }
+diesel-async = { version = "0.8.0", features = ["bb8", "migrations", "postgres"] }
+diesel_migrations = { version = "2.3.1", features = ["postgres"] }
 flate2 = "1.1.0"
 http = "1.3.1"
 jsonwebtoken = "9"
@@ -23,7 +26,6 @@ qrcode = "0.14.1"
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres"] }
 tempfile = "3.20.0"
 tokio = { version = "1.47.1", features = ["full"] }
 tower-http = { version = "0.6.6", features = ["compression-br", "compression-gzip", "cors", "fs", "trace"] }

@@ -1,11 +1,19 @@
-use crate::models::{EnsembleRecord, MusicRecord, UserEnsembleMembershipRecord, UserRecord};
+use crate::models::{
+    EnsembleRecord, MusicEnsembleLinkRecord, MusicRecord, NewEnsemble, NewMusic,
+    NewMusicEnsembleLink, NewUser, NewUserEnsembleMembership, UpdateAdminUser,
+    UpdateMusicDirectory, UpdateMusicMetadata, UpdateMusicProcessing, UserEnsembleMembershipRecord,
+    UserRecord,
+};
+use crate::schema::{
+    ensembles, music_ensemble_links, musics, stems, user_ensemble_memberships, users,
+};
 use crate::schemas::{
     AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicResponse,
     AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest,
     AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, CreateEnsembleRequest,
-    CreateUserRequest, EnsembleMemberResponse, ErrorResponse, LoginLinkResponse,
-    MoveMusicRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest,
-    UpdateMusicEnsemblesRequest, UserResponse,
+    CreateUserRequest, EnsembleMemberResponse, ErrorResponse, LoginLinkResponse, MoveMusicRequest,
+    UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateMusicEnsemblesRequest,
+    UserResponse,
 };
 use crate::services::{auth, music};
 use crate::{
@@ -19,28 +27,66 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use bytes::Bytes;
+use diesel::QueryableByName;
+use diesel::prelude::*;
+use diesel::sql_types::{BigInt, Text};
+use diesel::upsert::excluded;
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use std::collections::{HashMap, HashSet};
 use tokio::fs;
 use tracing::Instrument;
 use uuid::Uuid;
 
+#[derive(QueryableByName)]
+struct MusicTotalBytesRow {
+    #[diesel(sql_type = Text)]
+    music_id: String,
+    #[diesel(sql_type = BigInt)]
+    total_bytes: i64,
+}
+
 pub(super) fn routes(state: AppState) -> Router<AppState> {
     Router::new()
-        .route("/admin/users", crate::op_get!(state, "/admin/users", admin_list_users))
-        .route("/admin/users", crate::op_post!(state, "/admin/users", admin_create_user))
-        .route("/admin/users/{id}", crate::op_patch!(state, "/admin/users/{id}", admin_update_user))
-        .route("/admin/users/{id}", crate::op_delete!(state, "/admin/users/{id}", admin_delete_user))
+        .route(
+            "/admin/users",
+            crate::op_get!(state, "/admin/users", admin_list_users),
+        )
+        .route(
+            "/admin/users",
+            crate::op_post!(state, "/admin/users", admin_create_user),
+        )
+        .route(
+            "/admin/users/{id}",
+            crate::op_patch!(state, "/admin/users/{id}", admin_update_user),
+        )
+        .route(
+            "/admin/users/{id}",
+            crate::op_delete!(state, "/admin/users/{id}", admin_delete_user),
+        )
         .route(
             "/admin/users/{id}/login-link",
-            crate::op_post!(state, "/admin/users/{id}/login-link", admin_create_user_login_link),
+            crate::op_post!(
+                state,
+                "/admin/users/{id}/login-link",
+                admin_create_user_login_link
+            ),
         )
         .route(
             "/admin/users/{id}/metadata",
             crate::op_get!(state, "/admin/users/{id}/metadata", admin_user_metadata),
         )
-        .route("/admin/ensembles", crate::op_get!(state, "/admin/ensembles", admin_list_ensembles))
-        .route("/admin/ensembles", crate::op_post!(state, "/admin/ensembles", admin_create_ensemble))
-        .route("/admin/ensembles/{id}", crate::op_delete!(state, "/admin/ensembles/{id}", admin_delete_ensemble))
+        .route(
+            "/admin/ensembles",
+            crate::op_get!(state, "/admin/ensembles", admin_list_ensembles),
+        )
+        .route(
+            "/admin/ensembles",
+            crate::op_post!(state, "/admin/ensembles", admin_create_ensemble),
+        )
+        .route(
+            "/admin/ensembles/{id}",
+            crate::op_delete!(state, "/admin/ensembles/{id}", admin_delete_ensemble),
+        )
         .route(
             "/admin/ensembles/{id}/users/{user_id}",
             crate::op_post!(
@@ -59,16 +105,32 @@ pub(super) fn routes(state: AppState) -> Router<AppState> {
         )
         .route(
             "/admin/ensembles/{id}/users",
-            crate::op_patch!(state, "/admin/ensembles/{id}/users", admin_update_ensemble_members),
+            crate::op_patch!(
+                state,
+                "/admin/ensembles/{id}/users",
+                admin_update_ensemble_members
+            ),
         )
-        .route("/admin/musics", crate::op_get!(state, "/admin/musics", admin_list_musics))
-        .route("/admin/musics", crate::op_post!(state, "/admin/musics", admin_upload_music))
-        .route("/admin/musics/{id}", crate::op_patch!(state, "/admin/musics/{id}", admin_update_music))
+        .route(
+            "/admin/musics",
+            crate::op_get!(state, "/admin/musics", admin_list_musics),
+        )
+        .route(
+            "/admin/musics",
+            crate::op_post!(state, "/admin/musics", admin_upload_music),
+        )
+        .route(
+            "/admin/musics/{id}",
+            crate::op_patch!(state, "/admin/musics/{id}", admin_update_music),
+        )
         .route(
             "/admin/musics/{id}/playtime",
             crate::op_get!(state, "/admin/musics/{id}/playtime", admin_music_playtime),
         )
-        .route("/admin/musics/{id}/move", crate::op_post!(state, "/admin/musics/{id}/move", admin_move_music))
+        .route(
+            "/admin/musics/{id}/move",
+            crate::op_post!(state, "/admin/musics/{id}/move", admin_move_music),
+        )
         .route(
             "/admin/musics/{id}/ensembles/{ensemble_id}",
             crate::op_post!(
@@ -87,10 +149,20 @@ pub(super) fn routes(state: AppState) -> Router<AppState> {
         )
         .route(
             "/admin/musics/{id}/ensembles",
-            crate::op_patch!(state, "/admin/musics/{id}/ensembles", admin_update_music_ensembles),
+            crate::op_patch!(
+                state,
+                "/admin/musics/{id}/ensembles",
+                admin_update_music_ensembles
+            ),
         )
-        .route("/admin/musics/{id}/delete", crate::op_post!(state, "/admin/musics/{id}/delete", admin_delete_music))
-        .route("/admin/musics/{id}/retry", crate::op_post!(state, "/admin/musics/{id}/retry", admin_retry_render))
+        .route(
+            "/admin/musics/{id}/delete",
+            crate::op_post!(state, "/admin/musics/{id}/delete", admin_delete_music),
+        )
+        .route(
+            "/admin/musics/{id}/retry",
+            crate::op_post!(state, "/admin/musics/{id}/retry", admin_retry_render),
+        )
 }
 
 async fn read_field_bytes_with_progress(
@@ -167,11 +239,12 @@ pub(crate) async fn admin_list_users(
         ));
     }
 
-    let rows = sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, display_name, avatar_image_key, created_at, is_superadmin, role, created_by_user_id FROM users ORDER BY username ASC",
-    )
-    .fetch_all(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    let rows = users::table
+        .order(users::username.asc())
+        .select(UserRecord::as_select())
+        .load(&mut conn)
+        .await?;
 
     let mut users = Vec::with_capacity(rows.len());
     for row in rows {
@@ -227,17 +300,20 @@ pub(crate) async fn admin_create_user(
         created_by_user_id: Some(auth_context.user.id.clone()),
     };
 
-    sqlx::query(
-        "INSERT INTO users (id, username, created_at, is_superadmin, role, created_by_user_id) VALUES ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(&record.id)
-    .bind(&record.username)
-    .bind(&record.created_at)
-    .bind(record.is_superadmin)
-    .bind(&record.role)
-    .bind(&record.created_by_user_id)
-    .execute(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::insert_into(users::table)
+        .values(NewUser {
+            id: &record.id,
+            username: &record.username,
+            created_at: &record.created_at,
+            is_superadmin: record.is_superadmin,
+            role: &record.role,
+            display_name: None,
+            avatar_image_key: None,
+            created_by_user_id: record.created_by_user_id.as_deref(),
+        })
+        .execute(&mut conn)
+        .await?;
 
     Ok(Json(
         auth::user_record_to_response(&state.db_rw, &state.storage, record).await?,
@@ -347,9 +423,9 @@ pub(crate) async fn admin_delete_user(
         .ok_or_else(|| AppError::not_found("User not found"))?;
     auth::ensure_can_delete_user(&auth_context, &user)?;
 
-    sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(&id)
-        .execute(&state.db_rw)
+    let mut conn = state.db_rw.get().await?;
+    diesel::delete(users::table.find(&id))
+        .execute(&mut conn)
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -490,16 +566,16 @@ pub(crate) async fn admin_update_user(
         existing.avatar_image_key.clone()
     };
 
-    sqlx::query(
-        "UPDATE users SET display_name = $1, role = $2, is_superadmin = $3, avatar_image_key = $4 WHERE id = $5",
-    )
-    .bind(&new_display_name)
-    .bind(new_role.as_str())
-    .bind(new_role == AppRole::Superadmin)
-    .bind(&new_avatar_key)
-    .bind(&id)
-    .execute(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::update(users::table.find(&id))
+        .set(UpdateAdminUser {
+            display_name: new_display_name.as_deref(),
+            role: new_role.as_str(),
+            is_superadmin: new_role == AppRole::Superadmin,
+            avatar_image_key: new_avatar_key.as_deref(),
+        })
+        .execute(&mut conn)
+        .await?;
 
     let updated = auth::find_user_by_id(&state.db_rw, &id)
         .await?
@@ -527,11 +603,12 @@ pub(crate) async fn admin_list_ensembles(
 ) -> Result<Json<Vec<AdminEnsembleResponse>>, AppError> {
     let auth_context = auth::require_admin_context(&state, &headers).await?;
 
-    let ensembles = sqlx::query_as::<_, EnsembleRecord>(
-        "SELECT id, name, created_at, created_by_user_id FROM ensembles ORDER BY name ASC",
-    )
-    .fetch_all(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    let ensembles = ensembles::table
+        .order(ensembles::name.asc())
+        .select(EnsembleRecord::as_select())
+        .load(&mut conn)
+        .await?;
     let memberships = music::fetch_user_ensemble_memberships(&state.db_rw).await?;
     let score_counts = music::fetch_ensemble_score_counts(&state.db_rw).await?;
     let mut member_map: HashMap<String, Vec<EnsembleMemberResponse>> = HashMap::new();
@@ -609,25 +686,32 @@ pub(crate) async fn admin_create_ensemble(
         created_by_user_id: Some(auth_context.user.id.clone()),
     };
 
-    sqlx::query(
-        "INSERT INTO ensembles (id, name, created_at, created_by_user_id) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(&record.id)
-    .bind(&record.name)
-    .bind(&record.created_at)
-    .bind(&record.created_by_user_id)
-    .execute(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::insert_into(ensembles::table)
+        .values(NewEnsemble {
+            id: &record.id,
+            name: &record.name,
+            created_at: &record.created_at,
+            created_by_user_id: record.created_by_user_id.as_deref(),
+        })
+        .execute(&mut conn)
+        .await?;
 
     if auth_context.role == AppRole::Manager {
-        sqlx::query(
-            "INSERT INTO user_ensemble_memberships (user_id, ensemble_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, ensemble_id) DO UPDATE SET role = EXCLUDED.role",
-        )
-        .bind(&auth_context.user.id)
-        .bind(&record.id)
-        .bind(crate::EnsembleRole::Manager.as_str())
-        .execute(&state.db_rw)
-        .await?;
+        diesel::insert_into(user_ensemble_memberships::table)
+            .values(NewUserEnsembleMembership {
+                user_id: &auth_context.user.id,
+                ensemble_id: &record.id,
+                role: crate::EnsembleRole::Manager.as_str(),
+            })
+            .on_conflict((
+                user_ensemble_memberships::user_id,
+                user_ensemble_memberships::ensemble_id,
+            ))
+            .do_update()
+            .set(user_ensemble_memberships::role.eq(excluded(user_ensemble_memberships::role)))
+            .execute(&mut conn)
+            .await?;
     }
 
     Ok(Json(AdminEnsembleResponse {
@@ -667,22 +751,35 @@ pub(crate) async fn admin_delete_ensemble(
         .ok_or_else(|| AppError::not_found("Ensemble not found"))?;
     auth::ensure_can_delete_ensemble(&auth_context, &ensemble)?;
 
-    let orphan_music_ids = sqlx::query_scalar::<_, String>(
-        r#"
-        SELECT mel.music_id
-        FROM music_ensemble_links mel
-        WHERE mel.ensemble_id = $1
-        GROUP BY mel.music_id
-        HAVING COUNT(*) FILTER (WHERE mel.ensemble_id <> $1) = 0
-        "#,
-    )
-    .bind(&id)
-    .fetch_all(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    let linked_music_ids = music_ensemble_links::table
+        .filter(music_ensemble_links::ensemble_id.eq(&id))
+        .select(music_ensemble_links::music_id)
+        .distinct()
+        .load::<String>(&mut conn)
+        .await?;
+    let related_links = music_ensemble_links::table
+        .filter(music_ensemble_links::music_id.eq_any(&linked_music_ids))
+        .select(MusicEnsembleLinkRecord::as_select())
+        .load::<MusicEnsembleLinkRecord>(&mut conn)
+        .await?
+        .into_iter()
+        .fold(HashMap::<String, Vec<String>>::new(), |mut acc, link| {
+            acc.entry(link.music_id).or_default().push(link.ensemble_id);
+            acc
+        });
+    let orphan_music_ids = related_links
+        .into_iter()
+        .filter_map(|(music_id, ensemble_ids)| {
+            ensemble_ids
+                .iter()
+                .all(|ensemble_id| ensemble_id == &id)
+                .then_some(music_id)
+        })
+        .collect::<Vec<_>>();
 
-    sqlx::query("DELETE FROM ensembles WHERE id = $1")
-        .bind(&id)
-        .execute(&state.db_rw)
+    diesel::delete(ensembles::table.find(&id))
+        .execute(&mut conn)
         .await?;
 
     for music_id in orphan_music_ids {
@@ -723,14 +820,21 @@ pub(crate) async fn admin_add_user_to_ensemble(
     let role =
         auth::validate_target_membership_role(&auth_context, &target_user, payload.role.trim())?;
 
-    sqlx::query(
-        "INSERT INTO user_ensemble_memberships (user_id, ensemble_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, ensemble_id) DO UPDATE SET role = EXCLUDED.role",
-    )
-    .bind(&user_id)
-    .bind(&id)
-    .bind(role.as_str())
-    .execute(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::insert_into(user_ensemble_memberships::table)
+        .values(NewUserEnsembleMembership {
+            user_id: &user_id,
+            ensemble_id: &id,
+            role: role.as_str(),
+        })
+        .on_conflict((
+            user_ensemble_memberships::user_id,
+            user_ensemble_memberships::ensemble_id,
+        ))
+        .do_update()
+        .set(user_ensemble_memberships::role.eq(excluded(user_ensemble_memberships::role)))
+        .execute(&mut conn)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -763,11 +867,14 @@ pub(crate) async fn admin_remove_user_from_ensemble(
         .ok_or_else(|| AppError::not_found("User not found"))?;
     auth::ensure_can_remove_member_from_ensemble(&auth_context, &target_user)?;
 
-    sqlx::query("DELETE FROM user_ensemble_memberships WHERE user_id = $1 AND ensemble_id = $2")
-        .bind(&user_id)
-        .bind(&id)
-        .execute(&state.db_rw)
-        .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::delete(
+        user_ensemble_memberships::table
+            .filter(user_ensemble_memberships::user_id.eq(&user_id))
+            .filter(user_ensemble_memberships::ensemble_id.eq(&id)),
+    )
+    .execute(&mut conn)
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -801,12 +908,12 @@ pub(crate) async fn admin_update_ensemble_members(
         .await?
         .ok_or_else(|| AppError::not_found("Ensemble not found"))?;
 
-    let current_members = sqlx::query_as::<_, UserEnsembleMembershipRecord>(
-        "SELECT user_id, ensemble_id, role FROM user_ensemble_memberships WHERE ensemble_id = $1",
-    )
-    .bind(&id)
-    .fetch_all(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    let current_members = user_ensemble_memberships::table
+        .filter(user_ensemble_memberships::ensemble_id.eq(&id))
+        .select(UserEnsembleMembershipRecord::as_select())
+        .load(&mut conn)
+        .await?;
 
     let mut desired_members: HashMap<String, EnsembleRole> = HashMap::new();
     for member in payload.members {
@@ -840,29 +947,43 @@ pub(crate) async fn admin_update_ensemble_members(
     let mut to_upsert: Vec<(String, EnsembleRole)> = desired_members.into_iter().collect();
     to_upsert.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut tx = state.db_rw.begin().await?;
-    for (user_id, role) in to_upsert {
-        sqlx::query(
-            "INSERT INTO user_ensemble_memberships (user_id, ensemble_id, role) VALUES ($1, $2, $3) ON CONFLICT (user_id, ensemble_id) DO UPDATE SET role = EXCLUDED.role",
-        )
-        .bind(&user_id)
-        .bind(&id)
-        .bind(role.as_str())
-        .execute(&mut *tx)
-        .await?;
-    }
+    let mut conn = state.db_rw.get().await?;
+    conn.transaction::<_, AppError, _>(|tx| {
+        Box::pin(async move {
+            for (user_id, role) in to_upsert {
+                diesel::insert_into(user_ensemble_memberships::table)
+                    .values(NewUserEnsembleMembership {
+                        user_id: &user_id,
+                        ensemble_id: &id,
+                        role: role.as_str(),
+                    })
+                    .on_conflict((
+                        user_ensemble_memberships::user_id,
+                        user_ensemble_memberships::ensemble_id,
+                    ))
+                    .do_update()
+                    .set(
+                        user_ensemble_memberships::role
+                            .eq(excluded(user_ensemble_memberships::role)),
+                    )
+                    .execute(tx)
+                    .await?;
+            }
 
-    for user_id in to_remove {
-        sqlx::query(
-            "DELETE FROM user_ensemble_memberships WHERE user_id = $1 AND ensemble_id = $2",
-        )
-        .bind(&user_id)
-        .bind(&id)
-        .execute(&mut *tx)
-        .await?;
-    }
+            for user_id in to_remove {
+                diesel::delete(
+                    user_ensemble_memberships::table
+                        .filter(user_ensemble_memberships::user_id.eq(&user_id))
+                        .filter(user_ensemble_memberships::ensemble_id.eq(&id)),
+                )
+                .execute(tx)
+                .await?;
+            }
 
-    tx.commit().await?;
+            Ok(())
+        })
+    })
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -898,13 +1019,15 @@ pub(crate) async fn admin_add_music_to_ensemble(
     )
     .await?;
 
-    sqlx::query(
-        "INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(&id)
-    .bind(&ensemble_id)
-    .execute(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::insert_into(music_ensemble_links::table)
+        .values(NewMusicEnsembleLink {
+            music_id: &id,
+            ensemble_id: &ensemble_id,
+        })
+        .on_conflict_do_nothing()
+        .execute(&mut conn)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -951,11 +1074,14 @@ pub(crate) async fn admin_remove_music_from_ensemble(
         ));
     }
 
-    sqlx::query("DELETE FROM music_ensemble_links WHERE music_id = $1 AND ensemble_id = $2")
-        .bind(&id)
-        .bind(&ensemble_id)
-        .execute(&state.db_rw)
-        .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::delete(
+        music_ensemble_links::table
+            .filter(music_ensemble_links::music_id.eq(&id))
+            .filter(music_ensemble_links::ensemble_id.eq(&ensemble_id)),
+    )
+    .execute(&mut conn)
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1041,26 +1167,34 @@ pub(crate) async fn admin_update_music_ensembles(
         .collect();
     to_add.sort();
 
-    let mut tx = state.db_rw.begin().await?;
-    for ensemble_id in to_add {
-        sqlx::query(
-            "INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        )
-        .bind(&id)
-        .bind(&ensemble_id)
-        .execute(&mut *tx)
-        .await?;
-    }
+    let mut conn = state.db_rw.get().await?;
+    conn.transaction::<_, AppError, _>(|tx| {
+        Box::pin(async move {
+            for ensemble_id in to_add {
+                diesel::insert_into(music_ensemble_links::table)
+                    .values(NewMusicEnsembleLink {
+                        music_id: &id,
+                        ensemble_id: &ensemble_id,
+                    })
+                    .on_conflict_do_nothing()
+                    .execute(tx)
+                    .await?;
+            }
 
-    for ensemble_id in to_remove {
-        sqlx::query("DELETE FROM music_ensemble_links WHERE music_id = $1 AND ensemble_id = $2")
-            .bind(&id)
-            .bind(&ensemble_id)
-            .execute(&mut *tx)
-            .await?;
-    }
+            for ensemble_id in to_remove {
+                diesel::delete(
+                    music_ensemble_links::table
+                        .filter(music_ensemble_links::music_id.eq(&id))
+                        .filter(music_ensemble_links::ensemble_id.eq(&ensemble_id)),
+                )
+                .execute(tx)
+                .await?;
+            }
 
-    tx.commit().await?;
+            Ok(())
+        })
+    })
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1082,22 +1216,22 @@ pub(crate) async fn admin_list_musics(
 ) -> Result<Json<Vec<AdminMusicResponse>>, AppError> {
     let auth_context = auth::require_admin_context(&state, &headers).await?;
 
-    let rows = sqlx::query_as::<_, MusicRecord>(
-        r#"
-        SELECT id, title, icon, icon_image_key, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at, owner_user_id
-        FROM musics
-        ORDER BY created_at DESC
-        "#,
-    )
-    .fetch_all(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    let rows = musics::table
+        .order(musics::created_at.desc())
+        .select(MusicRecord::as_select())
+        .load(&mut conn)
+        .await?;
 
-    let total_rows = sqlx::query_as::<_, (String, i64)>(
+    let total_rows = diesel::sql_query(
         "SELECT music_id, COALESCE(SUM(size_bytes), 0)::BIGINT AS total_bytes FROM stems GROUP BY music_id",
     )
-    .fetch_all(&state.db_rw)
-    .await?;
-    let totals: HashMap<String, i64> = total_rows.into_iter().collect();
+    .load::<MusicTotalBytesRow>(&mut conn)
+        .await?;
+    let totals: HashMap<String, i64> = total_rows
+        .into_iter()
+        .map(|row| (row.music_id, row.total_bytes))
+        .collect();
     let ensemble_names = music::fetch_ensemble_summaries(&state.db_rw).await?;
     let links = music::fetch_music_ensemble_links(&state.db_rw).await?;
     let (mut music_ensemble_ids, mut music_ensemble_names) =
@@ -1238,6 +1372,7 @@ pub(crate) async fn admin_upload_music(
     }
 
     let primary_ensemble_id = ensemble_ids
+        .as_slice()
         .first()
         .cloned()
         .ok_or_else(|| AppError::bad_request("Choose an ensemble for this score"))?;
@@ -1279,49 +1414,45 @@ pub(crate) async fn admin_upload_music(
     };
 
     let created_at = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
-        r#"
-        INSERT INTO musics (
-            id, title, icon, icon_image_key, filename, content_type, object_key,
-            audio_object_key, audio_status, audio_error,
-            midi_object_key, midi_status, midi_error,
-            musicxml_object_key, musicxml_status, musicxml_error,
-            stems_status, stems_error,
-            public_token, public_id, quality_profile, created_at, directory_id, owner_user_id
-        )
-        VALUES (
-            $1, $2, $3, $4, $5, $6, $7,
-            NULL, 'processing', NULL,
-            NULL, 'processing', NULL,
-            NULL, 'processing', NULL,
-            'processing', NULL,
-            $8, $9, $10, $11, $12, $13
-        )
-        "#,
-    )
-    .bind(&music_id)
-    .bind(&resolved_title)
-    .bind(&icon)
-    .bind(&icon_image_key)
-    .bind(&filename)
-    .bind(&content_type)
-    .bind(&object_key)
-    .bind(&public_token)
-    .bind(&public_id)
-    .bind(quality_profile.as_str())
-    .bind(&created_at)
-    .bind(&primary_ensemble_id)
-    .bind(&auth_context.user.id)
-    .execute(&state.db_rw)
-    .await?;
-    for ensemble_id in &ensemble_ids {
-        sqlx::query(
-            "INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        )
-        .bind(&music_id)
-        .bind(ensemble_id)
-        .execute(&state.db_rw)
+    let mut conn = state.db_rw.get().await?;
+    diesel::insert_into(musics::table)
+        .values(NewMusic {
+            id: &music_id,
+            title: &resolved_title,
+            icon: icon.as_deref(),
+            icon_image_key: icon_image_key.as_deref(),
+            filename: &filename,
+            content_type: &content_type,
+            object_key: &object_key,
+            audio_object_key: None,
+            audio_status: "processing",
+            audio_error: None,
+            midi_object_key: None,
+            midi_status: "processing",
+            midi_error: None,
+            musicxml_object_key: None,
+            musicxml_status: "processing",
+            musicxml_error: None,
+            stems_status: "processing",
+            stems_error: None,
+            public_token: &public_token,
+            public_id: public_id.as_deref(),
+            quality_profile: quality_profile.as_str(),
+            created_at: &created_at,
+            directory_id: &primary_ensemble_id,
+            owner_user_id: Some(auth_context.user.id.as_str()),
+        })
+        .execute(&mut conn)
         .await?;
+    for ensemble_id in &ensemble_ids {
+        diesel::insert_into(music_ensemble_links::table)
+            .values(NewMusicEnsembleLink {
+                music_id: &music_id,
+                ensemble_id,
+            })
+            .on_conflict_do_nothing()
+            .execute(&mut conn)
+            .await?;
     }
 
     let ensemble_name_map = music::fetch_ensemble_summaries(&state.db_rw).await?;
@@ -1354,6 +1485,7 @@ pub(crate) async fn admin_upload_music(
         quality_profile: quality_profile.as_str().to_owned(),
         created_at: created_at.clone(),
         owner_user_id: Some(auth_context.user.id.clone()),
+        directory_id: primary_ensemble_id.clone(),
     };
 
     let render_state = state.clone();
@@ -1454,30 +1586,23 @@ async fn process_uploaded_music(
         music::store_stems(&state, &music_id, stem_results, stems_status, stems_error),
     )?;
 
-    sqlx::query(
-        r#"
-        UPDATE musics SET
-            audio_object_key   = $1, audio_status   = $2, audio_error   = $3,
-            midi_object_key    = $4, midi_status    = $5, midi_error    = $6,
-            musicxml_object_key = $7, musicxml_status = $8, musicxml_error = $9,
-            stems_status       = $10, stems_error    = $11
-        WHERE id = $12
-        "#,
-    )
-    .bind(&audio_object_key)
-    .bind(&audio_status)
-    .bind(&audio_error)
-    .bind(&midi_object_key)
-    .bind(&midi_status)
-    .bind(&midi_error)
-    .bind(&musicxml_object_key)
-    .bind(&musicxml_status)
-    .bind(&musicxml_error)
-    .bind(&stems_status)
-    .bind(&stems_error)
-    .bind(&music_id)
-    .execute(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::update(musics::table.find(&music_id))
+        .set(UpdateMusicProcessing {
+            audio_object_key: audio_object_key.as_deref(),
+            audio_status: &audio_status,
+            audio_error: audio_error.as_deref(),
+            midi_object_key: midi_object_key.as_deref(),
+            midi_status: &midi_status,
+            midi_error: midi_error.as_deref(),
+            musicxml_object_key: musicxml_object_key.as_deref(),
+            musicxml_status: &musicxml_status,
+            musicxml_error: musicxml_error.as_deref(),
+            stems_status: &stems_status,
+            stems_error: stems_error.as_deref(),
+        })
+        .execute(&mut conn)
+        .await?;
 
     tracing::info!(music_id = %music_id, "score upload processing completed");
     Ok(())
@@ -1489,20 +1614,20 @@ async fn mark_music_processing_failed(
     music_id: &str,
     error: String,
 ) -> Result<(), AppError> {
-    sqlx::query(
-        r#"
-        UPDATE musics SET
-            audio_status = 'failed', audio_error = $1,
-            midi_status = 'failed', midi_error = $1,
-            musicxml_status = 'failed', musicxml_error = $1,
-            stems_status = 'failed', stems_error = $1
-        WHERE id = $2
-        "#,
-    )
-    .bind(&error)
-    .bind(music_id)
-    .execute(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    diesel::update(musics::table.find(music_id))
+        .set(crate::models::MarkMusicProcessingFailed {
+            audio_status: "failed",
+            audio_error: Some(error.as_str()),
+            midi_status: "failed",
+            midi_error: Some(error.as_str()),
+            musicxml_status: "failed",
+            musicxml_error: Some(error.as_str()),
+            stems_status: "failed",
+            stems_error: Some(error.as_str()),
+        })
+        .execute(&mut conn)
+        .await?;
 
     Ok(())
 }
@@ -1568,9 +1693,9 @@ pub(crate) async fn admin_retry_render(
     let (musicxml_object_key, musicxml_status, musicxml_error) =
         music::store_conversion(&state, &id, "musicxml", musicxml_outcome).await?;
 
-    sqlx::query("DELETE FROM stems WHERE music_id = $1")
-        .bind(&id)
-        .execute(&state.db_rw)
+    let mut conn = state.db_rw.get().await?;
+    diesel::delete(stems::table.filter(stems::music_id.eq(&id)))
+        .execute(&mut conn)
         .await?;
 
     let (stem_results, stems_status, stems_error) = audio::generate_stems(
@@ -1584,27 +1709,22 @@ pub(crate) async fn admin_retry_render(
     let (stems_status, stems_error) =
         music::store_stems(&state, &id, stem_results, stems_status, stems_error).await?;
 
-    sqlx::query(
-        "UPDATE musics SET \
-         audio_object_key = $1, audio_status = $2, audio_error = $3, \
-         midi_object_key = $4, midi_status = $5, midi_error = $6, \
-         musicxml_object_key = $7, musicxml_status = $8, musicxml_error = $9, \
-         stems_status = $10, stems_error = $11 WHERE id = $12",
-    )
-    .bind(&audio_object_key)
-    .bind(&audio_status)
-    .bind(&audio_error)
-    .bind(&midi_object_key)
-    .bind(&midi_status)
-    .bind(&midi_error)
-    .bind(&musicxml_object_key)
-    .bind(&musicxml_status)
-    .bind(&musicxml_error)
-    .bind(&stems_status)
-    .bind(&stems_error)
-    .bind(&id)
-    .execute(&state.db_rw)
-    .await?;
+    diesel::update(musics::table.find(&id))
+        .set(UpdateMusicProcessing {
+            audio_object_key: audio_object_key.as_deref(),
+            audio_status: &audio_status,
+            audio_error: audio_error.as_deref(),
+            midi_object_key: midi_object_key.as_deref(),
+            midi_status: &midi_status,
+            midi_error: midi_error.as_deref(),
+            musicxml_object_key: musicxml_object_key.as_deref(),
+            musicxml_status: &musicxml_status,
+            musicxml_error: musicxml_error.as_deref(),
+            stems_status: &stems_status,
+            stems_error: stems_error.as_deref(),
+        })
+        .execute(&mut conn)
+        .await?;
 
     let updated = music::find_music_by_id(&state.db_rw, &id)
         .await?
@@ -1711,18 +1831,18 @@ pub(crate) async fn admin_update_music(
         existing.icon_image_key.clone()
     };
 
-    let update_result = sqlx::query(
-        "UPDATE musics SET title = $1, public_id = $2, icon = $3, icon_image_key = $4 WHERE id = $5",
-    )
-    .bind(&title)
-    .bind(&public_id)
-    .bind(&icon)
-    .bind(&icon_image_key)
-    .bind(&id)
-    .execute(&state.db_rw)
-    .await?;
+    let mut conn = state.db_rw.get().await?;
+    let update_result = diesel::update(musics::table.find(&id))
+        .set(UpdateMusicMetadata {
+            title: &title,
+            public_id: public_id.as_deref(),
+            icon: icon.as_deref(),
+            icon_image_key: icon_image_key.as_deref(),
+        })
+        .execute(&mut conn)
+        .await?;
 
-    if update_result.rows_affected() == 0 {
+    if update_result == 0 {
         return Err(AppError::not_found("Music not found"));
     }
 
@@ -1784,19 +1904,22 @@ pub(crate) async fn admin_move_music(
     {
         return Err(AppError::not_found("Ensemble not found"));
     }
-    sqlx::query("DELETE FROM music_ensemble_links WHERE music_id = $1")
-        .bind(&id)
-        .execute(&state.db_rw)
+    let mut conn = state.db_rw.get().await?;
+    diesel::delete(music_ensemble_links::table.filter(music_ensemble_links::music_id.eq(&id)))
+        .execute(&mut conn)
         .await?;
-    sqlx::query("INSERT INTO music_ensemble_links (music_id, ensemble_id) VALUES ($1, $2)")
-        .bind(&id)
-        .bind(ensemble_id)
-        .execute(&state.db_rw)
+    diesel::insert_into(music_ensemble_links::table)
+        .values(NewMusicEnsembleLink {
+            music_id: &id,
+            ensemble_id,
+        })
+        .execute(&mut conn)
         .await?;
-    sqlx::query("UPDATE musics SET directory_id = $1 WHERE id = $2")
-        .bind(ensemble_id)
-        .bind(&id)
-        .execute(&state.db_rw)
+    diesel::update(musics::table.find(&id))
+        .set(UpdateMusicDirectory {
+            directory_id: ensemble_id,
+        })
+        .execute(&mut conn)
         .await?;
 
     let record = music::find_music_by_id(&state.db_rw, &id)

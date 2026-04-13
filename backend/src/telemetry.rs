@@ -1,3 +1,4 @@
+use crate::{AppState, services::auth};
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
@@ -10,7 +11,6 @@ use axum::{
     middleware::Next,
     response::IntoResponse,
 };
-use crate::{AppState, services::auth};
 use opentelemetry::{
     KeyValue, global,
     trace::{TraceContextExt, TracerProvider as _},
@@ -25,7 +25,7 @@ use opentelemetry_sdk::{
 use reqwest::blocking::Client;
 use std::{collections::HashMap, env, time::Duration, time::Instant};
 use tower_http::classify::ServerErrorsFailureClass;
-use tracing::{Span, field::Empty, Instrument};
+use tracing::{Instrument, Span, field::Empty};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -51,12 +51,12 @@ impl Drop for TelemetryGuard {
 
 pub(crate) fn init() -> Result<TelemetryGuard> {
     let default_filter = if is_enabled() {
-        "fumen_backend=info,sqlx::query=debug,tower_http=info"
+        "fumen_backend=info,diesel=debug,tower_http=info"
     } else {
         "fumen_backend=info,tower_http=info"
     };
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     let fmt_layer = tracing_subscriber::fmt::layer();
 
     if !is_enabled() {
@@ -206,11 +206,7 @@ pub(crate) async fn trace_operation_request(
     let status = response.status();
 
     if status.is_server_error() {
-        on_http_failure(
-            ServerErrorsFailureClass::StatusCode(status),
-            latency,
-            &span,
-        );
+        on_http_failure(ServerErrorsFailureClass::StatusCode(status), latency, &span);
     } else {
         on_http_response(&response, latency, &span);
     }

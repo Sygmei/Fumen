@@ -1,7 +1,12 @@
 use crate::config::AppConfig;
+use crate::db::DbPool;
 use crate::models::{
-    EnsembleRecord, EnsembleSummaryRecord, MusicEnsembleLinkRecord, MusicRecord, StemRecord,
-    UserEnsembleMembershipRecord,
+    BigIntValueRow, EnsembleRecord, MusicEnsembleLinkRecord, MusicRecord, NewStem,
+    NewUserMusicTrackPlaytime, StemRecord, UserEnsembleMembershipRecord,
+};
+use crate::schema::{
+    ensembles, music_ensemble_links, musics, stems, user_ensemble_memberships,
+    user_music_track_playtime,
 };
 use crate::schemas::{
     AdminMusicPlaytimeResponse, AdminMusicResponse, AdminUserScorePlaytimeResponse,
@@ -14,102 +19,55 @@ use crate::{
 };
 use anyhow::anyhow;
 use bytes::Bytes;
+use diesel::OptionalExtension;
+use diesel::QueryableByName;
+use diesel::prelude::*;
+use diesel::sql_types::{BigInt, Double, Nullable, Text};
+use diesel::upsert::excluded;
+use diesel_async::{AsyncConnection, RunQueryDsl};
 use flate2::{Compression, write::GzEncoder};
-use sqlx::PgPool;
 use std::collections::HashMap;
 use std::io::Write;
 use tokio::fs;
 use tokio::process::Command;
 use tracing::warn;
 
-#[derive(sqlx::FromRow)]
-struct EnsembleScoreCountRow {
-    ensemble_id: String,
-    score_count: i64,
-}
-
-#[derive(sqlx::FromRow)]
-struct UserAccessibleMusicRow {
-    id: String,
-    title: String,
-    icon: Option<String>,
-    icon_image_key: Option<String>,
-    filename: String,
-    content_type: String,
-    object_key: String,
-    audio_object_key: Option<String>,
-    audio_status: String,
-    audio_error: Option<String>,
-    midi_object_key: Option<String>,
-    midi_status: String,
-    midi_error: Option<String>,
-    musicxml_object_key: Option<String>,
-    musicxml_status: String,
-    musicxml_error: Option<String>,
-    stems_status: String,
-    stems_error: Option<String>,
-    public_token: String,
-    public_id: Option<String>,
-    quality_profile: String,
-    created_at: String,
-    owner_user_id: Option<String>,
-    ensemble_id: String,
-    ensemble_name: String,
-}
-
-#[derive(sqlx::FromRow)]
+#[derive(QueryableByName)]
 struct AdminMusicPlaytimeRow {
+    #[diesel(sql_type = Text)]
     user_id: String,
+    #[diesel(sql_type = Text)]
     username: String,
+    #[diesel(sql_type = Nullable<Text>)]
     display_name: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
     avatar_image_key: Option<String>,
+    #[diesel(sql_type = BigInt)]
     track_index: i64,
+    #[diesel(sql_type = Text)]
     track_name: String,
+    #[diesel(sql_type = Text)]
     instrument_name: String,
+    #[diesel(sql_type = Double)]
     total_seconds: f64,
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(QueryableByName)]
 struct AdminUserScorePlaytimeRow {
+    #[diesel(sql_type = Text)]
     music_id: String,
+    #[diesel(sql_type = Text)]
     title: String,
+    #[diesel(sql_type = Nullable<Text>)]
     icon: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
     icon_image_key: Option<String>,
+    #[diesel(sql_type = Text)]
     public_token: String,
+    #[diesel(sql_type = Nullable<Text>)]
     public_id: Option<String>,
+    #[diesel(sql_type = Double)]
     total_seconds: f64,
-}
-
-fn accessible_music_row_to_tuple(row: UserAccessibleMusicRow) -> (MusicRecord, String, String) {
-    (
-        MusicRecord {
-            id: row.id,
-            title: row.title,
-            icon: row.icon,
-            icon_image_key: row.icon_image_key,
-            filename: row.filename,
-            content_type: row.content_type,
-            object_key: row.object_key,
-            audio_object_key: row.audio_object_key,
-            audio_status: row.audio_status,
-            audio_error: row.audio_error,
-            midi_object_key: row.midi_object_key,
-            midi_status: row.midi_status,
-            midi_error: row.midi_error,
-            musicxml_object_key: row.musicxml_object_key,
-            musicxml_status: row.musicxml_status,
-            musicxml_error: row.musicxml_error,
-            stems_status: row.stems_status,
-            stems_error: row.stems_error,
-            public_token: row.public_token,
-            public_id: row.public_id,
-            quality_profile: row.quality_profile,
-            created_at: row.created_at,
-            owner_user_id: row.owner_user_id,
-        },
-        row.ensemble_id,
-        row.ensemble_name,
-    )
 }
 
 fn resolve_user_avatar_url(
@@ -132,96 +90,114 @@ fn resolve_music_public_url(
         .unwrap_or_else(|| config.public_url_for(public_token))
 }
 
-pub(crate) async fn fetch_stems_total(db: &PgPool, music_id: &str) -> i64 {
-    sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(SUM(size_bytes), 0)::BIGINT FROM stems WHERE music_id = $1",
+pub(crate) async fn fetch_stems_total(db: &DbPool, music_id: &str) -> i64 {
+    let mut conn = match db.get().await {
+        Ok(conn) => conn,
+        Err(_) => return 0,
+    };
+
+    diesel::sql_query(
+        "SELECT COALESCE(SUM(size_bytes), 0)::BIGINT AS value FROM stems WHERE music_id = $1",
     )
-    .bind(music_id)
-    .fetch_one(db)
+    .bind::<Text, _>(music_id)
+    .get_result::<BigIntValueRow>(&mut conn)
     .await
+    .map(|row| row.value)
     .unwrap_or(0)
 }
 
 pub(crate) async fn find_ensemble_by_id(
-    db: &PgPool,
+    db: &DbPool,
     id: &str,
 ) -> Result<Option<EnsembleRecord>, AppError> {
-    Ok(sqlx::query_as::<_, EnsembleRecord>(
-        "SELECT id, name, created_at, created_by_user_id FROM ensembles WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(ensembles::table
+        .find(id)
+        .select(EnsembleRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?)
 }
 
 pub(crate) async fn find_ensemble_by_name(
-    db: &PgPool,
+    db: &DbPool,
     name: &str,
 ) -> Result<Option<EnsembleRecord>, AppError> {
-    Ok(sqlx::query_as::<_, EnsembleRecord>(
-        "SELECT id, name, created_at, created_by_user_id FROM ensembles WHERE name = $1",
-    )
-    .bind(name)
-    .fetch_optional(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(ensembles::table
+        .filter(ensembles::name.eq(name))
+        .select(EnsembleRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?)
 }
 
 pub(crate) async fn fetch_user_ensemble_memberships(
-    db: &PgPool,
+    db: &DbPool,
 ) -> Result<Vec<UserEnsembleMembershipRecord>, AppError> {
-    Ok(sqlx::query_as::<_, UserEnsembleMembershipRecord>(
-        "SELECT user_id, ensemble_id, role FROM user_ensemble_memberships",
-    )
-    .fetch_all(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(user_ensemble_memberships::table
+        .select(UserEnsembleMembershipRecord::as_select())
+        .load(&mut conn)
+        .await?)
 }
 
 pub(crate) async fn fetch_music_ensemble_links(
-    db: &PgPool,
+    db: &DbPool,
 ) -> Result<Vec<MusicEnsembleLinkRecord>, AppError> {
-    Ok(sqlx::query_as::<_, MusicEnsembleLinkRecord>(
-        "SELECT music_id, ensemble_id FROM music_ensemble_links",
-    )
-    .fetch_all(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(music_ensemble_links::table
+        .select(MusicEnsembleLinkRecord::as_select())
+        .load(&mut conn)
+        .await?)
 }
 
 pub(crate) async fn fetch_music_ensemble_ids(
-    db: &PgPool,
+    db: &DbPool,
     music_id: &str,
 ) -> Result<Vec<String>, AppError> {
-    Ok(sqlx::query_scalar::<_, String>(
-        "SELECT ensemble_id FROM music_ensemble_links WHERE music_id = $1 ORDER BY ensemble_id ASC",
-    )
-    .bind(music_id)
-    .fetch_all(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(music_ensemble_links::table
+        .filter(music_ensemble_links::music_id.eq(music_id))
+        .select(music_ensemble_links::ensemble_id)
+        .order(music_ensemble_links::ensemble_id.asc())
+        .load(&mut conn)
+        .await?)
 }
 
 pub(crate) async fn fetch_ensemble_summaries(
-    db: &PgPool,
+    db: &DbPool,
 ) -> Result<HashMap<String, String>, AppError> {
-    Ok(sqlx::query_as::<_, EnsembleSummaryRecord>(
-        "SELECT id, name FROM ensembles ORDER BY name ASC",
-    )
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(|ensemble| (ensemble.id, ensemble.name))
-    .collect())
+    let mut conn = db.get().await?;
+    Ok(ensembles::table
+        .select((ensembles::id, ensembles::name))
+        .order(ensembles::name.asc())
+        .load::<(String, String)>(&mut conn)
+        .await?
+        .into_iter()
+        .collect())
 }
 
 pub(crate) async fn fetch_ensemble_score_counts(
-    db: &PgPool,
+    db: &DbPool,
 ) -> Result<Vec<(String, i64)>, AppError> {
-    Ok(sqlx::query_as::<_, EnsembleScoreCountRow>(
-        "SELECT ensemble_id, COUNT(DISTINCT music_id)::BIGINT AS score_count FROM music_ensemble_links GROUP BY ensemble_id",
-    )
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(|row| (row.ensemble_id, row.score_count))
-    .collect())
+    let mut conn = db.get().await?;
+    let links = music_ensemble_links::table
+        .select(MusicEnsembleLinkRecord::as_select())
+        .load::<MusicEnsembleLinkRecord>(&mut conn)
+        .await?;
+    let mut counts: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    for link in links {
+        counts
+            .entry(link.ensemble_id)
+            .or_default()
+            .insert(link.music_id);
+    }
+
+    Ok(counts
+        .into_iter()
+        .map(|(ensemble_id, music_ids)| (ensemble_id, music_ids.len() as i64))
+        .collect())
 }
 
 pub(crate) fn build_music_ensemble_maps(
@@ -255,7 +231,7 @@ pub(crate) fn build_music_ensemble_maps(
 }
 
 pub(crate) async fn ensemble_metadata_for_music(
-    db: &PgPool,
+    db: &DbPool,
     music_id: &str,
 ) -> Result<(Vec<String>, Vec<String>), AppError> {
     let ensemble_ids = fetch_music_ensemble_ids(db, music_id).await?;
@@ -269,7 +245,7 @@ pub(crate) async fn ensemble_metadata_for_music(
 }
 
 pub(crate) async fn can_view_music_in_control_room(
-    db: &PgPool,
+    db: &DbPool,
     auth: &AuthContext,
     music_id: &str,
 ) -> Result<bool, AppError> {
@@ -295,7 +271,7 @@ pub(crate) async fn can_view_music_in_control_room(
 }
 
 pub(crate) async fn can_manage_owned_music(
-    db: &PgPool,
+    db: &DbPool,
     auth: &AuthContext,
     music_id: &str,
 ) -> Result<bool, AppError> {
@@ -310,7 +286,7 @@ pub(crate) async fn can_manage_owned_music(
 }
 
 pub(crate) async fn ensure_can_manage_music(
-    db: &PgPool,
+    db: &DbPool,
     auth: &AuthContext,
     music_id: &str,
 ) -> Result<(), AppError> {
@@ -324,7 +300,7 @@ pub(crate) async fn ensure_can_manage_music(
 }
 
 pub(crate) async fn ensure_music_and_ensemble_exist(
-    db: &PgPool,
+    db: &DbPool,
     music_id: &str,
     ensemble_id: &str,
 ) -> Result<(), AppError> {
@@ -338,7 +314,7 @@ pub(crate) async fn ensure_music_and_ensemble_exist(
 }
 
 pub(crate) async fn ensure_can_manage_music_and_target_ensemble(
-    db: &PgPool,
+    db: &DbPool,
     auth: &AuthContext,
     music_id: &str,
     ensemble_id: &str,
@@ -391,97 +367,102 @@ pub(crate) async fn find_public_music_record(
 }
 
 pub(crate) async fn find_all_accessible_music(
-    db: &PgPool,
+    db: &DbPool,
 ) -> Result<Vec<(MusicRecord, String, String)>, AppError> {
-    Ok(sqlx::query_as::<_, UserAccessibleMusicRow>(
-        r#"
-            SELECT m.id, m.title, m.icon, m.icon_image_key, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, m.owner_user_id, mel.ensemble_id, e.name AS ensemble_name
-        FROM musics m
-        JOIN music_ensemble_links mel ON mel.music_id = m.id
-        JOIN ensembles e ON e.id = mel.ensemble_id
-        ORDER BY e.name ASC, m.title ASC
-        "#,
-    )
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(accessible_music_row_to_tuple)
-    .collect())
+    let mut conn = db.get().await?;
+    Ok(music_ensemble_links::table
+        .inner_join(musics::table)
+        .inner_join(ensembles::table)
+        .select((
+            MusicRecord::as_select(),
+            music_ensemble_links::ensemble_id,
+            ensembles::name,
+        ))
+        .order((ensembles::name.asc(), musics::title.asc()))
+        .load::<(MusicRecord, String, String)>(&mut conn)
+        .await?)
 }
 
 pub(crate) async fn find_accessible_music_for_user(
-    db: &PgPool,
+    db: &DbPool,
     user_id: &str,
 ) -> Result<Vec<(MusicRecord, String, String)>, AppError> {
-    Ok(sqlx::query_as::<_, UserAccessibleMusicRow>(
-        r#"
-            SELECT DISTINCT m.id, m.title, m.icon, m.icon_image_key, m.filename, m.content_type, m.object_key, m.audio_object_key, m.audio_status, m.audio_error, m.midi_object_key, m.midi_status, m.midi_error, m.musicxml_object_key, m.musicxml_status, m.musicxml_error, m.stems_status, m.stems_error, m.public_token, m.public_id, m.quality_profile, m.created_at, m.owner_user_id, mel.ensemble_id, e.name AS ensemble_name
-        FROM musics m
-        JOIN music_ensemble_links mel ON mel.music_id = m.id
-        JOIN user_ensemble_memberships uem ON uem.ensemble_id = mel.ensemble_id
-        JOIN ensembles e ON e.id = mel.ensemble_id
-        WHERE uem.user_id = $1
-        ORDER BY e.name ASC, m.title ASC
-        "#,
-    )
-    .bind(user_id)
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(accessible_music_row_to_tuple)
-    .collect())
+    let mut conn = db.get().await?;
+    Ok(music_ensemble_links::table
+        .inner_join(musics::table)
+        .inner_join(ensembles::table)
+        .inner_join(
+            user_ensemble_memberships::table
+                .on(user_ensemble_memberships::ensemble_id.eq(music_ensemble_links::ensemble_id)),
+        )
+        .filter(user_ensemble_memberships::user_id.eq(user_id))
+        .select((
+            MusicRecord::as_select(),
+            music_ensemble_links::ensemble_id,
+            ensembles::name,
+        ))
+        .distinct()
+        .order((ensembles::name.asc(), musics::title.asc()))
+        .load::<(MusicRecord, String, String)>(&mut conn)
+        .await?)
 }
 
 pub(crate) async fn find_public_stems(
-    db_primary: &PgPool,
-    db_fallback: &PgPool,
+    db_primary: &DbPool,
+    db_fallback: &DbPool,
     music_id: &str,
 ) -> Result<Vec<StemRecord>, AppError> {
-    let query = "SELECT id, music_id, track_index, track_name, instrument_name, storage_key, drum_map_json \
-         FROM stems WHERE music_id = $1 ORDER BY track_index";
-
-    let stems = sqlx::query_as::<_, StemRecord>(query)
-        .bind(music_id)
-        .fetch_all(db_primary)
+    let mut primary = db_primary.get().await?;
+    let stems = stems::table
+        .filter(stems::music_id.eq(music_id))
+        .order(stems::track_index.asc())
+        .select(StemRecord::as_select())
+        .load(&mut primary)
         .await?;
 
     if !stems.is_empty() {
         return Ok(stems);
     }
 
-    Ok(sqlx::query_as::<_, StemRecord>(query)
-        .bind(music_id)
-        .fetch_all(db_fallback)
+    let mut fallback = db_fallback.get().await?;
+    Ok(stems::table
+        .filter(stems::music_id.eq(music_id))
+        .order(stems::track_index.asc())
+        .select(StemRecord::as_select())
+        .load(&mut fallback)
         .await?)
 }
 
 pub(crate) async fn find_public_stem(
-    db_primary: &PgPool,
-    db_fallback: &PgPool,
+    db_primary: &DbPool,
+    db_fallback: &DbPool,
     music_id: &str,
     track_index: i64,
 ) -> Result<Option<StemRecord>, AppError> {
-    let query = "SELECT id, music_id, track_index, track_name, instrument_name, storage_key, drum_map_json \
-         FROM stems WHERE music_id = $1 AND track_index = $2";
-
-    if let Some(stem) = sqlx::query_as::<_, StemRecord>(query)
-        .bind(music_id)
-        .bind(track_index)
-        .fetch_optional(db_primary)
-        .await?
+    let mut primary = db_primary.get().await?;
+    if let Some(stem) = stems::table
+        .filter(stems::music_id.eq(music_id))
+        .filter(stems::track_index.eq(track_index))
+        .select(StemRecord::as_select())
+        .first(&mut primary)
+        .await
+        .optional()?
     {
         return Ok(Some(stem));
     }
 
-    Ok(sqlx::query_as::<_, StemRecord>(query)
-        .bind(music_id)
-        .bind(track_index)
-        .fetch_optional(db_fallback)
-        .await?)
+    let mut fallback = db_fallback.get().await?;
+    Ok(stems::table
+        .filter(stems::music_id.eq(music_id))
+        .filter(stems::track_index.eq(track_index))
+        .select(StemRecord::as_select())
+        .first(&mut fallback)
+        .await
+        .optional()?)
 }
 
 pub(crate) async fn add_user_track_playtime(
-    db: &PgPool,
+    db: &DbPool,
     user_id: &str,
     music_id: &str,
     track_totals: &[(i64, f64)],
@@ -491,39 +472,51 @@ pub(crate) async fn add_user_track_playtime(
     }
 
     let updated_at = utc_now_string();
-    let mut tx = db.begin().await?;
-    for (track_index, total_seconds) in track_totals {
-        sqlx::query(
-            r#"
-            INSERT INTO user_music_track_playtime (user_id, music_id, track_index, total_seconds, updated_at)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (user_id, music_id, track_index)
-            DO UPDATE SET
-                total_seconds = user_music_track_playtime.total_seconds + EXCLUDED.total_seconds,
-                updated_at = EXCLUDED.updated_at
-            "#,
-        )
-        .bind(user_id)
-        .bind(music_id)
-        .bind(track_index)
-        .bind(total_seconds)
-        .bind(&updated_at)
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
+    let mut conn = db.get().await?;
+    conn.transaction::<_, AppError, _>(|tx| {
+        Box::pin(async move {
+            for (track_index, total_seconds) in track_totals {
+                diesel::insert_into(user_music_track_playtime::table)
+                    .values(NewUserMusicTrackPlaytime {
+                        user_id,
+                        music_id,
+                        track_index: *track_index,
+                        total_seconds: *total_seconds,
+                        updated_at: &updated_at,
+                    })
+                    .on_conflict((
+                        user_music_track_playtime::user_id,
+                        user_music_track_playtime::music_id,
+                        user_music_track_playtime::track_index,
+                    ))
+                    .do_update()
+                    .set((
+                        user_music_track_playtime::total_seconds
+                            .eq(user_music_track_playtime::total_seconds
+                                + excluded(user_music_track_playtime::total_seconds)),
+                        user_music_track_playtime::updated_at
+                            .eq(excluded(user_music_track_playtime::updated_at)),
+                    ))
+                    .execute(tx)
+                    .await?;
+            }
+            Ok(())
+        })
+    })
+    .await?;
 
     Ok(())
 }
 
 #[tracing::instrument(skip(db, storage), fields(music_id = %music_id))]
 pub(crate) async fn build_admin_music_playtime_response(
-    db: &PgPool,
+    db: &DbPool,
     storage: &Storage,
     music_id: &str,
 ) -> Result<AdminMusicPlaytimeResponse, AppError> {
     let stems = find_public_stems(db, db, music_id).await?;
-    let rows = sqlx::query_as::<_, AdminMusicPlaytimeRow>(
+    let mut conn = db.get().await?;
+    let rows = diesel::sql_query(
         r#"
         SELECT
             p.user_id,
@@ -545,8 +538,8 @@ pub(crate) async fn build_admin_music_playtime_response(
         ORDER BY p.total_seconds DESC, u.username ASC, s.track_index ASC
         "#,
     )
-    .bind(music_id)
-    .fetch_all(db)
+    .bind::<Text, _>(music_id)
+    .load::<AdminMusicPlaytimeRow>(&mut conn)
     .await?;
 
     let mut overall_tracks = stems
@@ -635,10 +628,11 @@ pub(crate) async fn build_admin_music_playtime_response(
 pub(crate) async fn build_admin_user_metadata_playtime_response(
     config: &AppConfig,
     storage: &Storage,
-    db: &PgPool,
+    db: &DbPool,
     user_id: &str,
 ) -> Result<(f64, Vec<AdminUserScorePlaytimeResponse>), AppError> {
-    let rows = sqlx::query_as::<_, AdminUserScorePlaytimeRow>(
+    let mut conn = db.get().await?;
+    let rows = diesel::sql_query(
         r#"
         SELECT
             m.id AS music_id,
@@ -663,8 +657,8 @@ pub(crate) async fn build_admin_user_metadata_playtime_response(
         ORDER BY total_seconds DESC, m.title ASC
         "#,
     )
-    .bind(user_id)
-    .fetch_all(db)
+    .bind::<Text, _>(user_id)
+    .load::<AdminUserScorePlaytimeRow>(&mut conn)
     .await?;
 
     let mut total_seconds = 0.0;
@@ -705,6 +699,8 @@ pub(crate) async fn store_stems(
     status: String,
     error: Option<String>,
 ) -> Result<(String, Option<String>), AppError> {
+    let mut conn = state.db_rw.get().await?;
+
     for stem in stems {
         let size_bytes = stem.bytes.len() as i64;
         let storage_key = format!("stems/{music_id}/{}.ogg", stem.track_index);
@@ -719,19 +715,18 @@ pub(crate) async fn store_stems(
             .upload_bytes(&storage_key, stem.bytes.clone(), "audio/ogg")
             .await?;
 
-        sqlx::query(
-            "INSERT INTO stems (music_id, track_index, track_name, instrument_name, storage_key, size_bytes, drum_map_json) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        )
-        .bind(music_id)
-        .bind(stem.track_index as i64)
-        .bind(&stem.track_name)
-        .bind(&stem.instrument_name)
-        .bind(&storage_key)
-        .bind(size_bytes)
-        .bind(&drum_map_json)
-        .execute(&state.db_rw)
-        .await?;
+        diesel::insert_into(stems::table)
+            .values(NewStem {
+                music_id,
+                track_index: stem.track_index as i64,
+                track_name: &stem.track_name,
+                instrument_name: &stem.instrument_name,
+                storage_key: &storage_key,
+                size_bytes,
+                drum_map_json: drum_map_json.as_deref(),
+            })
+            .execute(&mut conn)
+            .await?;
     }
     Ok((status, error))
 }
@@ -845,7 +840,7 @@ pub(crate) async fn store_conversion(
 }
 
 pub(crate) async fn ensure_public_id_available(
-    db: &PgPool,
+    db: &DbPool,
     public_id: Option<&str>,
     current_music_id: Option<&str>,
 ) -> Result<(), AppError> {
@@ -853,10 +848,14 @@ pub(crate) async fn ensure_public_id_available(
         return Ok(());
     };
 
-    let existing = sqlx::query_scalar::<_, String>("SELECT id FROM musics WHERE public_id = $1")
-        .bind(public_id)
-        .fetch_optional(db)
-        .await?;
+    let mut conn = db.get().await?;
+    let existing = musics::table
+        .filter(musics::public_id.eq(Some(public_id)))
+        .select(musics::id)
+        .first::<String>(&mut conn)
+        .await
+        .optional()?
+        .map(|value| value);
 
     if let Some(existing_id) = existing {
         if Some(existing_id.as_str()) != current_music_id {
@@ -868,37 +867,33 @@ pub(crate) async fn ensure_public_id_available(
 }
 
 pub(crate) async fn find_music_by_id(
-    db: &PgPool,
+    db: &DbPool,
     id: &str,
 ) -> Result<Option<MusicRecord>, AppError> {
-    Ok(sqlx::query_as::<_, MusicRecord>(
-        r#"
-        SELECT id, title, icon, icon_image_key, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at, owner_user_id
-        FROM musics
-        WHERE id = $1
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(musics::table
+        .find(id)
+        .select(MusicRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?)
 }
 
 pub(crate) async fn find_music_by_access_key(
-    db: &PgPool,
+    db: &DbPool,
     access_key: &str,
 ) -> Result<Option<MusicRecord>, AppError> {
-    Ok(sqlx::query_as::<_, MusicRecord>(
-        r#"
-        SELECT id, title, icon, icon_image_key, filename, content_type, object_key, audio_object_key, audio_status, audio_error, midi_object_key, midi_status, midi_error, musicxml_object_key, musicxml_status, musicxml_error, stems_status, stems_error, public_token, public_id, quality_profile, created_at, owner_user_id
-        FROM musics
-        WHERE public_token = $1 OR public_id = $2
-        LIMIT 1
-        "#,
-    )
-    .bind(access_key)
-    .bind(access_key)
-    .fetch_optional(db)
-    .await?)
+    let mut conn = db.get().await?;
+    Ok(musics::table
+        .filter(
+            musics::public_token
+                .eq(access_key)
+                .or(musics::public_id.eq(Some(access_key))),
+        )
+        .select(MusicRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?)
 }
 
 pub(crate) fn record_to_admin_response(
@@ -1020,13 +1015,12 @@ pub(crate) async fn delete_music_record_and_assets(
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     let stems = find_public_stems(&state.db_rw, &state.db_rw, music_id).await?;
 
-    sqlx::query("DELETE FROM stems WHERE music_id = $1")
-        .bind(music_id)
-        .execute(&state.db_rw)
+    let mut conn = state.db_rw.get().await?;
+    diesel::delete(stems::table.filter(stems::music_id.eq(music_id)))
+        .execute(&mut conn)
         .await?;
-    sqlx::query("DELETE FROM musics WHERE id = $1")
-        .bind(music_id)
-        .execute(&state.db_rw)
+    diesel::delete(musics::table.find(music_id))
+        .execute(&mut conn)
         .await?;
 
     let mut keys = vec![record.object_key];
