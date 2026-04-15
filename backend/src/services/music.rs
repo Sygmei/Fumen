@@ -1,17 +1,18 @@
 use crate::config::AppConfig;
 use crate::db::DbPool;
 use crate::models::{
-    BigIntValueRow, EnsembleRecord, MusicEnsembleLinkRecord, MusicRecord, NewStem,
-    NewUserMusicTrackPlaytime, StemRecord, UserEnsembleMembershipRecord,
+    BigIntValueRow, EnsembleRecord, MusicEnsembleLinkRecord, MusicRecord, NewScoreAnnotation,
+    NewStem, NewUserMusicTrackPlaytime, StemRecord, UserEnsembleMembershipRecord, UserRecord,
 };
 use crate::schema::{
-    ensembles, music_ensemble_links, musics, stems, user_ensemble_memberships,
+    ensembles, music_ensemble_links, musics, score_annotations, stems, user_ensemble_memberships,
     user_music_track_playtime,
 };
 use crate::schemas::{
     AdminMusicPlaytimeResponse, AdminMusicResponse, AdminUserScorePlaytimeResponse,
-    MusicPlaytimeLeaderboardEntryResponse, MusicPlaytimeTrackSummaryResponse, PublicMusicResponse,
-    StemInfo,
+    CreateScoreAnnotationRequest, MusicPlaytimeLeaderboardEntryResponse,
+    MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, ScoreAnnotationListResponse,
+    ScoreAnnotationResponse, StemInfo,
 };
 use crate::storage::Storage;
 use crate::{
@@ -70,6 +71,30 @@ struct AdminUserScorePlaytimeRow {
     total_seconds: f64,
 }
 
+#[derive(QueryableByName)]
+struct ScoreAnnotationRow {
+    #[diesel(sql_type = Text)]
+    id: String,
+    #[diesel(sql_type = Text)]
+    music_id: String,
+    #[diesel(sql_type = Text)]
+    user_id: String,
+    #[diesel(sql_type = Text)]
+    username: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    display_name: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    avatar_image_key: Option<String>,
+    #[diesel(sql_type = Text)]
+    comment: String,
+    #[diesel(sql_type = BigInt)]
+    step_index: i64,
+    #[diesel(sql_type = Double)]
+    seconds: f64,
+    #[diesel(sql_type = Text)]
+    created_at: String,
+}
+
 fn resolve_user_avatar_url(
     storage: &Storage,
     user_id: &str,
@@ -78,6 +103,86 @@ fn resolve_user_avatar_url(
     avatar_image_key
         .and_then(|key| storage.public_url(key))
         .or_else(|| avatar_image_key.map(|_| format!("/api/users/{user_id}/avatar")))
+}
+
+fn score_annotation_visibility_scope(
+    auth: Option<&AuthContext>,
+    record: &MusicRecord,
+    music_ensemble_ids: &[String],
+) -> &'static str {
+    let Some(auth) = auth else {
+        return "none";
+    };
+
+    if auth.has_global_power() {
+        return "all";
+    }
+
+    let owns_score = record.owner_user_id.as_deref() == Some(auth.user.id.as_str());
+    match auth.role {
+        AppRole::Manager => {
+            if owns_score
+                || music_ensemble_ids
+                    .iter()
+                    .any(|ensemble_id| auth.managed_ensemble_ids.contains(ensemble_id))
+            {
+                "all"
+            } else {
+                "own"
+            }
+        }
+        AppRole::Editor => {
+            if owns_score { "all" } else { "own" }
+        }
+        AppRole::User => "own",
+        AppRole::Superadmin | AppRole::Admin => "all",
+    }
+}
+
+fn score_annotation_response_from_row(
+    storage: &Storage,
+    row: ScoreAnnotationRow,
+) -> ScoreAnnotationResponse {
+    let avatar_url = resolve_user_avatar_url(storage, &row.user_id, row.avatar_image_key.as_deref());
+
+    ScoreAnnotationResponse {
+        id: row.id,
+        music_id: row.music_id,
+        user_id: row.user_id,
+        username: row.username,
+        display_name: row.display_name,
+        avatar_url,
+        comment: row.comment,
+        step_index: row.step_index,
+        seconds: row.seconds,
+        created_at: row.created_at,
+    }
+}
+
+fn score_annotation_response_from_user(
+    storage: &Storage,
+    music_id: &str,
+    user: &UserRecord,
+    annotation_id: &str,
+    comment: &str,
+    step_index: i64,
+    seconds: f64,
+    created_at: &str,
+) -> ScoreAnnotationResponse {
+    let avatar_url = resolve_user_avatar_url(storage, &user.id, user.avatar_image_key.as_deref());
+
+    ScoreAnnotationResponse {
+        id: annotation_id.to_owned(),
+        music_id: music_id.to_owned(),
+        user_id: user.id.clone(),
+        username: user.username.clone(),
+        display_name: user.display_name.clone(),
+        avatar_url,
+        comment: comment.to_owned(),
+        step_index,
+        seconds,
+        created_at: created_at.to_owned(),
+    }
 }
 
 fn resolve_music_public_url(
@@ -797,6 +902,150 @@ pub(crate) async fn build_public_stem_infos(
     }
 
     Ok(resolved_infos)
+}
+
+pub(crate) async fn build_public_score_annotations_response(
+    state: &AppState,
+    access_key: &str,
+    auth: Option<&AuthContext>,
+) -> Result<ScoreAnnotationListResponse, AppError> {
+    let record = find_public_music_record(state, access_key)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+
+    let music_ensemble_ids = match auth {
+        Some(auth) if matches!(auth.role, AppRole::Manager) => {
+            fetch_music_ensemble_ids(&state.db_rw, &record.id).await?
+        }
+        _ => Vec::new(),
+    };
+    let visibility_scope = score_annotation_visibility_scope(auth, &record, &music_ensemble_ids)
+        .to_owned();
+
+    if visibility_scope == "none" {
+        return Ok(ScoreAnnotationListResponse {
+            visibility_scope,
+            annotations: Vec::new(),
+        });
+    }
+
+    let mut conn = state.db_rw.get().await?;
+    let rows = if visibility_scope == "all" {
+        diesel::sql_query(
+            r#"
+            SELECT
+                a.id,
+                a.music_id,
+                a.user_id,
+                u.username,
+                u.display_name,
+                u.avatar_image_key,
+                a.comment,
+                a.step_index,
+                a.seconds,
+                a.created_at
+            FROM score_annotations a
+            JOIN users u
+                ON u.id = a.user_id
+            WHERE a.music_id = $1
+            ORDER BY a.step_index ASC, a.created_at ASC, a.id ASC
+            "#,
+        )
+        .bind::<Text, _>(&record.id)
+        .load::<ScoreAnnotationRow>(&mut conn)
+        .await?
+    } else {
+        let auth = auth.ok_or_else(|| AppError::unauthorized("Missing Authorization header"))?;
+        diesel::sql_query(
+            r#"
+            SELECT
+                a.id,
+                a.music_id,
+                a.user_id,
+                u.username,
+                u.display_name,
+                u.avatar_image_key,
+                a.comment,
+                a.step_index,
+                a.seconds,
+                a.created_at
+            FROM score_annotations a
+            JOIN users u
+                ON u.id = a.user_id
+            WHERE a.music_id = $1
+              AND a.user_id = $2
+            ORDER BY a.step_index ASC, a.created_at ASC, a.id ASC
+            "#,
+        )
+        .bind::<Text, _>(&record.id)
+        .bind::<Text, _>(&auth.user.id)
+        .load::<ScoreAnnotationRow>(&mut conn)
+        .await?
+    };
+
+    Ok(ScoreAnnotationListResponse {
+        visibility_scope,
+        annotations: rows
+            .into_iter()
+            .map(|row| score_annotation_response_from_row(&state.storage, row))
+            .collect(),
+    })
+}
+
+pub(crate) async fn create_public_score_annotation(
+    state: &AppState,
+    access_key: &str,
+    auth: &AuthContext,
+    payload: CreateScoreAnnotationRequest,
+) -> Result<ScoreAnnotationResponse, AppError> {
+    let record = find_public_music_record(state, access_key)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+
+    let comment = payload.comment.trim();
+    if comment.is_empty() {
+        return Err(AppError::bad_request("Annotation comment cannot be empty"));
+    }
+    if comment.chars().count() > 1000 {
+        return Err(AppError::bad_request("Annotation comment is too long"));
+    }
+    if payload.step_index < 0 {
+        return Err(AppError::bad_request("Annotation position is invalid"));
+    }
+    if !payload.seconds.is_finite() || payload.seconds < 0.0 {
+        return Err(AppError::bad_request("Annotation timestamp is invalid"));
+    }
+
+    let created_at = utc_now_string();
+    let annotation_id = uuid::Uuid::new_v4().to_string();
+    let mut conn = state.db_rw.get().await?;
+    diesel::insert_into(score_annotations::table)
+        .values(NewScoreAnnotation {
+            id: &annotation_id,
+            music_id: &record.id,
+            user_id: &auth.user.id,
+            step_index: payload.step_index,
+            seconds: payload.seconds,
+            comment,
+            created_at: &created_at,
+        })
+        .execute(&mut conn)
+        .await?;
+
+    let author = crate::services::auth::find_user_by_id(&state.db_rw, &auth.user.id)
+        .await?
+        .ok_or_else(|| AppError::not_found("User not found"))?;
+
+    Ok(score_annotation_response_from_user(
+        &state.storage,
+        &record.id,
+        &author,
+        &annotation_id,
+        comment,
+        payload.step_index,
+        payload.seconds,
+        &created_at,
+    ))
 }
 
 #[tracing::instrument(skip(state, outcome), fields(music_id = %music_id, kind = kind))]

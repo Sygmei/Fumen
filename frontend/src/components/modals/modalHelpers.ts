@@ -3,6 +3,7 @@ import type {
     UserResponse,
 } from "$backend/models";
 import AccountModal from "./AccountModal.svelte";
+import AnnotationModal from "./AnnotationModal.svelte";
 import AppConfigModal from "./AppConfigModal.svelte";
 import ConfirmModal from "./ConfirmModal.svelte";
 import CredentialModal from "./CredentialModal.svelte";
@@ -40,6 +41,12 @@ export interface AppConfigModalOptions {
     countInMeasures: number;
     onToggleCountIn: (value: boolean) => void;
     onChangeCountInMeasures: (value: number) => void;
+}
+
+export interface AnnotationModalOptions {
+    positionLabel: string;
+    initialComment?: string;
+    onSave: (comment: string) => void | Promise<void>;
 }
 
 export function showModal(
@@ -107,5 +114,13 @@ export function showAppConfigModal(options: AppConfigModalOptions) {
         countInMeasures: options.countInMeasures,
         onToggleCountIn: options.onToggleCountIn,
         onChangeCountInMeasures: options.onChangeCountInMeasures,
+    });
+}
+
+export function showAnnotationModal(options: AnnotationModalOptions) {
+    showModal(AnnotationModal, {
+        positionLabel: options.positionLabel,
+        initialComment: options.initialComment ?? "",
+        onSave: options.onSave,
     });
 }

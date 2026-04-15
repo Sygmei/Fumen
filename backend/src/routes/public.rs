@@ -1,4 +1,7 @@
-use crate::schemas::{ErrorResponse, PublicMusicResponse, ReportPlaytimeRequest, StemInfo};
+use crate::schemas::{
+    CreateScoreAnnotationRequest, ErrorResponse, PublicMusicResponse,
+    ReportPlaytimeRequest, ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo,
+};
 use crate::services::{auth, music};
 use crate::{AppError, AppState, sanitize_content_disposition};
 use axum::{
@@ -63,6 +66,14 @@ pub(super) fn routes(state: AppState) -> Router<AppState> {
         .route(
             "/public/{access_key}/icon",
             crate::op_get!(state, "/public/{access_key}/icon", public_music_icon),
+        )
+        .route(
+            "/public/{access_key}/annotations",
+            crate::op_get!(state, "/public/{access_key}/annotations", public_music_annotations),
+        )
+        .route(
+            "/public/{access_key}/annotations",
+            crate::op_post!(state, "/public/{access_key}/annotations", create_public_music_annotation),
         )
 }
 
@@ -272,6 +283,35 @@ pub(crate) async fn public_music_icon(
 
 #[utoipa::path(
     get,
+    path = "/api/public/{access_key}/annotations",
+    tag = "public",
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    responses(
+        (status = 200, description = "Score annotations visible to the current viewer", body = ScoreAnnotationListResponse),
+        (status = 404, description = "Music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn public_music_annotations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(access_key): Path<String>,
+) -> Result<Json<ScoreAnnotationListResponse>, AppError> {
+    let auth_context = auth::try_build_auth_context(&state, &headers).await?;
+    Ok(Json(
+        music::build_public_score_annotations_response(
+            &state,
+            &access_key,
+            auth_context.as_ref(),
+        )
+        .await?,
+    ))
+}
+
+#[utoipa::path(
+    get,
     path = "/api/public/{access_key}/stems",
     tag = "public",
     params(
@@ -411,6 +451,36 @@ pub(crate) async fn report_public_music_playtime(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/public/{access_key}/annotations",
+    tag = "public",
+    security(("bearer_auth" = [])),
+    params(
+        ("access_key" = String, Path, description = "Public score token or public id")
+    ),
+    request_body = CreateScoreAnnotationRequest,
+    responses(
+        (status = 200, description = "Created annotation", body = ScoreAnnotationResponse),
+        (status = 400, description = "Invalid annotation payload", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn create_public_music_annotation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(access_key): Path<String>,
+    Json(payload): Json<CreateScoreAnnotationRequest>,
+) -> Result<Json<ScoreAnnotationResponse>, AppError> {
+    let auth_context = auth::build_auth_context(&state, &headers).await?;
+    Ok(Json(
+        music::create_public_score_annotation(&state, &access_key, &auth_context, payload)
+            .await?,
+    ))
 }
 
 fn binary_response(

@@ -1,9 +1,9 @@
 use crate::schema::{
-    ensembles, music_ensemble_links, musics, stems, user_ensemble_memberships, user_login_links,
-    user_music_track_playtime, user_sessions, users,
+    ensembles, music_ensemble_links, musics, score_annotations, stems, user_ensemble_memberships,
+    user_login_links, user_music_track_playtime, user_sessions, users,
 };
 use diesel::QueryableByName;
-use diesel::sql_types::{BigInt, Bool, Nullable, Text};
+use diesel::sql_types::{BigInt, Bool, Double, Nullable, Text};
 use diesel::{AsChangeset, Associations, Identifiable, Insertable, Queryable, Selectable};
 
 #[derive(Clone, Debug, Queryable, QueryableByName, Selectable, Identifiable)]
@@ -157,6 +157,27 @@ pub struct MusicEnsembleLinkRecord {
     pub ensemble_id: String,
 }
 
+#[derive(Clone, Debug, Queryable, QueryableByName, Selectable, Identifiable, Associations)]
+#[diesel(table_name = score_annotations)]
+#[diesel(belongs_to(MusicRecord, foreign_key = music_id))]
+#[diesel(belongs_to(UserRecord, foreign_key = user_id))]
+pub struct ScoreAnnotationRecord {
+    #[diesel(sql_type = Text)]
+    pub id: String,
+    #[diesel(sql_type = Text)]
+    pub music_id: String,
+    #[diesel(sql_type = Text)]
+    pub user_id: String,
+    #[diesel(sql_type = BigInt)]
+    pub step_index: i64,
+    #[diesel(sql_type = Double)]
+    pub seconds: f64,
+    #[diesel(sql_type = Text)]
+    pub comment: String,
+    #[diesel(sql_type = Text)]
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug, Queryable, Selectable, Identifiable, Associations)]
 #[diesel(table_name = user_login_links)]
 #[diesel(belongs_to(UserRecord, foreign_key = user_id))]
@@ -272,6 +293,18 @@ pub struct NewMusic<'a> {
     pub created_at: &'a str,
     pub directory_id: &'a str,
     pub owner_user_id: Option<&'a str>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = score_annotations)]
+pub struct NewScoreAnnotation<'a> {
+    pub id: &'a str,
+    pub music_id: &'a str,
+    pub user_id: &'a str,
+    pub step_index: i64,
+    pub seconds: f64,
+    pub comment: &'a str,
+    pub created_at: &'a str,
 }
 
 #[derive(Insertable)]

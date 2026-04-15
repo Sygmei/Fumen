@@ -52,6 +52,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    score_annotations (id) {
+        id -> Text,
+        music_id -> Text,
+        user_id -> Text,
+        step_index -> BigInt,
+        seconds -> Double,
+        comment -> Text,
+        created_at -> Text,
+    }
+}
+
+diesel::table! {
     stems (id) {
         id -> BigInt,
         music_id -> Text,
@@ -118,6 +130,8 @@ diesel::table! {
 
 diesel::joinable!(music_ensemble_links -> ensembles (ensemble_id));
 diesel::joinable!(music_ensemble_links -> musics (music_id));
+diesel::joinable!(score_annotations -> musics (music_id));
+diesel::joinable!(score_annotations -> users (user_id));
 diesel::joinable!(stems -> musics (music_id));
 diesel::joinable!(user_ensemble_memberships -> ensembles (ensemble_id));
 diesel::joinable!(user_ensemble_memberships -> users (user_id));
@@ -131,6 +145,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     ensembles,
     musics,
     music_ensemble_links,
+    score_annotations,
     stems,
     user_ensemble_memberships,
     user_login_links,

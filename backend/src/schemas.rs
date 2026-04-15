@@ -70,6 +70,13 @@ pub struct ReportPlaytimeRequest {
     pub tracks: Vec<TrackPlaytimeIncrementRequest>,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateScoreAnnotationRequest {
+    pub comment: String,
+    pub step_index: i64,
+    pub seconds: f64,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct StemInfo {
     pub track_index: i64,
@@ -171,6 +178,26 @@ pub struct PublicMusicResponse {
     pub stems_error: Option<String>,
     pub download_url: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ScoreAnnotationResponse {
+    pub id: String,
+    pub music_id: String,
+    pub user_id: String,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub comment: String,
+    pub step_index: i64,
+    pub seconds: f64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ScoreAnnotationListResponse {
+    pub visibility_scope: String,
+    pub annotations: Vec<ScoreAnnotationResponse>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

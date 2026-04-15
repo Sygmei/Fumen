@@ -45,6 +45,19 @@ export interface CountInInfo {
   beatsPerBar: number
 }
 
+export interface ScoreAnnotationAnchor {
+  step: number
+  seconds: number
+  xPx: number
+  topPx: number
+}
+
+export interface ScoreAnnotationContext {
+  anchor: ScoreAnnotationAnchor
+  clientX: number
+  clientY: number
+}
+
 export class ScoreViewer {
   private osmd: OSMD = null
   private timeMap: TimeEntry[] = []
@@ -53,6 +66,7 @@ export class ScoreViewer {
   private currentSystemIdx = -1
   private container: HTMLElement
   private _clickHandler: ((e: MouseEvent) => void) | null = null
+  private _contextMenuHandler: ((e: MouseEvent) => void) | null = null
   private readonly zoom: number
   private countInInfo: CountInInfo = { bpm: 120, beatsPerBar: 4 }
   private meterInfo: MeterInfo = { beatsPerBar: 4, beatUnitWholeNotes: 0.25 }
@@ -63,6 +77,9 @@ export class ScoreViewer {
 
   /** Called when the user clicks on the score. Argument is seconds into the piece. */
   onClickSeek: ((seconds: number) => void) | null = null
+
+  /** Called when the user opens the score annotation menu. */
+  onAnnotationContextMenu: ((context: ScoreAnnotationContext) => void) | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -420,6 +437,87 @@ export class ScoreViewer {
 
 
 
+  private toAnnotationAnchor(entry: TimeEntry): ScoreAnnotationAnchor {
+    return {
+      step: entry.step,
+      seconds: entry.seconds,
+      xPx: entry.xPx,
+      topPx: entry.topPx,
+    }
+  }
+
+  private resolveClosestEntry(clientX: number, clientY: number): TimeEntry | null {
+    if (this.timeMap.length === 0 || !this.osmd?.cursor) return null
+
+    const svgEl = this.container.querySelector('svg')
+    if (!svgEl) return null
+
+    const svgRect = svgEl.getBoundingClientRect()
+    const clickYInSvg = clientY - svgRect.top
+    const clickXInSvg = clientX - svgRect.left
+
+    let clickedSystem = 0
+    for (let i = 0; i < this.systemMap.length; i++) {
+      if (this.systemMap[i].topPx <= clickYInSvg + 4) clickedSystem = i
+    }
+
+    const inSystem = this.timeMap.filter((entry) => {
+      if (entry.topPx < 0) return false
+
+      if (this.systemMap.length === 0) {
+        return true
+      }
+
+      let sysIdx = 0
+      for (let i = 0; i < this.systemMap.length; i++) {
+        if (this.systemMap[i].topPx <= entry.topPx + 4) sysIdx = i
+      }
+      return sysIdx === clickedSystem
+    })
+
+    const pool = inSystem.filter((entry) => entry.xPx >= 0)
+    if (pool.length === 0) return null
+
+    const sorted = [...pool].sort((a, b) => a.xPx - b.xPx)
+    let best = sorted[0]
+    for (const entry of sorted) {
+      if (entry.xPx <= clickXInSvg) best = entry
+      else break
+    }
+
+    return best
+  }
+
+  getAnnotationAnchor(step: number, seconds?: number): ScoreAnnotationAnchor | null {
+    const entry = this.timeMap[step]
+    if (entry && entry.xPx >= 0 && entry.topPx >= 0) {
+      return this.toAnnotationAnchor(entry)
+    }
+
+    if (typeof seconds === 'number' && Number.isFinite(seconds)) {
+      return this.getAnnotationAnchorFromSeconds(seconds)
+    }
+
+    return entry ? this.toAnnotationAnchor(entry) : null
+  }
+
+  getAnnotationAnchorFromSeconds(seconds: number): ScoreAnnotationAnchor | null {
+    if (!Number.isFinite(seconds) || this.timeMap.length === 0) {
+      return null
+    }
+
+    let lo = 0
+    let hi = this.timeMap.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (this.timeMap[mid].seconds <= seconds) lo = mid
+      else hi = mid - 1
+    }
+
+    const entry = this.timeMap[lo]
+    return entry ? this.toAnnotationAnchor(entry) : null
+  }
+
   private buildMeasureTempoMap(xmlText: string): Map<number, TempoInfo> {
     const result = new Map<number, TempoInfo>()
     const defaultTempo = { bpm: 120, beatUnitWholeNotes: 0.25 }
@@ -685,59 +783,31 @@ export class ScoreViewer {
       this.container.removeEventListener('click', this._clickHandler)
     }
 
+    if (this._contextMenuHandler) {
+      this.container.removeEventListener('contextmenu', this._contextMenuHandler)
+    }
+
     this._clickHandler = (e: MouseEvent) => {
-      if (this.timeMap.length === 0 || !this.osmd?.cursor) return
-
-      const svgEl = this.container.querySelector('svg')
-      if (!svgEl) return
-
-      const svgRect = svgEl.getBoundingClientRect()
-      // Y relative to SVG top = same coordinate space as systemMap.topPx and entry.topPx.
-      // svgRect.top already accounts for scroll: when container.scrollTop = S, the SVG
-      // is shifted S px upward in the viewport, so svgRect.top = containerTop − S.
-      // Therefore (e.clientY − svgRect.top) = (e.clientY − containerTop + S), which
-      // is exactly the offset from the SVG's top edge — no need to add scrollTop again.
-      const clickYInSvg = e.clientY - svgRect.top
-      // X relative to SVG left (same coordinate space as entry.xPx).
-      const clickXInSvg = e.clientX - svgRect.left
-
-      // Find which system was clicked.
-      let clickedSystem = 0
-      for (let i = 0; i < this.systemMap.length; i++) {
-        if (this.systemMap[i].topPx <= clickYInSvg + 4) clickedSystem = i
-      }
-
-      // Filter to entries that belong to the clicked system.
-      // An entry belongs to system[i] when its topPx falls inside that
-      // system's vertical band [systemMap[i].topPx, systemMap[i+1].topPx).
-      const inSystem = this.timeMap.filter((entry) => {
-        if (entry.topPx < 0) return false
-        let sysIdx = 0
-        for (let i = 0; i < this.systemMap.length; i++) {
-          if (this.systemMap[i].topPx <= entry.topPx + 4) sysIdx = i
-        }
-        return sysIdx === clickedSystem
-      })
-
-      const pool = inSystem.filter(e => e.xPx >= 0)
-      if (pool.length === 0) return
-
-      // The cursor xPx is the LEFT edge of each note.  The note occupies the
-      // horizontal span from its own xPx up to the next note's xPx.  So the
-      // right choice is always the LAST entry whose xPx is ≤ clickX — i.e.
-      // the note that starts at or before the click position.
-      // Fall back to the first entry if the click is to the left of every note.
-      const sorted = [...pool].sort((a, b) => a.xPx - b.xPx)
-      let best = sorted[0]
-      for (const entry of sorted) {
-        if (entry.xPx <= clickXInSvg) best = entry
-        else break
-      }
+      const best = this.resolveClosestEntry(e.clientX, e.clientY)
+      if (!best) return
 
       this.onClickSeek?.(best.seconds)
     }
 
+    this._contextMenuHandler = (e: MouseEvent) => {
+      e.preventDefault()
+      const best = this.resolveClosestEntry(e.clientX, e.clientY)
+      if (!best) return
+
+      this.onAnnotationContextMenu?.({
+        anchor: this.toAnnotationAnchor(best),
+        clientX: e.clientX,
+        clientY: e.clientY,
+      })
+    }
+
     this.container.addEventListener('click', this._clickHandler)
+    this.container.addEventListener('contextmenu', this._contextMenuHandler)
   }
 
   reset(): void {
@@ -753,6 +823,10 @@ export class ScoreViewer {
     if (this._clickHandler) {
       this.container.removeEventListener('click', this._clickHandler)
       this._clickHandler = null
+    }
+    if (this._contextMenuHandler) {
+      this.container.removeEventListener('contextmenu', this._contextMenuHandler)
+      this._contextMenuHandler = null
     }
     try { this.osmd?.cursor?.hide() } catch { /* ignore */ }
     this.osmd = null

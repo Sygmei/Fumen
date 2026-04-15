@@ -205,6 +205,26 @@ export interface PublicMusicResponse {
 }
 
 
+export interface ScoreAnnotationResponse {
+  avatar_url?: string | null;
+  comment: string;
+  created_at: string;
+  display_name?: string | null;
+  id: string;
+  music_id: string;
+  seconds: number;
+  step_index: number;
+  user_id: string;
+  username: string;
+}
+
+
+export interface ScoreAnnotationListResponse {
+  annotations: ScoreAnnotationResponse[];
+  visibility_scope: string;
+}
+
+
 export interface RefreshTokenRequest {
   refresh_token: string;
 }
@@ -212,6 +232,13 @@ export interface RefreshTokenRequest {
 
 export interface ReportPlaytimeRequest {
   tracks: TrackPlaytimeIncrementRequest[];
+}
+
+
+export interface CreateScoreAnnotationRequest {
+  comment: string;
+  seconds: number;
+  step_index: number;
 }
 
 

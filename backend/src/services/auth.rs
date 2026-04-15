@@ -155,6 +155,18 @@ pub(crate) async fn build_auth_context(
 }
 
 #[tracing::instrument(skip(state, headers))]
+pub(crate) async fn try_build_auth_context(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<AuthContext>, AppError> {
+    if headers.get(header::AUTHORIZATION).is_none() {
+        return Ok(None);
+    }
+
+    build_auth_context(state, headers).await.map(Some)
+}
+
+#[tracing::instrument(skip(state, headers))]
 pub(crate) async fn require_admin_context(
     state: &AppState,
     headers: &HeaderMap,
