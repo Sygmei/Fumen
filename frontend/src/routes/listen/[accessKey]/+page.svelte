@@ -41,6 +41,7 @@
 
     type AnnotationMenuState = {
         anchor: ScoreAnnotationAnchor;
+        positionLabel: string;
         clientX: number;
         clientY: number;
         canAnnotate: boolean;
@@ -72,6 +73,9 @@
     let showAnnotations = $state(false);
     let annotationMenu = $state<AnnotationMenuState | null>(null);
     let annotationMenuStyle = $state("");
+    let visibleSystemIndex = $state(-1);
+    let visibleSystemTopPx = $state(0);
+    let visibleSystemHeightPx = $state(0);
     let annotationLoadRequestId = 0;
 
     let stemPlayer = $state<StemMixerPlayer | null>(null);
@@ -119,7 +123,12 @@
 
         for (const annotation of annotations) {
             const anchor = resolveAnnotationAnchor(annotation);
-            if (!anchor || anchor.xPx < 0 || anchor.topPx < 0) {
+            if (
+                !anchor ||
+                anchor.xPx < 0 ||
+                anchor.topPx < 0 ||
+                anchor.systemIndex !== visibleSystemIndex
+            ) {
                 continue;
             }
 
@@ -172,6 +181,9 @@
         annotationsLoading = false;
         annotationsError = "";
         showAnnotations = false;
+        visibleSystemIndex = -1;
+        visibleSystemTopPx = 0;
+        visibleSystemHeightPx = 0;
         closeAnnotationMenu();
     }
 
@@ -200,6 +212,7 @@
     function openAnnotationMenu(context: ScoreAnnotationContext) {
         annotationMenu = {
             anchor: context.anchor,
+            positionLabel: context.positionLabel,
             clientX: context.clientX,
             clientY: context.clientY,
             canAnnotate,
@@ -221,10 +234,12 @@
         renderedAnnotation: RenderedAnnotation,
     ) {
         const containerWidth = scoreContainer?.clientWidth ?? 0;
+        const containerHeight = visibleSystemHeightPx || scoreContainer?.clientHeight || 0;
         const bubbleWidth = 260;
         const margin = 12;
         const offset = renderedAnnotation.stackIndex * 18;
         const baseLeft = renderedAnnotation.anchor.xPx + 18 + offset * 0.15;
+        const topWithinSystem = renderedAnnotation.anchor.topPx - visibleSystemTopPx;
         const left =
             containerWidth > 0
                 ? Math.min(
@@ -234,10 +249,17 @@
                 : baseLeft;
         const top =
             renderedAnnotation.placement === "below"
-                ? renderedAnnotation.anchor.topPx + 18 + offset
-                : Math.max(margin, renderedAnnotation.anchor.topPx - 12 - offset);
+                ? topWithinSystem + 18 + offset
+                : Math.max(margin, topWithinSystem - 12 - offset);
+        const clampedTop =
+            containerHeight > 0
+                ? Math.min(
+                      Math.max(top, margin),
+                      Math.max(margin, containerHeight - 90),
+                  )
+                : top;
 
-        return `left:${left}px; top:${top}px;`;
+        return `left:${left}px; top:${clampedTop}px;`;
     }
 
     function sortAnnotationsList(list: ScoreAnnotationResponse[]) {
@@ -327,7 +349,7 @@
 
         closeAnnotationMenu();
         showAnnotationModal({
-            positionLabel: formatTime(menu.anchor.seconds),
+            positionLabel: menu.positionLabel,
             onSave: (comment: string) => handleCreateAnnotation(menu.anchor, comment),
         });
     }
@@ -363,6 +385,11 @@
                 sv.onClickSeek = (seconds: number) => handleScoreSeek(seconds);
                 sv.onAnnotationContextMenu = (context) =>
                     openAnnotationMenu(context);
+                sv.onSystemChange = (system) => {
+                    visibleSystemIndex = system.index;
+                    visibleSystemTopPx = system.topPx;
+                    visibleSystemHeightPx = system.heightPx;
+                };
                 scoreViewer = sv;
                 scoreTask = sv
                     .load(music.musicxml_url)
@@ -1064,7 +1091,7 @@
                     <div>
                         <p class="meta-label">Annotation</p>
                         <p class="annotation-menu-title">
-                            {formatTime(annotationMenu.anchor.seconds)}
+                            {annotationMenu.positionLabel}
                         </p>
                     </div>
                     <button

@@ -18,6 +18,9 @@ type OSMD = any
 interface TimeEntry {
   seconds: number
   step: number
+  measureIndex: number
+  wholeNotes: number
+  measureStartWholeNotes: number
   /** Cursor element left edge relative to SVG left; -1 if not measured. */
   xPx: number
   /** Cursor element top relative to container content area; -1 if not measured. */
@@ -48,14 +51,23 @@ export interface CountInInfo {
 export interface ScoreAnnotationAnchor {
   step: number
   seconds: number
+  measureIndex: number
+  systemIndex: number
   xPx: number
   topPx: number
 }
 
 export interface ScoreAnnotationContext {
   anchor: ScoreAnnotationAnchor
+  positionLabel: string
   clientX: number
   clientY: number
+}
+
+export interface ScoreSystemInfo {
+  index: number
+  topPx: number
+  heightPx: number
 }
 
 export class ScoreViewer {
@@ -80,6 +92,9 @@ export class ScoreViewer {
 
   /** Called when the user opens the score annotation menu. */
   onAnnotationContextMenu: ((context: ScoreAnnotationContext) => void) | null = null
+
+  /** Called whenever the visible score system changes. */
+  onSystemChange: ((system: ScoreSystemInfo) => void) | null = null
 
   constructor(container: HTMLElement) {
     this.container = container
@@ -254,13 +269,22 @@ export class ScoreViewer {
 
       const enrolledValue = this.getIteratorTimestamp(iterator)
       const measureIdx: number = iterator.CurrentMeasureIndex ?? 0
+      const measureStartWholeNotes = measureStarts.get(measureIdx) ?? enrolledValue
       const tempo = measureTempo.get(measureIdx) ?? measureTempo.get(0) ?? {
         bpm: 120,
         beatUnitWholeNotes: 0.25,
       }
       const stepWholeNotes = this.getBeatDuration(cursor)
 
-      map.push({ seconds: cumulativeSeconds, step, xPx: -1, topPx: -1 })
+      map.push({
+        seconds: cumulativeSeconds,
+        step,
+        measureIndex: measureIdx,
+        wholeNotes: enrolledValue,
+        measureStartWholeNotes,
+        xPx: -1,
+        topPx: -1,
+      })
       if (!measureStarts.has(measureIdx)) {
         measureStarts.set(measureIdx, enrolledValue)
       }
@@ -301,7 +325,7 @@ export class ScoreViewer {
 
     this.timeMap = map
     this.currentStep = 0
-    this.updateCountInInfoFromPickup(measureStarts)
+    this.updateCountInInfoFromPickup()
     this.resetCursorIterator(cursor)
 
     console.log(`[ScoreViewer] walked ${geoms.length} steps (incl. repeats); svgH=${svgH}px`)
@@ -433,6 +457,12 @@ export class ScoreViewer {
 
     // Instant snap — no smooth-scroll so it feels like a page flip.
     this.container.scrollTop = this.systemMap[i].topPx
+
+    this.onSystemChange?.({
+      index: i,
+      topPx: this.systemMap[i].topPx,
+      heightPx: this.systemMap[i].heightPx,
+    })
   }
 
 
@@ -441,9 +471,56 @@ export class ScoreViewer {
     return {
       step: entry.step,
       seconds: entry.seconds,
+      measureIndex: entry.measureIndex,
+      systemIndex: this.findSystemIndexForTop(entry.topPx),
       xPx: entry.xPx,
       topPx: entry.topPx,
     }
+  }
+
+  private findSystemIndexForTop(topPx: number): number {
+    if (this.systemMap.length === 0) return 0
+
+    let systemIndex = 0
+    for (let index = 0; index < this.systemMap.length; index++) {
+      if (this.systemMap[index].topPx <= topPx + 4) {
+        systemIndex = index
+      }
+    }
+
+    return systemIndex
+  }
+
+  getAnnotationPositionLabel(step: number, seconds?: number): string | null {
+    const entry = this.timeMap[step] ?? (typeof seconds === 'number' ? this.getEntryForSeconds(seconds) : undefined)
+    if (!entry) return null
+
+    const beatsPerBar = Math.max(1, Math.round(this.meterInfo.beatsPerBar))
+    const beatUnitWholeNotes = this.meterInfo.beatUnitWholeNotes > 0 ? this.meterInfo.beatUnitWholeNotes : 0.25
+    const measureStartWholeNotes = Number.isFinite(entry.measureStartWholeNotes)
+      ? entry.measureStartWholeNotes
+      : entry.wholeNotes
+    const offsetWholeNotes = Math.max(0, entry.wholeNotes - measureStartWholeNotes)
+    const beatIndex = Math.max(1, Math.min(beatsPerBar, Math.floor(offsetWholeNotes / beatUnitWholeNotes + 1e-6) + 1))
+    const barIndex = Math.max(1, entry.measureIndex + 1)
+
+    return `Bar ${barIndex} · Beat ${beatIndex}`
+  }
+
+  private getEntryForSeconds(seconds: number): TimeEntry | undefined {
+    if (!Number.isFinite(seconds) || this.timeMap.length === 0) {
+      return undefined
+    }
+
+    let lo = 0
+    let hi = this.timeMap.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (this.timeMap[mid].seconds <= seconds) lo = mid
+      else hi = mid - 1
+    }
+
+    return this.timeMap[lo]
   }
 
   private resolveClosestEntry(clientX: number, clientY: number): TimeEntry | null {
@@ -672,29 +749,10 @@ export class ScoreViewer {
     return (wholeNotes * 60) / (tempo.bpm * tempo.beatUnitWholeNotes)
   }
 
-  private updateCountInInfoFromPickup(measureStarts: Map<number, number>): void {
-    const tempo = this.initialTempo
-    let beatsPerBar = this.meterInfo.beatsPerBar
-
-    const measure0Start = measureStarts.get(0)
-    const measure1Start = measureStarts.get(1)
-    if (
-      typeof measure0Start === 'number' &&
-      typeof measure1Start === 'number' &&
-      measure1Start > measure0Start &&
-      this.meterInfo.beatUnitWholeNotes > 0
-    ) {
-      const pickupWholeNotes = measure1Start - measure0Start
-      const pickupBeats = pickupWholeNotes / this.meterInfo.beatUnitWholeNotes
-      const remainingBeats = this.meterInfo.beatsPerBar - pickupBeats
-      if (remainingBeats > 0 && remainingBeats < this.meterInfo.beatsPerBar + 0.01) {
-        beatsPerBar = Math.max(1, Math.round(remainingBeats))
-      }
-    }
-
+  private updateCountInInfoFromPickup(): void {
     this.countInInfo = {
-      bpm: tempo.bpm,
-      beatsPerBar,
+      bpm: this.initialTempo.bpm,
+      beatsPerBar: Math.max(1, Math.round(this.meterInfo.beatsPerBar)),
     }
   }
 
@@ -798,9 +856,11 @@ export class ScoreViewer {
       e.preventDefault()
       const best = this.resolveClosestEntry(e.clientX, e.clientY)
       if (!best) return
+      const positionLabel = this.getAnnotationPositionLabel(best.step, best.seconds) ?? `Bar ${best.step + 1}`
 
       this.onAnnotationContextMenu?.({
         anchor: this.toAnnotationAnchor(best),
+        positionLabel,
         clientX: e.clientX,
         clientY: e.clientY,
       })
