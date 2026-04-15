@@ -151,7 +151,7 @@ export class StemMixerPlayer {
     }
   }
 
-  async play(options?: { startDelaySeconds?: number; countInBeats?: number; beatSeconds?: number }): Promise<void> {
+  async play(options?: { startDelaySeconds?: number; countInBeats?: number; beatSeconds?: number; beatsPerBar?: number }): Promise<void> {
     if (!this.context) return
     if (this.context.state === 'suspended') {
       await this.context.resume()
@@ -162,12 +162,14 @@ export class StemMixerPlayer {
     const startDelaySeconds = Math.max(0, options?.startDelaySeconds ?? 0)
     const countInBeats = Math.max(0, Math.floor(options?.countInBeats ?? 0))
     const beatSeconds = Math.max(0, options?.beatSeconds ?? 0)
+    const beatsPerBar = Math.max(1, Math.floor(options?.beatsPerBar ?? 1))
     const musicStartAt = this.context.currentTime + StemMixerPlayer.START_LOOKAHEAD_SECONDS + startDelaySeconds
     if (startDelaySeconds > 0 && countInBeats > 0 && beatSeconds > 0) {
       this._scheduleCountIn(
         musicStartAt - startDelaySeconds,
         countInBeats,
         beatSeconds,
+        beatsPerBar,
       )
     }
 
@@ -316,20 +318,22 @@ export class StemMixerPlayer {
     track.sourceNode = null
   }
 
-  private _scheduleCountIn(startAt: number, beats: number, beatSeconds: number): void {
+  private _scheduleCountIn(startAt: number, beats: number, beatSeconds: number, beatsPerBar: number): void {
     if (!this.context) return
     const duration = Math.max(0.05, Math.min(beatSeconds * 0.18, 0.12))
     const accentDuration = Math.max(0.06, Math.min(duration * 1.1, beatSeconds * 0.22))
     const maxBeats = Math.max(0, Math.floor(beats))
+    const barLength = Math.max(1, Math.floor(beatsPerBar))
 
     for (let beat = 0; beat < maxBeats; beat += 1) {
       const oscillator = this.context.createOscillator()
       const gain = this.context.createGain()
       const beatStart = startAt + beat * beatSeconds
-      const beatEnd = beatStart + (beat === 0 ? accentDuration : duration)
+      const isAccentBeat = beat % barLength === 0
+      const beatEnd = beatStart + (isAccentBeat ? accentDuration : duration)
 
       oscillator.type = "sine"
-      oscillator.frequency.value = beat === 0 ? 988 : 660
+      oscillator.frequency.value = isAccentBeat ? 988 : 660
       gain.gain.setValueAtTime(0.0001, beatStart)
       gain.gain.linearRampToValueAtTime(0.18, beatStart + 0.005)
       gain.gain.exponentialRampToValueAtTime(0.0001, beatEnd)

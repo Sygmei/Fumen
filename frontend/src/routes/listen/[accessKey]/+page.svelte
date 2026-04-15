@@ -257,6 +257,7 @@
                         beatSeconds * countInInfo.beatsPerBar * countInBars,
                     countInBeats: countInInfo.beatsPerBar * countInBars,
                     beatSeconds,
+                    beatsPerBar: countInInfo.beatsPerBar,
                 });
                 playbackState = "counting-in";
             } else {

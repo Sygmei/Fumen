@@ -21,7 +21,7 @@ backend:
     domain: "fumen-api.lehang.art"
 
 frontend:
-  version: "1.4.2"
+  version: "1.4.4"
   apiBaseUrl: ""
   ingress:
     domain: "fumen.lehang.art"
