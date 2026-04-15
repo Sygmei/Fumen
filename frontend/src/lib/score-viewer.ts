@@ -60,6 +60,7 @@ export interface ScoreAnnotationAnchor {
 export interface ScoreAnnotationContext {
   anchor: ScoreAnnotationAnchor
   positionLabel: string
+  instrumentName: string | null
   clientX: number
   clientY: number
 }
@@ -507,6 +508,131 @@ export class ScoreViewer {
     return `Bar ${barIndex} · Beat ${beatIndex}`
   }
 
+  private getAnnotationInstrumentName(entry: TimeEntry, clientY: number): string | null {
+    const svgEl = this.container.querySelector('svg')
+    if (svgEl) {
+      const svgRect = svgEl.getBoundingClientRect()
+      const clickY = clientY - svgRect.top
+      const noteX = entry.xPx
+      const candidates: Array<{ text: string; score: number }> = []
+
+      for (const textNode of Array.from(svgEl.querySelectorAll('text'))) {
+        const text = (textNode.textContent ?? '').replace(/\s+/g, ' ').trim()
+        if (!text || !/[A-Za-z]/.test(text)) continue
+
+        const rect = textNode.getBoundingClientRect()
+        if (rect.width <= 0 || rect.height <= 0) continue
+
+        const x = rect.left - svgRect.left
+        if (x > Math.max(24, noteX - 8) || x > 220) continue
+
+        const y = rect.top - svgRect.top + rect.height / 2
+        const score = Math.abs(y - clickY) + x * 0.02
+        if (score > 120) continue
+
+        candidates.push({ text, score })
+      }
+
+      candidates.sort((leftCandidate, rightCandidate) => leftCandidate.score - rightCandidate.score)
+      if (candidates[0]) {
+        return candidates[0].text
+      }
+    }
+
+    const voices = this.osmd?.cursor?.VoicesUnderCursor?.() ?? []
+    if (Array.isArray(voices)) {
+      for (const voice of voices) {
+        const label = this.findLabelValue(voice)
+        if (label) {
+          return label
+        }
+      }
+    }
+
+    return this.getFallbackInstrumentName()
+  }
+
+  private getFallbackInstrumentName(): string | null {
+    const parts: unknown[] = this.osmd?.Sheet?.Parts ?? []
+    for (const part of parts) {
+      const label = this.findLabelValue(part)
+      if (label) {
+        return label
+      }
+    }
+
+    return null
+  }
+
+  private findLabelValue(
+    value: unknown,
+    depth = 0,
+    seen = new WeakSet<object>(),
+  ): string | null {
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : null
+    }
+
+    if (!value || typeof value !== 'object' || depth > 3) {
+      return null
+    }
+
+    if (seen.has(value as object)) {
+      return null
+    }
+    seen.add(value as object)
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const label = this.findLabelValue(item, depth + 1, seen)
+        if (label) {
+          return label
+        }
+      }
+      return null
+    }
+
+    const record = value as Record<string, unknown>
+    const preferredKeys = [
+      'instrumentName',
+      'InstrumentName',
+      'partName',
+      'PartName',
+      'staffName',
+      'StaffName',
+      'nameStr',
+      'Name',
+    ]
+    for (const key of preferredKeys) {
+      const rawValue = record[key]
+      if (typeof rawValue === 'string') {
+        const trimmed = rawValue.trim()
+        if (trimmed.length > 0) {
+          return trimmed
+        }
+      }
+    }
+
+    for (const key of Object.keys(record)) {
+      if (!/(instrument|part|staff)/i.test(key)) continue
+      const label = this.findLabelValue(record[key], depth + 1, seen)
+      if (label) {
+        return label
+      }
+    }
+
+    for (const key of Object.keys(record)) {
+      if (!/^name(?:Str)?$/i.test(key)) continue
+      const label = this.findLabelValue(record[key], depth + 1, seen)
+      if (label) {
+        return label
+      }
+    }
+
+    return null
+  }
+
   private getEntryForSeconds(seconds: number): TimeEntry | undefined {
     if (!Number.isFinite(seconds) || this.timeMap.length === 0) {
       return undefined
@@ -857,10 +983,12 @@ export class ScoreViewer {
       const best = this.resolveClosestEntry(e.clientX, e.clientY)
       if (!best) return
       const positionLabel = this.getAnnotationPositionLabel(best.step, best.seconds) ?? `Bar ${best.step + 1}`
+      const instrumentName = this.getAnnotationInstrumentName(best, e.clientY)
 
       this.onAnnotationContextMenu?.({
         anchor: this.toAnnotationAnchor(best),
         positionLabel,
+        instrumentName,
         clientX: e.clientX,
         clientY: e.clientY,
       })

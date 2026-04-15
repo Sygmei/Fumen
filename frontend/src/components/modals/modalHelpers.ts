@@ -45,6 +45,7 @@ export interface AppConfigModalOptions {
 
 export interface AnnotationModalOptions {
     positionLabel: string;
+    instrumentName?: string | null;
     initialComment?: string;
     onSave: (comment: string) => void | Promise<void>;
 }
@@ -120,6 +121,7 @@ export function showAppConfigModal(options: AppConfigModalOptions) {
 export function showAnnotationModal(options: AnnotationModalOptions) {
     showModal(AnnotationModal, {
         positionLabel: options.positionLabel,
+        instrumentName: options.instrumentName ?? null,
         initialComment: options.initialComment ?? "",
         onSave: options.onSave,
     });

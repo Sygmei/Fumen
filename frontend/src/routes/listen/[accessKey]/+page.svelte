@@ -42,6 +42,7 @@
     type AnnotationMenuState = {
         anchor: ScoreAnnotationAnchor;
         positionLabel: string;
+        instrumentName: string | null;
         clientX: number;
         clientY: number;
         canAnnotate: boolean;
@@ -71,6 +72,7 @@
     let annotationsLoading = $state(false);
     let annotationsError = $state("");
     let showAnnotations = $state(false);
+    let expandedAnnotationId = $state<string | null>(null);
     let annotationMenu = $state<AnnotationMenuState | null>(null);
     let annotationMenuStyle = $state("");
     let visibleSystemIndex = $state(-1);
@@ -181,10 +183,23 @@
         annotationsLoading = false;
         annotationsError = "";
         showAnnotations = false;
+        expandedAnnotationId = null;
         visibleSystemIndex = -1;
         visibleSystemTopPx = 0;
         visibleSystemHeightPx = 0;
         closeAnnotationMenu();
+    }
+
+    function toggleAnnotationsVisibility() {
+        showAnnotations = !showAnnotations;
+        if (!showAnnotations) {
+            expandedAnnotationId = null;
+        }
+    }
+
+    function toggleAnnotationBubble(annotationId: string) {
+        expandedAnnotationId =
+            expandedAnnotationId === annotationId ? null : annotationId;
     }
 
     function closeAnnotationMenu() {
@@ -196,7 +211,7 @@
         const viewportWidth = window.innerWidth;
         const viewportHeight = window.innerHeight;
         const menuWidth = 236;
-        const menuHeight = canAnnotate ? 150 : 130;
+        const menuHeight = canAnnotate ? 166 : 144;
         const margin = 12;
         const left = Math.min(
             Math.max(clientX, margin),
@@ -213,6 +228,7 @@
         annotationMenu = {
             anchor: context.anchor,
             positionLabel: context.positionLabel,
+            instrumentName: context.instrumentName,
             clientX: context.clientX,
             clientY: context.clientY,
             canAnnotate,
@@ -236,6 +252,7 @@
         const containerWidth = scoreContainer?.clientWidth ?? 0;
         const containerHeight = visibleSystemHeightPx || scoreContainer?.clientHeight || 0;
         const bubbleWidth = 260;
+        const bubbleHeight = 160;
         const margin = 12;
         const offset = renderedAnnotation.stackIndex * 18;
         const baseLeft = renderedAnnotation.anchor.xPx + 18 + offset * 0.15;
@@ -255,7 +272,7 @@
             containerHeight > 0
                 ? Math.min(
                       Math.max(top, margin),
-                      Math.max(margin, containerHeight - 90),
+                      Math.max(margin, containerHeight - bubbleHeight),
                   )
                 : top;
 
@@ -350,6 +367,7 @@
         closeAnnotationMenu();
         showAnnotationModal({
             positionLabel: menu.positionLabel,
+            instrumentName: menu.instrumentName,
             onSave: (comment: string) => handleCreateAnnotation(menu.anchor, comment),
         });
     }
@@ -864,7 +882,7 @@
                             <button
                                 class="score-annotation-toggle"
                                 type="button"
-                                onclick={() => (showAnnotations = !showAnnotations)}
+                                onclick={toggleAnnotationsVisibility}
                                 disabled={annotationsVisibilityScope === "none" && !canAnnotate}
                                 aria-pressed={showAnnotations}
                                 aria-label={annotationToggleLabel}
@@ -940,13 +958,27 @@
                                     bind:this={scoreContainer}
                                 ></div>
                                 {#if showAnnotations && renderedAnnotations.length > 0}
-                                    <div class="score-annotation-layer" aria-hidden="true">
-                                        {#each renderedAnnotations as renderedAnnotation}
+                                    <div class="score-annotation-layer">
+                                        {#each renderedAnnotations as renderedAnnotation (renderedAnnotation.annotation.id)}
+                                            {@const authorName = renderedAnnotation.annotation.display_name ??
+                                                renderedAnnotation.annotation.username}
                                             <article
                                                 class={`score-annotation-bubble score-annotation-bubble--${renderedAnnotation.placement}`}
+                                                class:is-expanded={expandedAnnotationId === renderedAnnotation.annotation.id}
                                                 style={buildAnnotationBubbleStyle(renderedAnnotation)}
                                             >
-                                                <div class="score-annotation-bubble-head">
+                                                <button
+                                                    class="score-annotation-avatar-button"
+                                                    type="button"
+                                                    aria-pressed={expandedAnnotationId === renderedAnnotation.annotation.id}
+                                                    aria-label={expandedAnnotationId === renderedAnnotation.annotation.id
+                                                        ? `Collapse annotation by ${authorName}`
+                                                        : `Expand annotation by ${authorName}`}
+                                                    onclick={() =>
+                                                        toggleAnnotationBubble(
+                                                            renderedAnnotation.annotation.id,
+                                                        )}
+                                                >
                                                     <div class="score-annotation-avatar">
                                                         {#if renderedAnnotation.annotation.avatar_url}
                                                             <img
@@ -955,27 +987,21 @@
                                                                 class="score-annotation-avatar-image"
                                                             />
                                                         {:else}
-                                                            {(
-                                                                renderedAnnotation.annotation.display_name ??
-                                                                renderedAnnotation.annotation.username
-                                                            )
-                                                                .slice(0, 1)
-                                                                .toUpperCase()}
+                                                            {authorName.slice(0, 1).toUpperCase()}
                                                         {/if}
                                                     </div>
+                                                </button>
+                                                <div class="score-annotation-bubble-body">
                                                     <div class="score-annotation-author">
-                                                        <strong>
-                                                            {renderedAnnotation.annotation.display_name ??
-                                                                renderedAnnotation.annotation.username}
-                                                        </strong>
+                                                        <strong>{authorName}</strong>
                                                         <span>
                                                             @{renderedAnnotation.annotation.username}
                                                         </span>
                                                     </div>
+                                                    <p class="score-annotation-comment">
+                                                        {renderedAnnotation.annotation.comment}
+                                                    </p>
                                                 </div>
-                                                <p class="score-annotation-comment">
-                                                    {renderedAnnotation.annotation.comment}
-                                                </p>
                                             </article>
                                         {/each}
                                     </div>
@@ -1092,6 +1118,9 @@
                         <p class="meta-label">Annotation</p>
                         <p class="annotation-menu-title">
                             {annotationMenu.positionLabel}
+                        </p>
+                        <p class="annotation-menu-subtitle">
+                            {annotationMenu.instrumentName ?? "Instrument not detected"}
                         </p>
                     </div>
                     <button
