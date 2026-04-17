@@ -10,3 +10,4 @@ backend/.env
 backend/data/
 **/.vscode/
 binaries/
+helm/values.yaml
