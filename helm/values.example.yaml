@@ -1,5 +1,5 @@
 backend:
-  version: "1.5.2"
+  version: "1.6.0"
   replicas: 1
   corsAllowedOrigins: ""
   superadminUsername: "superadmin"
@@ -9,8 +9,8 @@ backend:
     serviceName: "fumen-backend"
     serviceVersion: ""
     deploymentEnvironment: "production"
-    # Base OTLP HTTP endpoint (for example: "http://alloy.observability.svc.cluster.local:4318")
-    endpoint: "http://alloy.observability.svc.cluster.local:4318"
+    # Base OTLP HTTP endpoint (for example: "http://observability.yourdomain.com:4318")
+    endpoint: "http://observability.yourdomain.com:4318"
     # Optional explicit traces endpoint. Leave empty to use endpoint + /v1/traces.
     tracesEndpoint: ""
     # Optional OTLP headers, serialized as key=value pairs separated by commas.
@@ -18,10 +18,10 @@ backend:
     # Optional extra resource attributes, serialized as key=value pairs separated by commas.
     resourceAttributes: ""
   ingress:
-    domain: "fumen-api.lehang.art"
+    domain: "api.yourdomain.com"
 
 frontend:
-  version: "1.5.2"
+  version: "1.6.0"
   apiBaseUrl: ""
   ingress:
-    domain: "fumen.lehang.art"
+    domain: "yourdomain.com"
