@@ -110,6 +110,17 @@
     let annotationToggleLabel = $derived(
         showAnnotations ? "Hide annotations" : "Show annotations",
     );
+    let listenPageTitle = $derived.by(() => {
+        if (!publicMusic?.title) {
+            return "Listen | Fumen";
+        }
+
+        if (publicMusic.subtitle?.trim()) {
+            return `${publicMusic.title} | ${publicMusic.subtitle} | Fumen`;
+        }
+
+        return `${publicMusic.title} | Fumen`;
+    });
     let renderedAnnotations = $derived.by(() => {
         const seen = new Map<string, number>();
         const result: RenderedAnnotation[] = [];
@@ -929,6 +940,10 @@
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
+
+<svelte:head>
+    <title>{listenPageTitle}</title>
+</svelte:head>
 
 <main class="page public-shell public-listen-shell">
     <section class="content-panel public-content-panel">

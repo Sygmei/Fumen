@@ -10,6 +10,10 @@
     onMount(() => appShell.mount());
 </script>
 
+<svelte:head>
+    <title>Fumen</title>
+</svelte:head>
+
 {@render children()}
 
 {#if appShell.userError || appShell.userSuccess}

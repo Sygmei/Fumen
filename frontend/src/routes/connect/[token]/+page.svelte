@@ -13,6 +13,10 @@
     });
 </script>
 
+<svelte:head>
+    <title>Connecting | Fumen</title>
+</svelte:head>
+
 <main class="page home-shell">
     <section class="content-panel home-grid">
         <div class="music-card connect-card">

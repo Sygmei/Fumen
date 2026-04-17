@@ -4,6 +4,10 @@
     import { appShell } from "../lib/app-shell.svelte";
     import { QrCode } from "@lucide/svelte";
 
+    const pageTitle = $derived(
+        appShell.currentUser ? "Library | Fumen" : "Home | Fumen",
+    );
+
     function canAccessAdmin() {
         return (
             appShell.currentUser?.role !== undefined &&
@@ -34,6 +38,10 @@
         return `${count} score${count === 1 ? "" : "s"}`;
     }
 </script>
+
+<svelte:head>
+    <title>{pageTitle}</title>
+</svelte:head>
 
 <main class="page home-shell" class:home-landing-shell={!appShell.currentUser}>
     {#if appShell.userLoading && !appShell.currentUser}

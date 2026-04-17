@@ -62,6 +62,14 @@
                 sectionCounts.scores === 0),
     );
 
+    const adminPageTitle = $derived.by(() => {
+        if (!appShell.currentUser || !canAccessAdmin(appShell.currentUser)) {
+            return "Admin | Fumen";
+        }
+
+        return `${currentSectionLabel} | Admin | Fumen`;
+    });
+
     $effect(() => {
         const currentUser = appShell.currentUser;
 
@@ -123,6 +131,10 @@
         });
     }
 </script>
+
+<svelte:head>
+    <title>{adminPageTitle}</title>
+</svelte:head>
 
 {#if isInitialLoading}
     <div class="home-loading-overlay">
