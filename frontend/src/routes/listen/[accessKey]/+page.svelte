@@ -43,6 +43,7 @@
         beatNumber: number;
         positionLabel: string;
         instrumentName: string | null;
+        systemYRatio: number | null;
         clientX: number;
         clientY: number;
         canAnnotate: boolean;
@@ -232,6 +233,7 @@
             beatNumber: context.beatNumber,
             positionLabel: context.positionLabel,
             instrumentName: context.instrumentName,
+            systemYRatio: context.systemYRatio,
             clientX: context.clientX,
             clientY: context.clientY,
             canAnnotate: canAnnotate && !!context.instrumentName,
@@ -248,6 +250,7 @@
                 annotation.bar_number,
                 annotation.beat_number,
                 annotation.instrument,
+                annotation.system_y_ratio ?? null,
             ) ?? null
         );
     }
@@ -302,14 +305,11 @@
         const containerHeight =
             visibleSystemHeightPx || scoreContainer?.clientHeight || 0;
         const bubbleWidth = Math.min(260, Math.max(0, window.innerWidth - 40));
-        const bubbleHeight = 160;
         const collapsedBubbleSize = 32;
         const notchTipGap = 7;
         const margin = 12;
         const offset = renderedAnnotation.stackIndex * 18;
         const baseLeft = renderedAnnotation.anchor.xPx + 18 + offset * 0.15;
-        const isExpanded =
-            expandedAnnotationId === renderedAnnotation.annotation.id;
         const lineTopPx =
             renderedAnnotation.anchor.lineTopPx ?? renderedAnnotation.anchor.topPx;
         const topWithinSystem = lineTopPx - visibleSystemTopPx;
@@ -320,12 +320,6 @@
                       Math.max(margin, containerWidth - bubbleWidth - margin),
                   )
                 : baseLeft;
-        const notchLeft = isExpanded
-            ? `${Math.min(
-                  Math.max(renderedAnnotation.anchor.xPx - left - 6, 12),
-                  bubbleWidth - 24,
-              )}px`
-            : 'calc(50% - 7px)';
         const placementOffset =
             renderedAnnotation.placement === "below"
                 ? notchTipGap
@@ -336,11 +330,11 @@
             containerHeight > 0
                 ? Math.min(
                       Math.max(top, margin),
-                      Math.max(margin, containerHeight - bubbleHeight),
+                      Math.max(margin, containerHeight - collapsedBubbleSize),
                   )
                 : top;
 
-        return `left:${left}px; top:${clampedTop}px; --annotation-notch-left:${notchLeft};`;
+        return `left:${left}px; top:${clampedTop}px;`;
     }
 
     function sortAnnotationsList(list: ScoreAnnotationResponse[]) {
@@ -400,6 +394,7 @@
         barNumber: number,
         beatNumber: number,
         instrumentName: string | null,
+        systemYRatio: number | null,
         comment: string,
     ) {
         if (!hasAuth()) {
@@ -417,6 +412,7 @@
                     instrument: instrumentName,
                     bar_number: barNumber,
                     beat_number: beatNumber,
+                    system_y_ratio: systemYRatio,
                 },
             );
 
@@ -444,6 +440,7 @@
                     menu.barNumber,
                     menu.beatNumber,
                     menu.instrumentName,
+                    menu.systemYRatio,
                     comment,
                 ),
         });
@@ -629,17 +626,31 @@
                 const countInInfo = scoreViewer?.getCountInInfo() ?? {
                     bpm: 120,
                     beatsPerBar: 4,
+                    beatSeconds: 0.5,
+                    leadInBeats: 4,
+                    pickupBeats: 0,
                 };
                 const countInBars = Math.max(
                     1,
                     Math.floor(appShell.countInMeasures || 1),
                 );
                 const beatSeconds =
-                    countInInfo.bpm > 0 ? 60 / countInInfo.bpm : 0.5;
+                    countInInfo.beatSeconds > 0
+                        ? countInInfo.beatSeconds
+                        : countInInfo.bpm > 0
+                          ? 60 / countInInfo.bpm
+                          : 0.5;
+                const totalCountInBeats =
+                    Math.max(1, Math.floor(countInInfo.leadInBeats || 1)) +
+                    Math.max(0, countInBars - 1) * countInInfo.beatsPerBar;
+                const startDelayBeats = Math.max(
+                    0,
+                    totalCountInBeats - Math.max(0, countInInfo.pickupBeats || 0),
+                );
                 await player.play({
                     startDelaySeconds:
-                        beatSeconds * countInInfo.beatsPerBar * countInBars,
-                    countInBeats: countInInfo.beatsPerBar * countInBars,
+                        beatSeconds * startDelayBeats,
+                    countInBeats: totalCountInBeats,
                     beatSeconds,
                     beatsPerBar: countInInfo.beatsPerBar,
                 });

@@ -95,6 +95,8 @@ struct ScoreAnnotationRow {
     beat_number: i64,
     #[diesel(sql_type = Text)]
     instrument: String,
+    #[diesel(sql_type = Nullable<Double>)]
+    system_y_ratio: Option<f64>,
     #[diesel(sql_type = Text)]
     created_at: String,
 }
@@ -160,6 +162,7 @@ fn score_annotation_response_from_row(
         instrument: row.instrument,
         bar_number: row.bar_number,
         beat_number: row.beat_number,
+        system_y_ratio: row.system_y_ratio,
         created_at: row.created_at,
     }
 }
@@ -173,6 +176,7 @@ fn score_annotation_response_from_user(
     instrument: &str,
     bar_number: i64,
     beat_number: i64,
+    system_y_ratio: Option<f64>,
     created_at: &str,
 ) -> ScoreAnnotationResponse {
     let avatar_url = resolve_user_avatar_url(storage, &user.id, user.avatar_image_key.as_deref());
@@ -188,6 +192,7 @@ fn score_annotation_response_from_user(
         instrument: instrument.to_owned(),
         bar_number,
         beat_number,
+        system_y_ratio,
         created_at: created_at.to_owned(),
     }
 }
@@ -956,6 +961,7 @@ pub(crate) async fn build_public_score_annotations_response(
                 a.bar_number,
                 a.beat_number,
                 a.instrument,
+                a.system_y_ratio,
                 a.created_at
             FROM score_annotations a
             JOIN users u
@@ -982,6 +988,7 @@ pub(crate) async fn build_public_score_annotations_response(
                 a.bar_number,
                 a.beat_number,
                 a.instrument,
+                a.system_y_ratio,
                 a.created_at
             FROM score_annotations a
             JOIN users u
@@ -1034,6 +1041,15 @@ pub(crate) async fn create_public_score_annotation(
     if instrument.chars().count() > 200 {
         return Err(AppError::bad_request("Annotation instrument is too long"));
     }
+    let system_y_ratio = match payload.system_y_ratio {
+        Some(value) if value.is_finite() && (0.0..=1.0).contains(&value) => Some(value),
+        Some(_) => {
+            return Err(AppError::bad_request(
+                "Annotation vertical position must be between 0 and 1",
+            ));
+        }
+        None => None,
+    };
 
     let created_at = utc_now_string();
     let annotation_id = uuid::Uuid::new_v4().to_string();
@@ -1046,6 +1062,7 @@ pub(crate) async fn create_public_score_annotation(
             bar_number: payload.bar_number,
             beat_number: payload.beat_number,
             instrument,
+            system_y_ratio,
             comment,
             created_at: &created_at,
         })
@@ -1065,6 +1082,7 @@ pub(crate) async fn create_public_score_annotation(
         instrument,
         payload.bar_number,
         payload.beat_number,
+        system_y_ratio,
         &created_at,
     ))
 }

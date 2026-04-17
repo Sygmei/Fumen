@@ -60,6 +60,7 @@ diesel::table! {
         bar_number -> BigInt,
         beat_number -> BigInt,
         instrument -> Text,
+        system_y_ratio -> Nullable<Double>,
         comment -> Text,
         created_at -> Text,
     }

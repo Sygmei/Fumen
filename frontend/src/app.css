@@ -537,6 +537,7 @@ h3 {
   align-items: start;
   column-gap: 10px;
   width: 32px;
+  height: 32px;
   min-height: 32px;
   padding: 0;
   border: 0;
@@ -548,7 +549,6 @@ h3 {
   color: var(--text);
   pointer-events: none;
   overflow: visible;
-  --annotation-notch-fill: linear-gradient(135deg, var(--accent), var(--amber));
   transition:
     width 220ms cubic-bezier(0.22, 1, 0.36, 1),
     padding 220ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -561,6 +561,7 @@ h3 {
 
 .score-annotation-bubble.is-expanded {
   width: min(260px, calc(100vw - 40px));
+  height: auto;
   padding: 12px 14px 13px;
   border-color: var(--border-strong);
   border-radius: 18px;
@@ -569,51 +570,6 @@ h3 {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   overflow: visible;
-  --annotation-notch-fill: var(--surface);
-}
-
-.score-annotation-bubble::after {
-  content: '';
-  position: absolute;
-  width: 14px;
-  height: 10px;
-  background: var(--annotation-notch-fill);
-  border: 0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-  z-index: 2;
-  clip-path: polygon(50% 100%, 0 0, 100% 0);
-  --annotation-notch-rotation: 0deg;
-  --annotation-notch-scale: 0.95;
-  transform: scale(var(--annotation-notch-scale))
-    rotate(var(--annotation-notch-rotation));
-  opacity: 1;
-  transition:
-    opacity 180ms ease,
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-color 220ms ease,
-    background-color 220ms ease;
-}
-
-.score-annotation-bubble--above {
-  transform: translateY(-100%);
-}
-
-.score-annotation-bubble--above::after {
-  left: var(--annotation-notch-left, 18px);
-  bottom: -7px;
-  border-left: none;
-  border-top: none;
-  --annotation-notch-rotation: 0deg;
-}
-
-.score-annotation-bubble--below::after {
-  left: var(--annotation-notch-left, 18px);
-  top: -7px;
-  --annotation-notch-rotation: 180deg;
-}
-
-.score-annotation-bubble.is-expanded::after {
-  --annotation-notch-scale: 1;
 }
 
 .score-annotation-avatar-button {
@@ -634,6 +590,44 @@ h3 {
   pointer-events: auto;
 }
 
+.score-annotation-avatar-button::after {
+  content: '';
+  position: absolute;
+  left: 9px;
+  width: 14px;
+  height: 10px;
+  background: linear-gradient(135deg, var(--accent), var(--amber));
+  border: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  z-index: -1;
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+  --annotation-notch-rotation: 0deg;
+  --annotation-notch-scale: 0.95;
+  transform: scale(var(--annotation-notch-scale))
+    rotate(var(--annotation-notch-rotation));
+  opacity: 1;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 220ms ease;
+}
+
+.score-annotation-bubble.is-expanded .score-annotation-avatar-button::after {
+  background: var(--surface);
+  --annotation-notch-scale: 1;
+}
+
+.score-annotation-bubble--above .score-annotation-avatar-button::after {
+  bottom: -7px;
+  --annotation-notch-rotation: 0deg;
+}
+
+.score-annotation-bubble--below .score-annotation-avatar-button::after {
+  top: -7px;
+  --annotation-notch-rotation: 180deg;
+}
+
 .score-annotation-avatar-button:hover .score-annotation-avatar {
   transform: scale(1.05);
 }
@@ -650,6 +644,8 @@ h3 {
 
 .score-annotation-bubble-body {
   width: 0;
+  height: 0;
+  min-height: 0;
   min-width: 0;
   overflow: hidden;
   opacity: 0;
@@ -666,6 +662,7 @@ h3 {
 
 .score-annotation-bubble.is-expanded .score-annotation-bubble-body {
   width: 100%;
+  height: auto;
   opacity: 1;
   visibility: visible;
   transform: translateX(0) scale(1);

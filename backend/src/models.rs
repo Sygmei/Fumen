@@ -3,7 +3,7 @@ use crate::schema::{
     user_login_links, user_music_track_playtime, user_sessions, users,
 };
 use diesel::QueryableByName;
-use diesel::sql_types::{BigInt, Bool, Nullable, Text};
+use diesel::sql_types::{BigInt, Bool, Double, Nullable, Text};
 use diesel::{AsChangeset, Associations, Identifiable, Insertable, Queryable, Selectable};
 
 #[derive(Clone, Debug, Queryable, QueryableByName, Selectable, Identifiable)]
@@ -176,6 +176,8 @@ pub struct ScoreAnnotationRecord {
     pub beat_number: i64,
     #[diesel(sql_type = Text)]
     pub instrument: String,
+    #[diesel(sql_type = Nullable<Double>)]
+    pub system_y_ratio: Option<f64>,
     #[diesel(sql_type = Text)]
     pub comment: String,
     #[diesel(sql_type = Text)]
@@ -309,6 +311,7 @@ pub struct NewScoreAnnotation<'a> {
     pub bar_number: i64,
     pub beat_number: i64,
     pub instrument: &'a str,
+    pub system_y_ratio: Option<f64>,
     pub comment: &'a str,
     pub created_at: &'a str,
 }

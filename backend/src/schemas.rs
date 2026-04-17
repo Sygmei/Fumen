@@ -81,6 +81,7 @@ pub struct CreateScoreAnnotationRequest {
     pub instrument: String,
     pub bar_number: i64,
     pub beat_number: i64,
+    pub system_y_ratio: Option<f64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -201,6 +202,7 @@ pub struct ScoreAnnotationResponse {
     pub instrument: String,
     pub bar_number: i64,
     pub beat_number: i64,
+    pub system_y_ratio: Option<f64>,
     pub created_at: String,
 }
 

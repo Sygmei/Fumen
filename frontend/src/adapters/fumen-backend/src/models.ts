@@ -121,6 +121,7 @@ export interface CreateScoreAnnotationRequest {
   beat_number: number;
   comment: string;
   instrument: string;
+  system_y_ratio?: number | null;
 }
 
 
@@ -244,6 +245,7 @@ export interface ScoreAnnotationResponse {
   id: string;
   instrument: string;
   music_id: string;
+  system_y_ratio?: number | null;
   user_id: string;
   username: string;
 }
