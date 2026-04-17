@@ -137,6 +137,10 @@ export class AdminState {
         );
     }
 
+    removeUser(userId: string) {
+        this.adminUsers = this.adminUsers.filter((item) => item.id !== userId);
+    }
+
     updateUser(user: AppUser) {
         this.adminUsers = this.adminUsers.map((item) =>
             item.id === user.id ? user : item,
@@ -149,9 +153,23 @@ export class AdminState {
         );
     }
 
+    removeEnsemble(ensembleId: string) {
+        this.ensembles = this.ensembles.filter((item) => item.id !== ensembleId);
+    }
+
+    updateEnsemble(ensemble: Ensemble) {
+        this.ensembles = this.ensembles
+            .map((item) => (item.id === ensemble.id ? ensemble : item))
+            .sort((left, right) => left.name.localeCompare(right.name));
+    }
+
     updateMusic(music: AdminMusic) {
         this.musics = [...this.musics.filter((item) => item.id !== music.id), music]
             .sort((left, right) => right.created_at.localeCompare(left.created_at));
+    }
+
+    removeMusic(musicId: string) {
+        this.musics = this.musics.filter((item) => item.id !== musicId);
     }
 }
 

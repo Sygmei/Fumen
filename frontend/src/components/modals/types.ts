@@ -38,6 +38,7 @@ export interface EnsembleMemberAssignment {
 
 export interface UploadScoreDraft {
     title: string;
+    subtitle: string;
     publicId: string;
     qualityProfile: StemQualityProfile;
     file: File | null;
@@ -47,6 +48,7 @@ export interface UploadScoreDraft {
 
 export interface EditScoreDraft {
     title: string;
+    subtitle: string;
     publicId: string;
     icon: string;
     iconFile: File | null;

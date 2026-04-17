@@ -6,34 +6,23 @@
         onCreate,
         modalId,
     }: {
-        onCreate: (name: string) => Promise<void>;
+        onCreate: (name: string) => void | Promise<void>;
         modalId?: string;
     } = $props();
 
     let name = $state("");
-    let creating = $state(false);
     let errorMsg = $state("");
 
-    async function handleSubmit() {
+    function handleSubmit() {
         const trimmed = name.trim();
         if (!trimmed) {
             errorMsg = "Choose an ensemble name first.";
             return;
         }
 
-        creating = true;
         errorMsg = "";
-        try {
-            await onCreate(trimmed);
-            closeModal();
-        } catch (error) {
-            errorMsg =
-                error instanceof Error
-                    ? error.message
-                    : "Unable to create ensemble.";
-        } finally {
-            creating = false;
-        }
+        void onCreate(trimmed);
+        closeModal();
     }
 
     function handleKeydown(event: KeyboardEvent) {
@@ -49,7 +38,6 @@
         <button
             class="button ghost"
             type="button"
-            disabled={creating}
             onclick={closeModal}
         >
             Cancel
@@ -57,10 +45,9 @@
         <button
             class="button"
             type="button"
-            disabled={creating}
-            onclick={() => void handleSubmit()}
+            onclick={handleSubmit}
         >
-            {creating ? "Creating..." : "Create ensemble"}
+            Create ensemble
         </button>
     </div>
 {/snippet}
@@ -71,7 +58,6 @@
     title="Create"
     subtitle="New ensemble"
     {footer}
-    canClose={!creating}
     {modalId}
 >
     <label class="field">

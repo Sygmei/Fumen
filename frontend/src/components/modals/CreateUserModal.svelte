@@ -16,33 +16,24 @@
         onCreate: (
             username: string,
             role: Exclude<GlobalRole, "superadmin">,
-        ) => Promise<void>;
+        ) => void | Promise<void>;
         modalId?: string;
     } = $props();
 
     let username = $state("");
     let role = $state(defaultRole);
-    let creating = $state(false);
     let errorMsg = $state("");
 
-    async function handleSubmit() {
+    function handleSubmit() {
         const trimmed = username.trim();
         if (!trimmed) {
             errorMsg = "Choose a username first.";
             return;
         }
 
-        creating = true;
         errorMsg = "";
-        try {
-            await onCreate(trimmed, role);
-            closeModal();
-        } catch (error) {
-            errorMsg =
-                error instanceof Error ? error.message : "Unable to create user.";
-        } finally {
-            creating = false;
-        }
+        void onCreate(trimmed, role);
+        closeModal();
     }
 
     function handleKeydown(event: KeyboardEvent) {
@@ -58,7 +49,6 @@
         <button
             class="button ghost"
             type="button"
-            disabled={creating}
             onclick={closeModal}
         >
             Cancel
@@ -66,10 +56,9 @@
         <button
             class="button"
             type="button"
-            disabled={creating}
-            onclick={() => void handleSubmit()}
+            onclick={handleSubmit}
         >
-            {creating ? "Creating..." : "Create user"}
+            Create user
         </button>
     </div>
 {/snippet}
@@ -80,7 +69,6 @@
     title="Create"
     subtitle="New account"
     {footer}
-    canClose={!creating}
     {modalId}
 >
     <p class="subtle">

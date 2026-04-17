@@ -134,7 +134,11 @@
                             </span>
                             <span class="admin-user-metadata-score-copy">
                                 <strong>{score.title}</strong>
-                                <span class="subtle">Public score link</span>
+                                {#if score.subtitle}
+                                    <span class="subtle">{score.subtitle}</span>
+                                {:else}
+                                    <span class="subtle">Public score link</span>
+                                {/if}
                             </span>
                             <span class="status-pill">
                                 {formatPlaytimeDuration(score.total_seconds)}

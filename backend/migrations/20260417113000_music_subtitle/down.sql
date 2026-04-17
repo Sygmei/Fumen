@@ -1,0 +1,2 @@
+ALTER TABLE musics
+DROP COLUMN IF EXISTS subtitle;

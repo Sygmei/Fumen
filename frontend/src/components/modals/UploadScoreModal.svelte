@@ -17,7 +17,7 @@
         modalId,
     }: {
         ensembles: Ensemble[];
-        onUpload: (draft: UploadScoreDraft) => Promise<void>;
+        onUpload: (draft: UploadScoreDraft) => void | Promise<void>;
         modalId?: string;
     } = $props();
 
@@ -28,12 +28,12 @@
     }));
 
     let title = $state("");
+    let subtitle = $state("");
     let publicId = $state("");
     let qualityProfile = $state<StemQualityProfile>("standard");
     let selectedFile = $state<File | null>(null);
     let selectedIconFile = $state<File | null>(null);
     let selectedEnsembleIds = $state(ensembles[0] ? [ensembles[0].id] : []);
-    let saving = $state(false);
     let errorMsg = $state("");
 
     function openEnsemblePicker() {
@@ -50,30 +50,23 @@
         });
     }
 
-    async function handleUpload() {
+    function handleUpload() {
         if (!selectedFile) {
             errorMsg = "Choose an .mscz file first.";
             return;
         }
 
-        saving = true;
         errorMsg = "";
-        try {
-            await onUpload({
-                title,
-                publicId,
-                qualityProfile,
-                file: selectedFile,
-                iconFile: selectedIconFile,
-                ensembleIds: selectedEnsembleIds,
-            });
-            closeModal();
-        } catch (error) {
-            errorMsg =
-                error instanceof Error ? error.message : "Upload failed.";
-        } finally {
-            saving = false;
-        }
+        void onUpload({
+            title,
+            subtitle,
+            publicId,
+            qualityProfile,
+            file: selectedFile,
+            iconFile: selectedIconFile,
+            ensembleIds: selectedEnsembleIds,
+        });
+        closeModal();
     }
 </script>
 
@@ -82,7 +75,6 @@
         <button
             class="button ghost"
             type="button"
-            disabled={saving}
             onclick={closeModal}
         >
             Cancel
@@ -90,10 +82,9 @@
         <button
             class="button"
             type="button"
-            disabled={saving}
-            onclick={() => void handleUpload()}
+            onclick={handleUpload}
         >
-            {saving ? "Uploading..." : "Add score"}
+            Add score
         </button>
     </div>
 {/snippet}
@@ -104,13 +95,19 @@
     title="Upload"
     subtitle="Add a MuseScore score"
     {footer}
-    canClose={!saving}
     {modalId}
 >
     <div class="upload-grid admin-score-modal-grid">
         <label class="field admin-score-modal-full">
             <span>Title</span>
             <input bind:value={title} placeholder="Optional display title" />
+        </label>
+        <label class="field admin-score-modal-full">
+            <span>Subtitle</span>
+            <input
+                bind:value={subtitle}
+                placeholder="Optional subtitle"
+            />
         </label>
         <label class="field">
             <span>Public id</span>

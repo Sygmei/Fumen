@@ -89,6 +89,10 @@
     {modalId}
 >
     <div class="upload-grid admin-score-modal-grid">
+        <label class="field admin-score-modal-full">
+            <span>Subtitle</span>
+            <input value={currentMusic.subtitle ?? ""} readonly />
+        </label>
         <label class="field">
             <span>MSCZ filename</span>
             <input value={currentMusic.filename} readonly />

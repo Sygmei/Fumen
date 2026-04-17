@@ -12,7 +12,8 @@ use crate::schemas::{
     AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest,
     AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, CreateEnsembleRequest,
     CreateUserRequest, EnsembleMemberResponse, ErrorResponse, LoginLinkResponse, MoveMusicRequest,
-    UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateMusicEnsemblesRequest,
+    UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest,
+    UpdateMusicEnsemblesRequest,
     UserResponse,
 };
 use crate::services::{auth, music};
@@ -109,6 +110,14 @@ pub(super) fn routes(state: AppState) -> Router<AppState> {
                 state,
                 "/admin/ensembles/{id}/users",
                 admin_update_ensemble_members
+            ),
+        )
+        .route(
+            "/admin/ensembles/{id}/scores",
+            crate::op_patch!(
+                state,
+                "/admin/ensembles/{id}/scores",
+                admin_update_ensemble_scores
             ),
         )
         .route(
@@ -989,6 +998,122 @@ pub(crate) async fn admin_update_ensemble_members(
 }
 
 #[utoipa::path(
+    patch,
+    path = "/api/admin/ensembles/{id}/scores",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Ensemble identifier")
+    ),
+    request_body = UpdateEnsembleScoresRequest,
+    responses(
+        (status = 204, description = "Ensemble score links updated"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Ensemble or music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_update_ensemble_scores(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateEnsembleScoresRequest>,
+) -> Result<StatusCode, AppError> {
+    let auth_context = auth::require_admin_context(&state, &headers).await?;
+
+    music::find_ensemble_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Ensemble not found"))?;
+    if !auth_context.can_edit_ensemble_scores(&id) {
+        return Err(AppError::unauthorized(
+            "You do not have access to manage scores for this ensemble",
+        ));
+    }
+
+    let mut desired_music_ids = Vec::new();
+    let mut desired_seen = HashSet::new();
+    for music_id in payload.music_ids {
+        let music_id = music_id.trim().to_owned();
+        if music_id.is_empty() || !desired_seen.insert(music_id.clone()) {
+            continue;
+        }
+
+        music::ensure_can_manage_music_and_target_ensemble(
+            &state.db_rw,
+            &auth_context,
+            &music_id,
+            &id,
+        )
+        .await?;
+
+        desired_music_ids.push(music_id);
+    }
+
+    let mut conn = state.db_rw.get().await?;
+    let current_music_ids = music_ensemble_links::table
+        .filter(music_ensemble_links::ensemble_id.eq(&id))
+        .select(music_ensemble_links::music_id)
+        .distinct()
+        .load::<String>(&mut conn)
+        .await?;
+
+    let current_seen: HashSet<String> = current_music_ids.iter().cloned().collect();
+    let desired_seen: HashSet<String> = desired_music_ids.iter().cloned().collect();
+
+    let mut to_remove: Vec<String> = current_music_ids
+        .into_iter()
+        .filter(|music_id| !desired_seen.contains(music_id))
+        .collect();
+    to_remove.sort();
+
+    for music_id in &to_remove {
+        music::ensure_can_manage_music_and_target_ensemble(
+            &state.db_rw,
+            &auth_context,
+            music_id,
+            &id,
+        )
+        .await?;
+    }
+
+    let mut to_add: Vec<String> = desired_music_ids
+        .into_iter()
+        .filter(|music_id| !current_seen.contains(music_id))
+        .collect();
+    to_add.sort();
+
+    conn.transaction::<_, AppError, _>(|tx| {
+        Box::pin(async move {
+            for music_id in to_add {
+                diesel::insert_into(music_ensemble_links::table)
+                    .values(NewMusicEnsembleLink {
+                        music_id: &music_id,
+                        ensemble_id: &id,
+                    })
+                    .on_conflict_do_nothing()
+                    .execute(tx)
+                    .await?;
+            }
+
+            for music_id in to_remove {
+                diesel::delete(
+                    music_ensemble_links::table
+                        .filter(music_ensemble_links::music_id.eq(&music_id))
+                        .filter(music_ensemble_links::ensemble_id.eq(&id)),
+                )
+                .execute(tx)
+                .await?;
+            }
+
+            Ok(())
+        })
+    })
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
     post,
     path = "/api/admin/musics/{id}/ensembles/{ensemble_id}",
     tag = "admin",
@@ -1043,7 +1168,6 @@ pub(crate) async fn admin_add_music_to_ensemble(
     ),
     responses(
         (status = 204, description = "Score unlinked from ensemble"),
-        (status = 400, description = "The score must remain in at least one ensemble", body = ErrorResponse),
         (status = 401, description = "Unauthorized", body = ErrorResponse),
         (status = 404, description = "Music or ensemble not found", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse)
@@ -1062,17 +1186,6 @@ pub(crate) async fn admin_remove_music_from_ensemble(
         &ensemble_id,
     )
     .await?;
-
-    let linked_ensemble_ids = music::fetch_music_ensemble_ids(&state.db_rw, &id).await?;
-    if linked_ensemble_ids.len() <= 1
-        && linked_ensemble_ids
-            .iter()
-            .any(|value| value == &ensemble_id)
-    {
-        return Err(AppError::bad_request(
-            "A score must belong to at least one ensemble",
-        ));
-    }
 
     let mut conn = state.db_rw.get().await?;
     diesel::delete(
@@ -1097,7 +1210,6 @@ pub(crate) async fn admin_remove_music_from_ensemble(
     request_body = UpdateMusicEnsemblesRequest,
     responses(
         (status = 204, description = "Score ensemble links updated"),
-        (status = 400, description = "The score must remain in at least one ensemble", body = ErrorResponse),
         (status = 401, description = "Unauthorized", body = ErrorResponse),
         (status = 404, description = "Music or ensemble not found", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse)
@@ -1133,12 +1245,6 @@ pub(crate) async fn admin_update_music_ensembles(
         )
         .await?;
         desired_ensemble_ids.push(ensemble_id);
-    }
-
-    if desired_ensemble_ids.is_empty() {
-        return Err(AppError::bad_request(
-            "A score must belong to at least one ensemble",
-        ));
     }
 
     let current_ensemble_ids = music::fetch_music_ensemble_ids(&state.db_rw, &id).await?;
@@ -1282,6 +1388,7 @@ pub(crate) async fn admin_upload_music(
     tracing::info!(user_id = %auth_context.user.id, username = %auth_context.user.username, "score upload authorized");
 
     let mut title: Option<String> = None;
+    let mut subtitle: Option<String> = None;
     let mut icon: Option<String> = None;
     let mut requested_public_id: Option<String> = None;
     let mut requested_quality_profile: Option<String> = None;
@@ -1298,6 +1405,7 @@ pub(crate) async fn admin_upload_music(
 
         match field_name.as_deref() {
             Some("title") => title = Some(field.text().await?.trim().to_owned()),
+            Some("subtitle") => subtitle = Some(field.text().await?.trim().to_owned()),
             Some("icon") => icon = Some(field.text().await?.trim().to_owned()),
             Some("icon_file") => {
                 let content_type = field
@@ -1351,6 +1459,10 @@ pub(crate) async fn admin_upload_music(
 
     let public_id = normalize_public_id(requested_public_id.as_deref())?;
     let icon = normalize_music_icon(icon.as_deref())?;
+    let subtitle = subtitle.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    });
     music::ensure_public_id_available(&state.db_rw, public_id.as_deref(), None).await?;
     let quality_profile = parse_quality_profile(requested_quality_profile.as_deref())?;
     if requested_ensemble_ids.is_empty() {
@@ -1419,6 +1531,7 @@ pub(crate) async fn admin_upload_music(
         .values(NewMusic {
             id: &music_id,
             title: &resolved_title,
+            subtitle: subtitle.as_deref(),
             icon: icon.as_deref(),
             icon_image_key: icon_image_key.as_deref(),
             filename: &filename,
@@ -1464,6 +1577,7 @@ pub(crate) async fn admin_upload_music(
     let record = MusicRecord {
         id: music_id.clone(),
         title: resolved_title.clone(),
+        subtitle: subtitle.clone(),
         icon: icon.clone(),
         icon_image_key: icon_image_key.clone(),
         filename: filename.clone(),
@@ -1774,6 +1888,7 @@ pub(crate) async fn admin_update_music(
     music::ensure_can_manage_music(&state.db_rw, &auth_context, &id).await?;
 
     let mut form_title: Option<String> = None;
+    let mut form_subtitle: Option<String> = None;
     let mut form_icon: Option<String> = None;
     let mut form_public_id: Option<String> = None;
     let mut icon_file: Option<(String, Bytes)> = None;
@@ -1781,6 +1896,7 @@ pub(crate) async fn admin_update_music(
     while let Some(field) = multipart.next_field().await? {
         match field.name() {
             Some("title") => form_title = Some(field.text().await?.trim().to_owned()),
+            Some("subtitle") => form_subtitle = Some(field.text().await?.trim().to_owned()),
             Some("icon") => form_icon = Some(field.text().await?.trim().to_owned()),
             Some("public_id") => form_public_id = Some(field.text().await?.trim().to_owned()),
             Some("icon_file") => {
@@ -1805,6 +1921,17 @@ pub(crate) async fn admin_update_music(
             trimmed.to_owned()
         }
         None => existing.title,
+    };
+    let subtitle = match form_subtitle {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        }
+        None => existing.subtitle.clone(),
     };
     let public_id = normalize_public_id(form_public_id.as_deref())?;
     let icon = normalize_music_icon(form_icon.as_deref())?;
@@ -1835,6 +1962,7 @@ pub(crate) async fn admin_update_music(
     let update_result = diesel::update(musics::table.find(&id))
         .set(UpdateMusicMetadata {
             title: &title,
+            subtitle: subtitle.as_deref(),
             public_id: public_id.as_deref(),
             icon: icon.as_deref(),
             icon_image_key: icon_image_key.as_deref(),

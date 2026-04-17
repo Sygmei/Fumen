@@ -20,7 +20,11 @@ import {
     showCredentialModal,
     showScannerModal,
 } from "$components/modals";
+import type { AnnotationDefaultPlacement } from "$components/modals/modalHelpers";
 import { parseJwtSub } from "$lib/utils";
+
+const ANNOTATION_DEFAULT_PLACEMENT_KEY =
+    "app-annotation-default-placement";
 
 class AppShellState {
     refreshToken = $state("");
@@ -33,6 +37,7 @@ class AppShellState {
     connectionBusy = $state(false);
     enableCountIn = $state(false);
     countInMeasures = $state(1);
+    annotationDefaultPlacement = $state<AnnotationDefaultPlacement>("below");
     preloadedUsername = "";
 
     private mounted = false;
@@ -53,6 +58,12 @@ class AppShellState {
         const storedCountInMeasures = Number(
             window.localStorage.getItem("app-count-in-measures") ?? "1",
         );
+        const storedAnnotationDefaultPlacement =
+            window.localStorage.getItem(
+                ANNOTATION_DEFAULT_PLACEMENT_KEY,
+            ) === "above"
+                ? "above"
+                : "below";
 
         this.preloadedUsername = parseJwtSub(storedAccessToken);
         this.refreshToken = storedRefreshToken;
@@ -63,6 +74,7 @@ class AppShellState {
             storedCountInMeasures > 0
                 ? Math.floor(storedCountInMeasures)
                 : 1;
+        this.annotationDefaultPlacement = storedAnnotationDefaultPlacement;
 
         if (storedRefreshToken) {
             initAuth(storedRefreshToken, storedAccessToken);
@@ -130,9 +142,12 @@ class AppShellState {
         showAppConfigModal({
             enableCountIn: this.enableCountIn,
             countInMeasures: this.countInMeasures,
+            annotationDefaultPlacement: this.annotationDefaultPlacement,
             onToggleCountIn: (value) => this.setEnableCountIn(value),
             onChangeCountInMeasures: (value) =>
                 this.setCountInMeasures(value),
+            onChangeAnnotationDefaultPlacement: (value) =>
+                this.setAnnotationDefaultPlacement(value),
         });
     }
 
@@ -150,6 +165,16 @@ class AppShellState {
             window.localStorage.setItem(
                 "app-count-in-measures",
                 String(normalized),
+            );
+        }
+    }
+
+    setAnnotationDefaultPlacement(value: AnnotationDefaultPlacement) {
+        this.annotationDefaultPlacement = value;
+        if (browser) {
+            window.localStorage.setItem(
+                ANNOTATION_DEFAULT_PLACEMENT_KEY,
+                value,
             );
         }
     }
@@ -260,9 +285,6 @@ class AppShellState {
                 response.access_token_expires_at,
             );
 
-            if (fromRoute && browser) {
-                await goto("/", { replaceState: true });
-            }
         } catch (error) {
             this.userError =
                 error instanceof Error
@@ -271,6 +293,10 @@ class AppShellState {
         } finally {
             this.connectionBusy = false;
             this.userLoading = false;
+
+            if (fromRoute && browser) {
+                await goto("/", { replaceState: true });
+            }
         }
     }
 

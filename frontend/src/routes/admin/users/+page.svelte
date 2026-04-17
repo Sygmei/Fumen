@@ -38,8 +38,9 @@
     const adminState = getAdminStateContext();
 
     let userSearchQuery = $state("");
-    let savingEditUserFor = $state("");
-    let deletingUserFor = $state("");
+    let creatingUserIds = $state<string[]>([]);
+    let savingEditUserIds = $state<string[]>([]);
+    let deletingUserIds = $state<string[]>([]);
 
     const filteredUsers = $derived.by(() => {
         const query = userSearchQuery.trim().toLowerCase();
@@ -102,22 +103,48 @@
         });
     }
 
+    function buildPendingUser(
+        id: string,
+        username: string,
+        role: Exclude<GlobalRole, "superadmin">,
+    ): AppUser {
+        return {
+            id,
+            username,
+            role,
+            created_at: new Date().toISOString(),
+            created_by_user_id: appShell.currentUser?.id ?? null,
+            display_name: null,
+            avatar_url: null,
+            editable_ensemble_ids: [],
+            managed_ensemble_ids: [],
+        };
+    }
+
     async function handleCreateUser(
         username: string,
         role: Exclude<GlobalRole, "superadmin">,
     ) {
+        const optimisticId = `creating-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const optimisticUser = buildPendingUser(optimisticId, username, role);
+        creatingUserIds = [...creatingUserIds, optimisticId];
+        adminState.addUser(optimisticUser);
+
         try {
             const user = await authenticatedApiClient.adminCreateUser({
                 username,
                 role,
             });
+            adminState.removeUser(optimisticId);
             adminState.addUser(user);
             adminState.setSuccess(`User ${user.username} created.`);
         } catch (error) {
+            adminState.removeUser(optimisticId);
             const message =
                 error instanceof Error ? error.message : "Unable to create user";
             adminState.setError(message);
-            throw error instanceof Error ? error : new Error(message);
+        } finally {
+            creatingUserIds = creatingUserIds.filter((id) => id !== optimisticId);
         }
     }
 
@@ -141,7 +168,7 @@
                 ? null
                 : draft.avatarPreview ?? originalUser.avatar_url,
         };
-        savingEditUserFor = originalUser.id;
+        savingEditUserIds = [...savingEditUserIds, originalUser.id];
         adminState.updateUser(optimisticUser);
         try {
             const payload = {
@@ -161,9 +188,8 @@
             const message =
                 error instanceof Error ? error.message : "Failed to save user";
             adminState.setError(message);
-            throw error instanceof Error ? error : new Error(message);
         } finally {
-            savingEditUserFor = "";
+            savingEditUserIds = savingEditUserIds.filter((id) => id !== originalUser.id);
         }
     }
 
@@ -180,7 +206,7 @@
     }
 
     async function deleteUserAccount(user: AppUser) {
-        deletingUserFor = user.id;
+        deletingUserIds = [...deletingUserIds, user.id];
         try {
             await authenticatedApiClient.adminDeleteUser(user.id);
             await adminState.refresh();
@@ -190,7 +216,7 @@
                 error instanceof Error ? error.message : "Unable to delete user",
             );
         } finally {
-            deletingUserFor = "";
+            deletingUserIds = deletingUserIds.filter((id) => id !== user.id);
         }
     }
 
@@ -200,7 +226,9 @@
             message: `Delete ${user.username} permanently?`,
             confirmText: "Delete",
             variant: "danger",
-            onConfirm: () => deleteUserAccount(user),
+            onConfirm: () => {
+                void deleteUserAccount(user);
+            },
         });
     }
 
@@ -279,8 +307,9 @@
                         {#each filteredUsers as user}
                             <AdminUserCard
                                 {user}
-                                saving={savingEditUserFor === user.id}
-                                deleting={deletingUserFor === user.id}
+                                creating={creatingUserIds.includes(user.id)}
+                                saving={savingEditUserIds.includes(user.id)}
+                                deleting={deletingUserIds.includes(user.id)}
                                 canEdit={canDeleteUserAccount(user, appShell.currentUser) ||
                                     isSuperadmin(appShell.currentUser)}
                                 canViewMetadata={hasGlobalPower(appShell.currentUser)}

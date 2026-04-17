@@ -45,6 +45,11 @@ pub struct UpdateMusicEnsemblesRequest {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateEnsembleScoresRequest {
+    pub music_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ExchangeLoginTokenRequest {
     pub token: String,
 }
@@ -73,8 +78,9 @@ pub struct ReportPlaytimeRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateScoreAnnotationRequest {
     pub comment: String,
-    pub step_index: i64,
-    pub seconds: f64,
+    pub instrument: String,
+    pub bar_number: i64,
+    pub beat_number: i64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -91,6 +97,7 @@ pub struct StemInfo {
 pub struct AdminMusicResponse {
     pub id: String,
     pub title: String,
+    pub subtitle: Option<String>,
     pub icon: Option<String>,
     pub icon_image_url: Option<String>,
     pub filename: String,
@@ -147,6 +154,7 @@ pub struct AdminMusicPlaytimeResponse {
 pub struct AdminUserScorePlaytimeResponse {
     pub music_id: String,
     pub title: String,
+    pub subtitle: Option<String>,
     pub icon: Option<String>,
     pub icon_image_url: Option<String>,
     pub public_url: String,
@@ -163,6 +171,7 @@ pub struct AdminUserMetadataResponse {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PublicMusicResponse {
     pub title: String,
+    pub subtitle: Option<String>,
     pub icon: Option<String>,
     pub icon_image_url: Option<String>,
     pub filename: String,
@@ -189,8 +198,9 @@ pub struct ScoreAnnotationResponse {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub comment: String,
-    pub step_index: i64,
-    pub seconds: f64,
+    pub instrument: String,
+    pub bar_number: i64,
+    pub beat_number: i64,
     pub created_at: String,
 }
 
@@ -259,6 +269,7 @@ pub struct CurrentUserResponse {
 pub struct UserLibraryScoreResponse {
     pub id: String,
     pub title: String,
+    pub subtitle: Option<String>,
     pub icon: Option<String>,
     pub icon_image_url: Option<String>,
     pub filename: String,
@@ -312,6 +323,7 @@ pub struct AdminUpdateUserMultipartRequest {
 #[derive(Debug, ToSchema)]
 pub struct AdminUploadMusicMultipartRequest {
     pub title: Option<String>,
+    pub subtitle: Option<String>,
     pub icon: Option<String>,
     #[schema(value_type = String, format = Binary)]
     pub icon_file: Option<Vec<u8>>,
@@ -326,6 +338,7 @@ pub struct AdminUploadMusicMultipartRequest {
 #[derive(Debug, ToSchema)]
 pub struct AdminUpdateMusicMultipartRequest {
     pub title: Option<String>,
+    pub subtitle: Option<String>,
     pub icon: Option<String>,
     pub public_id: Option<String>,
     #[schema(value_type = String, format = Binary)]

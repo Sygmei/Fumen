@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS ensembles (
 CREATE TABLE IF NOT EXISTS musics (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
+    subtitle TEXT,
     icon TEXT,
     icon_image_key TEXT,
     filename TEXT NOT NULL,
@@ -106,6 +107,7 @@ CREATE TABLE IF NOT EXISTS user_music_track_playtime (
 );
 
 ALTER TABLE musics ADD COLUMN IF NOT EXISTS icon TEXT;
+ALTER TABLE musics ADD COLUMN IF NOT EXISTS subtitle TEXT;
 ALTER TABLE musics ADD COLUMN IF NOT EXISTS icon_image_key TEXT;
 ALTER TABLE musics ADD COLUMN IF NOT EXISTS audio_object_key TEXT;
 ALTER TABLE musics ADD COLUMN IF NOT EXISTS audio_status TEXT NOT NULL DEFAULT 'unavailable';

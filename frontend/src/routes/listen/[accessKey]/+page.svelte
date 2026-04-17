@@ -2,7 +2,6 @@
     import { onDestroy, onMount, tick } from "svelte";
     import { page } from "$app/state";
     import type {
-        CreateScoreAnnotationRequest,
         PublicMusicResponse as PublicMusic,
         ScoreAnnotationResponse,
     } from "$backend/models";
@@ -40,7 +39,8 @@
     type AnnotationVisibilityScope = "none" | "own" | "all";
 
     type AnnotationMenuState = {
-        anchor: ScoreAnnotationAnchor;
+        barNumber: number;
+        beatNumber: number;
         positionLabel: string;
         instrumentName: string | null;
         clientX: number;
@@ -86,7 +86,9 @@
     let midiLoading = $state(false);
     let midiPlayerError = $state("");
     let stemLoadProgress = $state(0);
-    let playbackState = $state<"stopped" | "playing" | "paused" | "counting-in">("stopped");
+    let playbackState = $state<
+        "stopped" | "playing" | "paused" | "counting-in"
+    >("stopped");
     let playbackPosition = $state(0);
     let playbackDuration = $state(0);
     let pct = $derived(
@@ -108,17 +110,6 @@
     let annotationToggleLabel = $derived(
         showAnnotations ? "Hide annotations" : "Show annotations",
     );
-    let annotationScopeLabel = $derived(
-        annotationsLoading
-            ? "Loading annotations"
-            : annotationsError
-                ? "Annotations unavailable"
-                : annotationsVisibilityScope === "all"
-                    ? "All annotations"
-                    : annotationsVisibilityScope === "own"
-                        ? "Your annotations"
-                        : "Sign in to annotate",
-    );
     let renderedAnnotations = $derived.by(() => {
         const seen = new Map<string, number>();
         const result: RenderedAnnotation[] = [];
@@ -134,7 +125,7 @@
                 continue;
             }
 
-            const key = `${anchor.step}:${anchor.seconds}:${anchor.xPx}:${anchor.topPx}`;
+            const key = `${annotation.bar_number}:${annotation.beat_number}:${anchor.xPx}:${anchor.systemIndex}`;
             const stackIndex = seen.get(key) ?? 0;
             seen.set(key, stackIndex + 1);
 
@@ -142,7 +133,7 @@
                 annotation,
                 anchor,
                 stackIndex,
-                placement: anchor.topPx < 120 ? "below" : "above",
+                placement: resolveAnnotationPlacement(annotation),
             });
         }
 
@@ -226,12 +217,13 @@
 
     function openAnnotationMenu(context: ScoreAnnotationContext) {
         annotationMenu = {
-            anchor: context.anchor,
+            barNumber: context.barNumber,
+            beatNumber: context.beatNumber,
             positionLabel: context.positionLabel,
             instrumentName: context.instrumentName,
             clientX: context.clientX,
             clientY: context.clientY,
-            canAnnotate,
+            canAnnotate: canAnnotate && !!context.instrumentName,
         };
         annotationMenuStyle = buildAnnotationMenuStyle(
             context.clientX,
@@ -240,23 +232,76 @@
     }
 
     function resolveAnnotationAnchor(annotation: ScoreAnnotationResponse) {
-        return scoreViewer?.getAnnotationAnchor(
-            annotation.step_index,
-            annotation.seconds,
-        ) ?? null;
+        return (
+            scoreViewer?.getAnnotationAnchorForPosition(
+                annotation.bar_number,
+                annotation.beat_number,
+                annotation.instrument,
+            ) ?? null
+        );
+    }
+
+    function normalizeAnnotationText(value: string) {
+        return value.replace(/\s+/g, " ").trim().toLowerCase();
+    }
+
+    function collectVisibleInstrumentLines() {
+        return scoreViewer?.getVisibleInstrumentRows(visibleSystemIndex) ?? [];
+    }
+
+    function resolveAnnotationPlacement(annotation: ScoreAnnotationResponse) {
+        const defaultPlacement = appShell.annotationDefaultPlacement;
+        const instrumentName = annotation.instrument?.trim();
+        if (!instrumentName) {
+            return defaultPlacement;
+        }
+
+        const visibleInstrumentLines = collectVisibleInstrumentLines();
+        if (visibleInstrumentLines.length === 0) {
+            return defaultPlacement;
+        }
+
+        const wanted = normalizeAnnotationText(instrumentName);
+        const instrumentIndex = visibleInstrumentLines.findIndex((line) => {
+            const text = normalizeAnnotationText(line.instrumentName);
+            return (
+                text === wanted || text.includes(wanted) || wanted.includes(text)
+            );
+        });
+
+        if (instrumentIndex < 0) {
+            return defaultPlacement;
+        }
+
+        if (instrumentIndex < 2) {
+            return "below";
+        }
+
+        if (instrumentIndex >= visibleInstrumentLines.length - 2) {
+            return "above";
+        }
+
+        return defaultPlacement;
     }
 
     function buildAnnotationBubbleStyle(
         renderedAnnotation: RenderedAnnotation,
     ) {
         const containerWidth = scoreContainer?.clientWidth ?? 0;
-        const containerHeight = visibleSystemHeightPx || scoreContainer?.clientHeight || 0;
-        const bubbleWidth = 260;
+        const containerHeight =
+            visibleSystemHeightPx || scoreContainer?.clientHeight || 0;
+        const bubbleWidth = Math.min(260, Math.max(0, window.innerWidth - 40));
         const bubbleHeight = 160;
+        const collapsedBubbleSize = 32;
+        const notchTipGap = 7;
         const margin = 12;
         const offset = renderedAnnotation.stackIndex * 18;
         const baseLeft = renderedAnnotation.anchor.xPx + 18 + offset * 0.15;
-        const topWithinSystem = renderedAnnotation.anchor.topPx - visibleSystemTopPx;
+        const isExpanded =
+            expandedAnnotationId === renderedAnnotation.annotation.id;
+        const lineTopPx =
+            renderedAnnotation.anchor.lineTopPx ?? renderedAnnotation.anchor.topPx;
+        const topWithinSystem = lineTopPx - visibleSystemTopPx;
         const left =
             containerWidth > 0
                 ? Math.min(
@@ -264,10 +309,18 @@
                       Math.max(margin, containerWidth - bubbleWidth - margin),
                   )
                 : baseLeft;
-        const top =
+        const notchLeft = isExpanded
+            ? `${Math.min(
+                  Math.max(renderedAnnotation.anchor.xPx - left - 6, 12),
+                  bubbleWidth - 24,
+              )}px`
+            : 'calc(50% - 7px)';
+        const placementOffset =
             renderedAnnotation.placement === "below"
-                ? topWithinSystem + 18 + offset
-                : Math.max(margin, topWithinSystem - 12 - offset);
+                ? notchTipGap
+                : -(collapsedBubbleSize + notchTipGap);
+        const top =
+            topWithinSystem + placementOffset + offset;
         const clampedTop =
             containerHeight > 0
                 ? Math.min(
@@ -276,16 +329,16 @@
                   )
                 : top;
 
-        return `left:${left}px; top:${clampedTop}px;`;
+        return `left:${left}px; top:${clampedTop}px; --annotation-notch-left:${notchLeft};`;
     }
 
     function sortAnnotationsList(list: ScoreAnnotationResponse[]) {
         return [...list].sort((left, right) => {
-            if (left.step_index !== right.step_index) {
-                return left.step_index - right.step_index;
+            if (left.bar_number !== right.bar_number) {
+                return left.bar_number - right.bar_number;
             }
-            if (left.seconds !== right.seconds) {
-                return left.seconds - right.seconds;
+            if (left.beat_number !== right.beat_number) {
+                return left.beat_number - right.beat_number;
             }
             if (left.created_at !== right.created_at) {
                 return left.created_at.localeCompare(right.created_at);
@@ -333,21 +386,28 @@
     }
 
     async function handleCreateAnnotation(
-        anchor: ScoreAnnotationAnchor,
+        barNumber: number,
+        beatNumber: number,
+        instrumentName: string | null,
         comment: string,
     ) {
         if (!hasAuth()) {
             throw new Error("Sign in to add annotations.");
         }
+        if (!instrumentName) {
+            throw new Error("Instrument not detected for this annotation.");
+        }
 
-        const response = await authenticatedApiClient.createPublicMusicAnnotation(
-            encodeURIComponent(accessKey),
-            {
-                comment,
-                step_index: anchor.step,
-                seconds: anchor.seconds,
-            } as CreateScoreAnnotationRequest,
-        );
+        const response =
+            await authenticatedApiClient.createPublicMusicAnnotation(
+                encodeURIComponent(accessKey),
+                {
+                    comment,
+                    instrument: instrumentName,
+                    bar_number: barNumber,
+                    beat_number: beatNumber,
+                },
+            );
 
         annotations = sortAnnotationsList([...annotations, response]);
         annotationsVisibilityScope =
@@ -368,7 +428,13 @@
         showAnnotationModal({
             positionLabel: menu.positionLabel,
             instrumentName: menu.instrumentName,
-            onSave: (comment: string) => handleCreateAnnotation(menu.anchor, comment),
+            onSave: (comment: string) =>
+                handleCreateAnnotation(
+                    menu.barNumber,
+                    menu.beatNumber,
+                    menu.instrumentName,
+                    comment,
+                ),
         });
     }
 
@@ -528,7 +594,10 @@
         }
 
         try {
-            if (playbackState === "playing" || playbackState === "counting-in") {
+            if (
+                playbackState === "playing" ||
+                playbackState === "counting-in"
+            ) {
                 capturePlaytimeSlice();
                 player.pause();
                 playbackState = "paused";
@@ -544,8 +613,7 @@
             }
 
             const shouldCountIn =
-                appShell.enableCountIn &&
-                playbackPosition <= 0.01;
+                appShell.enableCountIn && playbackPosition <= 0.01;
             if (shouldCountIn) {
                 const countInInfo = scoreViewer?.getCountInInfo() ?? {
                     bpm: 120,
@@ -709,7 +777,10 @@
                 playbackState = "playing";
                 startPlaytimeTracking();
             }
-            if (playbackState === "playing" || playbackState === "counting-in") {
+            if (
+                playbackState === "playing" ||
+                playbackState === "counting-in"
+            ) {
                 if (
                     playbackState === "playing" &&
                     playbackDuration > 0 &&
@@ -866,9 +937,16 @@
         {:else}
             <div class="public-card public-workspace">
                 <div class="public-score-pane">
-                    <div class="score-title-row score-title-bar listen-score-title-bar">
-                        <a class="listen-home-link" href="/" aria-label="Fumen home">
-                            <span class="listen-home-mark" aria-hidden="true"></span>
+                    <div
+                        class="score-title-row score-title-bar listen-score-title-bar"
+                    >
+                        <a
+                            class="listen-home-link"
+                            href="/"
+                            aria-label="Fumen home"
+                        >
+                            <span class="listen-home-mark" aria-hidden="true"
+                            ></span>
                         </a>
                         <h2>
                             <ScoreIcon
@@ -876,32 +954,52 @@
                                 icon={publicMusic?.icon ?? null}
                                 imageUrl={publicMusic?.icon_image_url ?? null}
                             />
-                            <span>{publicMusic?.title ?? "Loading score"}</span>
+                            <span class="listen-score-copy">
+                                <span class="listen-score-primary"
+                                    >{publicMusic?.title ?? "Loading score"}</span
+                                >
+                                {#if publicMusic?.subtitle}
+                                    <span class="listen-score-subtitle"
+                                        >{publicMusic.subtitle}</span
+                                    >
+                                {/if}
+                            </span>
                         </h2>
                         <div class="score-annotation-controls">
                             <button
                                 class="score-annotation-toggle"
                                 type="button"
                                 onclick={toggleAnnotationsVisibility}
-                                disabled={annotationsVisibilityScope === "none" && !canAnnotate}
+                                disabled={annotationsVisibilityScope ===
+                                    "none" && !canAnnotate}
                                 aria-pressed={showAnnotations}
                                 aria-label={annotationToggleLabel}
                             >
                                 {#if showAnnotations}
-                                    <EyeOff size={15} strokeWidth={2.2} aria-hidden="true" />
+                                    <EyeOff
+                                        size={15}
+                                        strokeWidth={2.2}
+                                        aria-hidden="true"
+                                    />
                                 {:else}
-                                    <Eye size={15} strokeWidth={2.2} aria-hidden="true" />
+                                    <Eye
+                                        size={15}
+                                        strokeWidth={2.2}
+                                        aria-hidden="true"
+                                    />
                                 {/if}
                                 <span>{annotationToggleLabel}</span>
                                 {#if annotations.length > 0}
-                                    <span class="score-annotation-count">{annotations.length}</span>
+                                    <span class="score-annotation-count"
+                                        >{annotations.length}</span
+                                    >
                                 {/if}
                             </button>
-                            <span class="status-pill score-annotation-scope-pill">
-                                {annotationScopeLabel}
-                            </span>
                         </div>
-                        <div class="download-menu" class:open={downloadMenuOpen}>
+                        <div
+                            class="download-menu"
+                            class:open={downloadMenuOpen}
+                        >
                             <button
                                 class="download-menu-btn"
                                 onclick={() =>
@@ -912,8 +1010,13 @@
                                 disabled={!publicMusic}
                             >
                                 <Download size={15} strokeWidth={2.2} />
-                                <span class="download-menu-label">Download</span>
-                                <ChevronDown class="chevron" size={12} strokeWidth={2.5} />
+                                <span class="download-menu-label">Download</span
+                                >
+                                <ChevronDown
+                                    class="chevron"
+                                    size={12}
+                                    strokeWidth={2.5}
+                                />
                             </button>
                             {#if downloadMenuOpen && publicMusic}
                                 <div class="download-dropdown">
@@ -922,7 +1025,8 @@
                                             class="download-item"
                                             href={publicMusic.audio_stream_url}
                                             download
-                                            onclick={() => (downloadMenuOpen = false)}
+                                            onclick={() =>
+                                                (downloadMenuOpen = false)}
                                             >Download Audio</a
                                         >
                                     {/if}
@@ -931,7 +1035,8 @@
                                             class="download-item"
                                             href={publicMusic.midi_download_url}
                                             download
-                                            onclick={() => (downloadMenuOpen = false)}
+                                            onclick={() =>
+                                                (downloadMenuOpen = false)}
                                             >Download MIDI</a
                                         >
                                     {/if}
@@ -939,7 +1044,8 @@
                                         class="download-item"
                                         href={publicMusic.download_url}
                                         download
-                                        onclick={() => (downloadMenuOpen = false)}
+                                        onclick={() =>
+                                            (downloadMenuOpen = false)}
                                         >Download MuseScore</a
                                     >
                                 </div>
@@ -948,7 +1054,8 @@
                     </div>
                     <div
                         class="score-scroll-area"
-                        class:score-scroll-area-loading={scoreLoading && !scoreError}
+                        class:score-scroll-area-loading={scoreLoading &&
+                            !scoreError}
                     >
                         <div class="score-scroll-inner">
                             <div class="score-stage">
@@ -960,46 +1067,78 @@
                                 {#if showAnnotations && renderedAnnotations.length > 0}
                                     <div class="score-annotation-layer">
                                         {#each renderedAnnotations as renderedAnnotation (renderedAnnotation.annotation.id)}
-                                            {@const authorName = renderedAnnotation.annotation.display_name ??
-                                                renderedAnnotation.annotation.username}
+                                            {@const authorName =
+                                                renderedAnnotation.annotation
+                                                    .display_name ??
+                                                renderedAnnotation.annotation
+                                                    .username}
                                             <article
                                                 class={`score-annotation-bubble score-annotation-bubble--${renderedAnnotation.placement}`}
-                                                class:is-expanded={expandedAnnotationId === renderedAnnotation.annotation.id}
-                                                style={buildAnnotationBubbleStyle(renderedAnnotation)}
+                                                class:is-expanded={expandedAnnotationId ===
+                                                    renderedAnnotation
+                                                        .annotation.id}
+                                                style={buildAnnotationBubbleStyle(
+                                                    renderedAnnotation,
+                                                )}
                                             >
                                                 <button
                                                     class="score-annotation-avatar-button"
                                                     type="button"
-                                                    aria-pressed={expandedAnnotationId === renderedAnnotation.annotation.id}
-                                                    aria-label={expandedAnnotationId === renderedAnnotation.annotation.id
+                                                    aria-expanded={expandedAnnotationId ===
+                                                        renderedAnnotation
+                                                            .annotation.id}
+                                                    aria-label={expandedAnnotationId ===
+                                                    renderedAnnotation
+                                                        .annotation.id
                                                         ? `Collapse annotation by ${authorName}`
                                                         : `Expand annotation by ${authorName}`}
                                                     onclick={() =>
                                                         toggleAnnotationBubble(
-                                                            renderedAnnotation.annotation.id,
+                                                            renderedAnnotation
+                                                                .annotation.id,
                                                         )}
                                                 >
-                                                    <div class="score-annotation-avatar">
+                                                    <div
+                                                        class="score-annotation-avatar"
+                                                    >
                                                         {#if renderedAnnotation.annotation.avatar_url}
                                                             <img
-                                                                src={renderedAnnotation.annotation.avatar_url}
+                                                                src={renderedAnnotation
+                                                                    .annotation
+                                                                    .avatar_url}
                                                                 alt=""
                                                                 class="score-annotation-avatar-image"
                                                             />
                                                         {:else}
-                                                            {authorName.slice(0, 1).toUpperCase()}
+                                                            {authorName
+                                                                .slice(0, 1)
+                                                                .toUpperCase()}
                                                         {/if}
                                                     </div>
                                                 </button>
-                                                <div class="score-annotation-bubble-body">
-                                                    <div class="score-annotation-author">
-                                                        <strong>{authorName}</strong>
+                                                <div
+                                                    class="score-annotation-bubble-body"
+                                                    aria-hidden={expandedAnnotationId !==
+                                                        renderedAnnotation
+                                                            .annotation.id}
+                                                >
+                                                    <div
+                                                        class="score-annotation-author"
+                                                    >
+                                                        <strong
+                                                            >{authorName}</strong
+                                                        >
                                                         <span>
-                                                            @{renderedAnnotation.annotation.username}
+                                                            @{renderedAnnotation
+                                                                .annotation
+                                                                .username}
                                                         </span>
                                                     </div>
-                                                    <p class="score-annotation-comment">
-                                                        {renderedAnnotation.annotation.comment}
+                                                    <p
+                                                        class="score-annotation-comment"
+                                                    >
+                                                        {renderedAnnotation
+                                                            .annotation.comment}
                                                     </p>
                                                 </div>
                                             </article>
@@ -1008,7 +1147,10 @@
                                 {/if}
                             </div>
                             {#if scoreLoading}
-                                <div class="score-loading-state" aria-label="Loading score">
+                                <div
+                                    class="score-loading-state"
+                                    aria-label="Loading score"
+                                >
                                     <div class="loading-eq" aria-hidden="true">
                                         <span></span>
                                         <span></span>
@@ -1017,7 +1159,9 @@
                                         <span></span>
                                     </div>
                                     <p class="loading-eq-label">Fumen</p>
-                                    <p class="score-loading-copy">Loading score</p>
+                                    <p class="score-loading-copy">
+                                        Loading score
+                                    </p>
                                 </div>
                             {:else if scoreError}
                                 <p class="status error">Score: {scoreError}</p>
@@ -1036,15 +1180,22 @@
                                 midiLoading ||
                                 !stemPlaybackReady}
                             aria-label={playbackState === "playing" ||
-                                playbackState === "counting-in"
+                            playbackState === "counting-in"
                                 ? "Pause"
                                 : "Play"}
                         >
-                            {#if playbackState === "playing" ||
-                                playbackState === "counting-in"}
-                                <Pause size={18} fill="currentColor" strokeWidth={0} />
+                            {#if playbackState === "playing" || playbackState === "counting-in"}
+                                <Pause
+                                    size={18}
+                                    fill="currentColor"
+                                    strokeWidth={0}
+                                />
                             {:else}
-                                <Play size={18} fill="currentColor" strokeWidth={0} />
+                                <Play
+                                    size={18}
+                                    fill="currentColor"
+                                    strokeWidth={0}
+                                />
                             {/if}
                         </button>
                         <button
@@ -1055,7 +1206,11 @@
                                 !stemPlaybackReady}
                             aria-label="Stop"
                         >
-                            <Square size={14} fill="currentColor" strokeWidth={0} />
+                            <Square
+                                size={14}
+                                fill="currentColor"
+                                strokeWidth={0}
+                            />
                         </button>
                         <div class="playbar-progress">
                             <input
@@ -1074,7 +1229,9 @@
                             />
                         </div>
                         <span class="playbar-time"
-                            >{formatTime(playbackPosition)}<span class="playbar-sep">
+                            >{formatTime(playbackPosition)}<span
+                                class="playbar-sep"
+                            >
                                 /
                             </span>{formatTime(playbackDuration)}</span
                         >
@@ -1109,10 +1266,7 @@
                 tabindex="-1"
                 onclick={closeAnnotationMenu}
             ></button>
-            <div
-                class="annotation-menu"
-                style={annotationMenuStyle}
-            >
+            <div class="annotation-menu" style={annotationMenuStyle}>
                 <div class="annotation-menu-header">
                     <div>
                         <p class="meta-label">Annotation</p>
@@ -1120,7 +1274,8 @@
                             {annotationMenu.positionLabel}
                         </p>
                         <p class="annotation-menu-subtitle">
-                            {annotationMenu.instrumentName ?? "Instrument not detected"}
+                            {annotationMenu.instrumentName ??
+                                "Instrument not detected"}
                         </p>
                     </div>
                     <button
@@ -1138,7 +1293,11 @@
                     disabled={!annotationMenu.canAnnotate}
                     onclick={openAnnotationComposer}
                 >
-                    <MessageSquarePlus size={15} strokeWidth={2.2} aria-hidden="true" />
+                    <MessageSquarePlus
+                        size={15}
+                        strokeWidth={2.2}
+                        aria-hidden="true"
+                    />
                     <span>
                         {annotationMenu.canAnnotate
                             ? "Add annotation"

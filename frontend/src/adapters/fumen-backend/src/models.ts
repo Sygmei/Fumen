@@ -48,6 +48,7 @@ export interface AdminMusicResponse {
   public_token: string;
   public_url: string;
   quality_profile: string;
+  subtitle?: string | null;
   stems_error?: string | null;
   stems_status: string;
   stems_total_bytes: number;
@@ -59,6 +60,7 @@ export interface AdminUpdateMusicMultipartRequest {
   icon?: string | null;
   icon_file: Blob;
   public_id?: string | null;
+  subtitle?: string | null;
   title?: string | null;
 }
 
@@ -78,6 +80,7 @@ export interface AdminUploadMusicMultipartRequest {
   icon_file: Blob;
   public_id?: string | null;
   quality_profile?: string | null;
+  subtitle?: string | null;
   title?: string | null;
 }
 
@@ -94,6 +97,7 @@ export interface AdminUserScorePlaytimeResponse {
   icon_image_url?: string | null;
   music_id: string;
   public_url: string;
+  subtitle?: string | null;
   title: string;
   total_seconds: number;
 }
@@ -112,6 +116,14 @@ export interface CreateEnsembleRequest {
 }
 
 
+export interface CreateScoreAnnotationRequest {
+  bar_number: number;
+  beat_number: number;
+  comment: string;
+  instrument: string;
+}
+
+
 export interface CreateUserRequest {
   role?: string | null;
   username: string;
@@ -126,12 +138,12 @@ export interface CurrentUserResponse {
 
 export interface DrumMapEntry {
   head?: string | null;
-  line?: number;
+  line?: number | null;
   name: string;
   pitch: number;
   shortcut?: string | null;
-  stem?: number;
-  voice?: number;
+  stem?: number | null;
+  voice?: number | null;
 }
 
 
@@ -199,29 +211,10 @@ export interface PublicMusicResponse {
   midi_error?: string | null;
   midi_status: string;
   musicxml_url?: string | null;
+  subtitle?: string | null;
   stems_error?: string | null;
   stems_status: string;
   title: string;
-}
-
-
-export interface ScoreAnnotationResponse {
-  avatar_url?: string | null;
-  comment: string;
-  created_at: string;
-  display_name?: string | null;
-  id: string;
-  music_id: string;
-  seconds: number;
-  step_index: number;
-  user_id: string;
-  username: string;
-}
-
-
-export interface ScoreAnnotationListResponse {
-  annotations: ScoreAnnotationResponse[];
-  visibility_scope: string;
 }
 
 
@@ -235,10 +228,24 @@ export interface ReportPlaytimeRequest {
 }
 
 
-export interface CreateScoreAnnotationRequest {
+export interface ScoreAnnotationListResponse {
+  annotations: ScoreAnnotationResponse[];
+  visibility_scope: string;
+}
+
+
+export interface ScoreAnnotationResponse {
+  avatar_url?: string | null;
+  bar_number: number;
+  beat_number: number;
   comment: string;
-  seconds: number;
-  step_index: number;
+  created_at: string;
+  display_name?: string | null;
+  id: string;
+  instrument: string;
+  music_id: string;
+  user_id: string;
+  username: string;
 }
 
 
@@ -271,6 +278,10 @@ export interface UpdateEnsembleMemberRequest {
 
 export interface UpdateEnsembleMembersRequest {
   members: UpdateEnsembleMemberItemRequest[];
+}
+
+export interface UpdateEnsembleScoresRequest {
+  music_ids: string[];
 }
 
 
@@ -306,6 +317,7 @@ export interface UserLibraryScoreResponse {
   id: string;
   public_id_url?: string | null;
   public_url: string;
+  subtitle?: string | null;
   title: string;
 }
 
@@ -321,5 +333,3 @@ export interface UserResponse {
   role: string;
   username: string;
 }
-
-

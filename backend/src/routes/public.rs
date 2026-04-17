@@ -4,6 +4,7 @@ use crate::schemas::{
 };
 use crate::services::{auth, music};
 use crate::{AppError, AppState, sanitize_content_disposition};
+use anyhow::anyhow;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -447,8 +448,22 @@ pub(crate) async fn report_public_music_playtime(
     }
 
     let normalized = normalized.into_iter().collect::<Vec<_>>();
+    let mut track_indices = normalized
+        .iter()
+        .map(|(track_index, _)| *track_index)
+        .collect::<Vec<_>>();
+    track_indices.sort_unstable();
     music::add_user_track_playtime(&state.db_rw, &auth_context.user.id, &record.id, &normalized)
-        .await?;
+        .await
+        .map_err(|error| {
+            AppError::from(anyhow!(
+                "failed to record playtime for music {} and user {} on tracks {:?}: {}",
+                record.id,
+                auth_context.user.id,
+                track_indices,
+                error.message,
+            ))
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }

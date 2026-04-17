@@ -1,0 +1,2 @@
+ALTER TABLE musics
+ADD COLUMN IF NOT EXISTS subtitle TEXT;

@@ -15,7 +15,7 @@
     }: {
         ensemble: Ensemble;
         allMusics: AdminMusic[];
-        onSave: (ensembleId: string, musicIds: string[]) => Promise<void>;
+        onSave: (ensembleId: string, musicIds: string[]) => void | Promise<void>;
         modalId?: string;
     } = $props();
 
@@ -27,7 +27,6 @@
     let addSearchQuery = $state("");
     let originalMusicIds = $state([...initialMusicIds]);
     let stagedMusicIds = $state([...initialMusicIds]);
-    let saving = $state(false);
     let errorMsg = $state("");
 
     const filteredManagedScores = $derived.by(() =>
@@ -37,7 +36,12 @@
             .filter((music) => {
                 const query = currentSearchQuery.trim().toLowerCase();
                 if (!query) return true;
-                return [music.title, music.public_id ?? "", ...music.ensemble_names]
+                return [
+                    music.title,
+                    music.subtitle ?? "",
+                    music.public_id ?? "",
+                    ...music.ensemble_names,
+                ]
                     .join(" ")
                     .toLowerCase()
                     .includes(query);
@@ -51,7 +55,12 @@
             .filter((music) => {
                 const query = addSearchQuery.trim().toLowerCase();
                 if (!query) return true;
-                return [music.title, music.public_id ?? "", ...music.ensemble_names]
+                return [
+                    music.title,
+                    music.subtitle ?? "",
+                    music.public_id ?? "",
+                    ...music.ensemble_names,
+                ]
                     .join(" ")
                     .toLowerCase()
                     .includes(query);
@@ -73,31 +82,21 @@
         return [...staged].some((id) => !original.has(id));
     }
 
-    async function handleSave() {
+    function handleSave() {
         if (!hasManagedScoreChanges()) {
             closeModal();
             return;
         }
 
-        saving = true;
         errorMsg = "";
-        try {
-            await onSave(
-                ensemble.id,
-                [...new Set(stagedMusicIds)].sort((left, right) =>
-                    left.localeCompare(right),
-                ),
-            );
-            originalMusicIds = [...stagedMusicIds];
-            closeModal();
-        } catch (error) {
-            errorMsg =
-                error instanceof Error
-                    ? error.message
-                    : "Failed to update scores.";
-        } finally {
-            saving = false;
-        }
+        void onSave(
+            ensemble.id,
+            [...new Set(stagedMusicIds)].sort((left, right) =>
+                left.localeCompare(right),
+            ),
+        );
+        originalMusicIds = [...stagedMusicIds];
+        closeModal();
     }
 </script>
 
@@ -106,7 +105,6 @@
         <button
             class="button ghost"
             type="button"
-            disabled={saving}
             onclick={closeModal}
         >
             Cancel
@@ -114,10 +112,10 @@
         <button
             class="button"
             type="button"
-            disabled={saving || !hasManagedScoreChanges()}
-            onclick={() => void handleSave()}
+            disabled={!hasManagedScoreChanges()}
+            onclick={handleSave}
         >
-            {saving ? "Saving..." : "Save changes"}
+            Save changes
         </button>
     </div>
 {/snippet}
@@ -128,59 +126,9 @@
     title="Scores"
     subtitle={ensemble.name}
     {footer}
-    canClose={!saving}
     {modalId}
 >
     <div class="admin-split-pane">
-        <section class="admin-split-column">
-            <div class="admin-split-header">
-                <div class="admin-split-header-main">
-                    <h4>Current scores</h4>
-                    <label class="field admin-user-search admin-split-search">
-                        <span class="sr-only">Search current scores</span>
-                        <div class="admin-user-search-input-wrap">
-                            <Search size={15} aria-hidden="true" />
-                            <input
-                                bind:value={currentSearchQuery}
-                                placeholder="Search current scores"
-                            />
-                        </div>
-                    </label>
-                    <span class="admin-user-role-pill">
-                        {filteredManagedScores.length}
-                    </span>
-                </div>
-            </div>
-            <div class="admin-inline-list">
-                {#if filteredManagedScores.length === 0}
-                    <p class="hint">No matching scores in this ensemble.</p>
-                {:else}
-                    {#each filteredManagedScores as music}
-                        <div class="admin-inline-row admin-inline-row-score">
-                            <div class="admin-inline-copy">
-                                <strong>{music.title}</strong>
-                            </div>
-                            <div class="admin-inline-actions">
-                                <button
-                                    class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
-                                    type="button"
-                                    disabled={saving}
-                                    aria-label={`Remove ${music.title}`}
-                                    title={`Remove ${music.title}`}
-                                    onclick={() =>
-                                        toggleStagedEnsembleScore(
-                                            music.id,
-                                            false,
-                                        )}
-                                >
-                                    <span aria-hidden="true">-</span>
-                                </button>
-                            </div>
-                        </div>
-                    {/each}
-                {/if}
-            </div>
-        </section>
         <section class="admin-split-column">
             <div class="admin-split-header">
                 <div class="admin-split-header-main">
@@ -207,13 +155,19 @@
                     {#each filteredAvailableScores as music}
                         <div class="admin-inline-row admin-inline-row-score">
                             <div class="admin-inline-copy">
-                                <strong>{music.title}</strong>
+                                <div class="admin-inline-score-copy">
+                                    <strong>{music.title}</strong>
+                                    {#if music.subtitle}
+                                        <span class="admin-inline-score-subtitle"
+                                            >{music.subtitle}</span
+                                        >
+                                    {/if}
+                                </div>
                             </div>
                             <div class="admin-inline-actions">
                                 <button
                                     class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
                                     type="button"
-                                    disabled={saving}
                                     aria-label={`Add ${music.title}`}
                                     title={`Add ${music.title}`}
                                     onclick={() =>
@@ -223,6 +177,61 @@
                                         )}
                                 >
                                     <span aria-hidden="true">+</span>
+                                </button>
+                            </div>
+                        </div>
+                    {/each}
+                {/if}
+            </div>
+        </section>
+        <section class="admin-split-column">
+            <div class="admin-split-header">
+                <div class="admin-split-header-main">
+                    <h4>Current scores</h4>
+                    <label class="field admin-user-search admin-split-search">
+                        <span class="sr-only">Search current scores</span>
+                        <div class="admin-user-search-input-wrap">
+                            <Search size={15} aria-hidden="true" />
+                            <input
+                                bind:value={currentSearchQuery}
+                                placeholder="Search current scores"
+                            />
+                        </div>
+                    </label>
+                    <span class="admin-user-role-pill">
+                        {filteredManagedScores.length}
+                    </span>
+                </div>
+            </div>
+            <div class="admin-inline-list">
+                {#if filteredManagedScores.length === 0}
+                    <p class="hint">No matching scores in this ensemble.</p>
+                {:else}
+                    {#each filteredManagedScores as music}
+                        <div class="admin-inline-row admin-inline-row-score">
+                            <div class="admin-inline-copy">
+                                <div class="admin-inline-score-copy">
+                                    <strong>{music.title}</strong>
+                                    {#if music.subtitle}
+                                        <span class="admin-inline-score-subtitle"
+                                            >{music.subtitle}</span
+                                        >
+                                    {/if}
+                                </div>
+                            </div>
+                            <div class="admin-inline-actions">
+                                <button
+                                    class="button ghost danger admin-inline-icon-btn admin-inline-symbol-btn"
+                                    type="button"
+                                    aria-label={`Remove ${music.title}`}
+                                    title={`Remove ${music.title}`}
+                                    onclick={() =>
+                                        toggleStagedEnsembleScore(
+                                            music.id,
+                                            false,
+                                        )}
+                                >
+                                    <span aria-hidden="true">-</span>
                                 </button>
                             </div>
                         </div>

@@ -10,6 +10,7 @@
 
     let {
         user,
+        creating = false,
         saving = false,
         deleting = false,
         canEdit = false,
@@ -21,6 +22,7 @@
         onDelete,
     }: {
         user: AppUser;
+        creating?: boolean;
         saving?: boolean;
         deleting?: boolean;
         canEdit?: boolean;
@@ -31,6 +33,11 @@
         onShowQr: () => void;
         onDelete: () => void;
     } = $props();
+
+    const cardState = $derived(
+        deleting ? "deleting" : saving ? "saving" : creating ? "creating" : "",
+    );
+    const actionsDisabled = $derived(creating || saving || deleting);
 </script>
 
 {#snippet body()}
@@ -57,8 +64,18 @@
             </h3>
             <div class="admin-user-state-row">
                 <p class="admin-user-role-pill">{user.role}</p>
-                {#if saving}
-                    <span class="status-pill admin-user-saving-pill">Saving...</span>
+                {#if creating}
+                    <span class="status-pill admin-user-creating-pill">
+                        CREATING
+                    </span>
+                {:else if saving}
+                    <span class="status-pill admin-user-saving-pill">
+                        SAVING
+                    </span>
+                {:else if deleting}
+                    <span class="status-pill admin-user-deleting-pill">
+                        DELETING
+                    </span>
                 {/if}
             </div>
         </div>
@@ -71,6 +88,7 @@
             <button
                 class="button secondary admin-user-action"
                 type="button"
+                disabled={actionsDisabled}
                 onclick={onEdit}
                 aria-label={`Edit ${user.username}`}
                 title="Edit user"
@@ -82,6 +100,7 @@
             <button
                 class="button secondary admin-user-action"
                 type="button"
+                disabled={actionsDisabled}
                 onclick={onShowMetadata}
                 aria-label={`View metadata for ${user.username}`}
                 title="User metadata"
@@ -92,6 +111,7 @@
         <button
             class="button secondary admin-user-action"
             type="button"
+            disabled={actionsDisabled}
             onclick={onShowQr}
             aria-label={`Show QR code for ${user.username}`}
             title="Show QR code"
@@ -102,7 +122,7 @@
             <button
                 class="button ghost danger admin-user-action"
                 type="button"
-                disabled={deleting}
+                disabled={actionsDisabled}
                 onclick={onDelete}
                 aria-label={`Delete ${user.username}`}
                 title="Delete user"
@@ -113,4 +133,8 @@
     </div>
 {/snippet}
 
-<AdminCard cardClass="admin-record-card admin-user-card" {body} {footer} />
+<AdminCard
+    cardClass={`admin-record-card admin-user-card${cardState ? ` is-${cardState}` : ""}`}
+    {body}
+    {footer}
+/>

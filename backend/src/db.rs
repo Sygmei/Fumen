@@ -30,9 +30,26 @@ pub(crate) async fn run_migrations(database_url: &str) -> Result<()> {
     info!("starting database migrations");
     let connection = AsyncPgConnection::establish(database_url).await?;
     let mut harness = AsyncMigrationHarness::new(connection);
-    harness
-        .run_pending_migrations(migrations)
+    let pending = harness
+        .pending_migrations(migrations)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    if pending.is_empty() {
+        info!("no pending database migrations");
+        return Ok(());
+    }
+
+    info!(count = pending.len(), "applying pending database migrations");
+
+    for migration in pending {
+        let migration_name = migration.name().to_string();
+        info!(migration = %migration_name, "applying database migration");
+        harness
+            .run_migration(&*migration)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        info!(migration = %migration_name, "applied database migration");
+    }
+
     info!("completed database migrations");
     Ok(())
 }

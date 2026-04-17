@@ -11,6 +11,7 @@ use crate::schemas::{
     MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, RefreshTokenRequest,
     ReportPlaytimeRequest, ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo, TrackPlaytimeIncrementRequest,
     UpdateEnsembleMemberItemRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest,
+    UpdateEnsembleScoresRequest,
     UpdateMusicEnsemblesRequest, UpdateMyProfileMultipartRequest, UserLibraryEnsembleResponse,
     UserLibraryResponse, UserLibraryScoreResponse, UserResponse,
 };
@@ -68,6 +69,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::admin_add_user_to_ensemble,
         crate::routes::admin::admin_remove_user_from_ensemble,
         crate::routes::admin::admin_update_ensemble_members,
+        crate::routes::admin::admin_update_ensemble_scores,
         crate::routes::admin::admin_add_music_to_ensemble,
         crate::routes::admin::admin_remove_music_from_ensemble,
         crate::routes::admin::admin_update_music_ensembles,
@@ -114,6 +116,7 @@ impl Modify for SecurityAddon {
             UpdateEnsembleMemberItemRequest,
             UpdateEnsembleMemberRequest,
             UpdateEnsembleMembersRequest,
+            UpdateEnsembleScoresRequest,
             UpdateMusicEnsemblesRequest,
             UpdateMyProfileMultipartRequest,
             UserLibraryEnsembleResponse,

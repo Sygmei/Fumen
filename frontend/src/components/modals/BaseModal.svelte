@@ -102,6 +102,11 @@
         border-radius: var(--radius-md) !important;
         transform: translateY(-50%);
     }
+
+    .modal-close-button:hover,
+    .modal-close-button:active {
+        transform: translateY(-50%);
+    }
 </style>
 
 <svelte:window onkeydown={handleKeydown} />

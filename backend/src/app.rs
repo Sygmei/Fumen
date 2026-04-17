@@ -3,6 +3,7 @@ use crate::config::AppConfig;
 use crate::db::{DbPool, DbPoolError};
 use crate::models::{UserRecord, UserSessionRecord};
 use crate::storage::Storage;
+use crate::telemetry::ServerErrorContext;
 use axum::{
     Json,
     extract::multipart::MultipartError,
@@ -206,11 +207,17 @@ impl From<MultipartError> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(serde_json::json!({ "error": self.message })),
-        )
-            .into_response()
+        let Self { status, message } = self;
+        let mut response = (status, Json(serde_json::json!({ "error": message.clone() })))
+            .into_response();
+
+        if status.is_server_error() {
+            response
+                .extensions_mut()
+                .insert(ServerErrorContext { message });
+        }
+
+        response
     }
 }
 

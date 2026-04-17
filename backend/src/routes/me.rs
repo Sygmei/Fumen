@@ -286,6 +286,7 @@ pub(crate) async fn current_user_library(
         let score = UserLibraryScoreResponse {
             id: music_record.id.clone(),
             title: music_record.title,
+            subtitle: music_record.subtitle,
             icon: music_record.icon,
             icon_image_url,
             filename: music_record.filename,

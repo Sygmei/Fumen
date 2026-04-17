@@ -19,8 +19,10 @@ interface TimeEntry {
   seconds: number
   step: number
   measureIndex: number
+  barNumber: number
+  beatNumber: number
   wholeNotes: number
-  measureStartWholeNotes: number
+  relativeInMeasureWholeNotes: number
   /** Cursor element left edge relative to SVG left; -1 if not measured. */
   xPx: number
   /** Cursor element top relative to container content area; -1 if not measured. */
@@ -55,14 +57,27 @@ export interface ScoreAnnotationAnchor {
   systemIndex: number
   xPx: number
   topPx: number
+  lineTopPx: number | null
 }
 
 export interface ScoreAnnotationContext {
-  anchor: ScoreAnnotationAnchor
+  barNumber: number
+  beatNumber: number
   positionLabel: string
   instrumentName: string | null
   clientX: number
   clientY: number
+}
+
+export interface ScoreVisibleInstrumentRow {
+  instrumentName: string
+  systemIndex: number
+  topRatio: number
+  centerRatio: number
+  bottomRatio: number
+  topPx: number
+  centerPx: number
+  bottomPx: number
 }
 
 export interface ScoreSystemInfo {
@@ -250,8 +265,6 @@ export class ScoreViewer {
     const measureTempo = this.measureTempoMap
     const map: TimeEntry[] = []
     const geoms: Array<{ top: number; height: number }> = []
-    const measureStarts = new Map<number, number>()
-
     this.resetCursorIterator(cursor)
     const iterator = cursor.iterator
     if (!iterator) return
@@ -270,7 +283,7 @@ export class ScoreViewer {
 
       const enrolledValue = this.getIteratorTimestamp(iterator)
       const measureIdx: number = iterator.CurrentMeasureIndex ?? 0
-      const measureStartWholeNotes = measureStarts.get(measureIdx) ?? enrolledValue
+      const relativeInMeasureWholeNotes = this.getIteratorRelativeInMeasureTimestamp(iterator, enrolledValue)
       const tempo = measureTempo.get(measureIdx) ?? measureTempo.get(0) ?? {
         bpm: 120,
         beatUnitWholeNotes: 0.25,
@@ -281,14 +294,13 @@ export class ScoreViewer {
         seconds: cumulativeSeconds,
         step,
         measureIndex: measureIdx,
+        barNumber: measureIdx + 1,
+        beatNumber: this.getBeatNumber(relativeInMeasureWholeNotes),
         wholeNotes: enrolledValue,
-        measureStartWholeNotes,
+        relativeInMeasureWholeNotes,
         xPx: -1,
         topPx: -1,
       })
-      if (!measureStarts.has(measureIdx)) {
-        measureStarts.set(measureIdx, enrolledValue)
-      }
 
       try {
         const el = cursor.cursorElement as HTMLElement | null
@@ -339,6 +351,14 @@ export class ScoreViewer {
       iterator?.CurrentSourceTimestamp?.RealValue ??
       iterator?.currentTimeStamp?.RealValue ??
       0
+    )
+  }
+
+  private getIteratorRelativeInMeasureTimestamp(iterator: any, enrolledValue: number): number {
+    return (
+      iterator?.CurrentRelativeInMeasureTimestamp?.RealValue ??
+      iterator?.currentRelativeInMeasureTimestamp?.RealValue ??
+      enrolledValue
     )
   }
 
@@ -476,6 +496,7 @@ export class ScoreViewer {
       systemIndex: this.findSystemIndexForTop(entry.topPx),
       xPx: entry.xPx,
       topPx: entry.topPx,
+      lineTopPx: null,
     }
   }
 
@@ -496,20 +517,47 @@ export class ScoreViewer {
     const entry = this.timeMap[step] ?? (typeof seconds === 'number' ? this.getEntryForSeconds(seconds) : undefined)
     if (!entry) return null
 
+    return `Bar ${entry.barNumber} · Beat ${entry.beatNumber}`
+  }
+
+  private getBeatNumber(relativeInMeasureWholeNotes: number): number {
     const beatsPerBar = Math.max(1, Math.round(this.meterInfo.beatsPerBar))
     const beatUnitWholeNotes = this.meterInfo.beatUnitWholeNotes > 0 ? this.meterInfo.beatUnitWholeNotes : 0.25
-    const measureStartWholeNotes = Number.isFinite(entry.measureStartWholeNotes)
-      ? entry.measureStartWholeNotes
-      : entry.wholeNotes
-    const offsetWholeNotes = Math.max(0, entry.wholeNotes - measureStartWholeNotes)
-    const beatIndex = Math.max(1, Math.min(beatsPerBar, Math.floor(offsetWholeNotes / beatUnitWholeNotes + 1e-6) + 1))
-    const barIndex = Math.max(1, entry.measureIndex + 1)
-
-    return `Bar ${barIndex} · Beat ${beatIndex}`
+    const offsetWholeNotes = Math.max(0, relativeInMeasureWholeNotes)
+    return Math.max(1, Math.min(beatsPerBar, Math.floor(offsetWholeNotes / beatUnitWholeNotes + 1e-6) + 1))
   }
 
   private getAnnotationInstrumentName(entry: TimeEntry, clientY: number): string | null {
+    const clickedSystem = this.findSystemIndexForTop(entry.topPx)
+    const system = this.systemMap[clickedSystem]
+    const containerRect = this.container.getBoundingClientRect()
+    const clickYInContainer = clientY - containerRect.top + this.container.scrollTop
     const svgEl = this.container.querySelector('svg')
+    const rows = this.getVisibleInstrumentRows(clickedSystem)
+    if (rows.length > 0) {
+      const nearestRow = rows.reduce((bestRow, row) => {
+        if (!bestRow) return row
+
+        const rowCenter = Number.isFinite(row.centerPx)
+          ? row.centerPx
+          : system
+            ? system.topPx + row.centerRatio * system.heightPx
+            : row.centerRatio
+        const bestCenter = Number.isFinite(bestRow.centerPx)
+          ? bestRow.centerPx
+          : system
+            ? system.topPx + bestRow.centerRatio * system.heightPx
+            : bestRow.centerRatio
+
+        return Math.abs(rowCenter - clickYInContainer) < Math.abs(bestCenter - clickYInContainer)
+          ? row
+          : bestRow
+      }, null as ScoreVisibleInstrumentRow | null)
+      if (nearestRow) {
+        return nearestRow.instrumentName
+      }
+    }
+
     if (svgEl) {
       const svgRect = svgEl.getBoundingClientRect()
       const clickY = clientY - svgRect.top
@@ -562,6 +610,168 @@ export class ScoreViewer {
     }
 
     return null
+  }
+
+  private normalizeLabel(value: string): string {
+    return value.replace(/\s+/g, ' ').trim().toLowerCase()
+  }
+
+  private getSvgViewportMetrics(): { topPx: number; scaleY: number; viewBoxY: number } | null {
+    const svgEl = this.container.querySelector('svg') as SVGSVGElement | null
+    if (!svgEl) {
+      return null
+    }
+
+    const svgRect = svgEl.getBoundingClientRect()
+    if (!(svgRect.height > 0)) {
+      return null
+    }
+
+    const containerRect = this.container.getBoundingClientRect()
+    const viewBox = svgEl.viewBox?.baseVal
+    const viewBoxHeight = Number(viewBox?.height)
+
+    return {
+      topPx: svgRect.top - containerRect.top + this.container.scrollTop,
+      scaleY: Number.isFinite(viewBoxHeight) && viewBoxHeight > 0 ? svgRect.height / viewBoxHeight : 1,
+      viewBoxY: Number(viewBox?.y) || 0,
+    }
+  }
+
+  private mapOsmdYToContainerPx(
+    y: number,
+    metrics: { topPx: number; scaleY: number; viewBoxY: number } | null,
+  ): number {
+    if (!metrics || !Number.isFinite(y)) {
+      return Number.NaN
+    }
+
+    return metrics.topPx + (y - metrics.viewBoxY) * metrics.scaleY
+  }
+
+  private getMusicSystems(): unknown[] {
+    const pages: unknown[] = this.osmd?.GraphicSheet?.MusicPages ?? []
+    return pages.flatMap((page) => ((page as { MusicSystems?: unknown[] }).MusicSystems ?? []))
+  }
+
+  private getMusicSystemByIndex(systemIndex: number): Record<string, unknown> | null {
+    if (!Number.isInteger(systemIndex) || systemIndex < 0) {
+      return null
+    }
+
+    const systems = this.getMusicSystems()
+    const system = systems[systemIndex]
+    return system && typeof system === 'object' ? (system as Record<string, unknown>) : null
+  }
+
+  getVisibleInstrumentRows(systemIndex = this.currentSystemIdx >= 0 ? this.currentSystemIdx : 0): ScoreVisibleInstrumentRow[] {
+    const system = this.getMusicSystemByIndex(systemIndex)
+    const staffLines = Array.isArray(system?.StaffLines) ? system.StaffLines : []
+    if (staffLines.length === 0) {
+      return []
+    }
+    const svgMetrics = this.getSvgViewportMetrics()
+
+    const instrumentBounds = new Map<string, {
+      instrumentName: string
+      order: number
+      top: number
+      bottom: number
+    }>()
+
+    for (let index = 0; index < staffLines.length; index += 1) {
+      const staffLine = staffLines[index] as {
+        PositionAndShape?: {
+          AbsolutePosition?: { y?: number }
+          BorderTop?: number
+          BorderBottom?: number
+        }
+        ParentStaff?: {
+          ParentInstrument?: { Name?: string }
+        }
+        StaffHeight?: number
+      }
+
+      const instrumentName = staffLine.ParentStaff?.ParentInstrument?.Name?.trim()
+      if (!instrumentName) {
+        continue
+      }
+
+      const absoluteY = Number(staffLine.PositionAndShape?.AbsolutePosition?.y)
+      if (!Number.isFinite(absoluteY)) {
+        continue
+      }
+
+      const rawStaffHeight = Number(staffLine.StaffHeight)
+      const staffHeight = Number.isFinite(rawStaffHeight) && rawStaffHeight > 0
+        ? rawStaffHeight
+        : 4
+      const borderTop = Number.isFinite(staffLine.PositionAndShape?.BorderTop)
+        ? Number(staffLine.PositionAndShape?.BorderTop)
+        : 0
+      const borderBottom = Number.isFinite(staffLine.PositionAndShape?.BorderBottom)
+        ? Number(staffLine.PositionAndShape?.BorderBottom)
+        : staffHeight
+      const top = Number(absoluteY) + Math.min(borderTop, borderBottom)
+      const bottom = Number(absoluteY) + Math.max(borderTop, borderBottom, staffHeight)
+      const key = this.normalizeLabel(instrumentName)
+      const current = instrumentBounds.get(key)
+
+      if (current) {
+        current.top = Math.min(current.top, top)
+        current.bottom = Math.max(current.bottom, bottom)
+      } else {
+        instrumentBounds.set(key, {
+          instrumentName,
+          order: index,
+          top,
+          bottom,
+        })
+      }
+    }
+
+    const bounds = [...instrumentBounds.values()].sort((leftRow, rightRow) => leftRow.order - rightRow.order)
+    if (bounds.length === 0) {
+      return []
+    }
+
+    const systemTop = Math.min(...bounds.map((row) => row.top))
+    const systemBottom = Math.max(...bounds.map((row) => row.bottom))
+    const systemHeight = Math.max(1, systemBottom - systemTop)
+
+    return bounds.map((row) => {
+      const center = (row.top + row.bottom) / 2
+      const topPx = this.mapOsmdYToContainerPx(row.top, svgMetrics)
+      const centerPx = this.mapOsmdYToContainerPx(center, svgMetrics)
+      const bottomPx = this.mapOsmdYToContainerPx(row.bottom, svgMetrics)
+      return {
+        instrumentName: row.instrumentName,
+        systemIndex,
+        topRatio: Math.min(1, Math.max(0, (row.top - systemTop) / systemHeight)),
+        centerRatio: Math.min(1, Math.max(0, (center - systemTop) / systemHeight)),
+        bottomRatio: Math.min(1, Math.max(0, (row.bottom - systemTop) / systemHeight)),
+        topPx,
+        centerPx,
+        bottomPx,
+      }
+    })
+  }
+
+  private findVisibleInstrumentRow(systemIndex: number, instrumentName: string | null | undefined): ScoreVisibleInstrumentRow | null {
+    if (!instrumentName) {
+      return null
+    }
+
+    const wanted = this.normalizeLabel(instrumentName)
+    if (!wanted) {
+      return null
+    }
+
+    const rows = this.getVisibleInstrumentRows(systemIndex)
+    return rows.find((row) => {
+      const name = this.normalizeLabel(row.instrumentName)
+      return name === wanted || name.includes(wanted) || wanted.includes(name)
+    }) ?? null
   }
 
   private findLabelValue(
@@ -681,14 +891,24 @@ export class ScoreViewer {
     const pool = inSystem.filter((entry) => entry.xPx >= 0)
     if (pool.length === 0) return null
 
-    const sorted = [...pool].sort((a, b) => a.xPx - b.xPx)
-    let best = sorted[0]
-    for (const entry of sorted) {
-      if (entry.xPx <= clickXInSvg) best = entry
-      else break
+    const sorted = [...pool].sort((a, b) => a.xPx - b.xPx || a.step - b.step)
+    let lo = 0
+    let hi = sorted.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (sorted[mid].xPx < clickXInSvg) lo = mid + 1
+      else hi = mid
     }
 
-    return best
+    const right = sorted[lo]
+    const left = lo > 0 ? sorted[lo - 1] : null
+    if (!left) {
+      return right
+    }
+
+    return Math.abs(right.xPx - clickXInSvg) < Math.abs(clickXInSvg - left.xPx)
+      ? right
+      : left
   }
 
   getAnnotationAnchor(step: number, seconds?: number): ScoreAnnotationAnchor | null {
@@ -719,6 +939,49 @@ export class ScoreViewer {
 
     const entry = this.timeMap[lo]
     return entry ? this.toAnnotationAnchor(entry) : null
+  }
+
+  getAnnotationAnchorForPosition(barNumber: number, beatNumber: number, instrumentName?: string | null): ScoreAnnotationAnchor | null {
+    if (!Number.isFinite(barNumber) || !Number.isFinite(beatNumber)) {
+      return null
+    }
+
+    const matches = this.timeMap.filter((entry) => (
+      entry.barNumber === barNumber
+      && entry.beatNumber === beatNumber
+      && entry.xPx >= 0
+      && entry.topPx >= 0
+    ))
+
+    if (matches.length === 0) {
+      return null
+    }
+
+    const entry = [...matches].sort((leftEntry, rightEntry) => {
+      if (leftEntry.measureIndex !== rightEntry.measureIndex) {
+        return leftEntry.measureIndex - rightEntry.measureIndex
+      }
+      if (leftEntry.wholeNotes !== rightEntry.wholeNotes) {
+        return leftEntry.wholeNotes - rightEntry.wholeNotes
+      }
+      if (leftEntry.xPx !== rightEntry.xPx) {
+        return leftEntry.xPx - rightEntry.xPx
+      }
+      return leftEntry.step - rightEntry.step
+    })[0]
+
+    const anchor = this.toAnnotationAnchor(entry)
+    const system = this.systemMap[anchor.systemIndex]
+    const row = this.findVisibleInstrumentRow(anchor.systemIndex, instrumentName)
+    if (row) {
+      anchor.lineTopPx = Number.isFinite(row.centerPx)
+        ? row.centerPx
+        : system
+          ? system.topPx + row.centerRatio * system.heightPx
+          : null
+    }
+
+    return anchor
   }
 
   private buildMeasureTempoMap(xmlText: string): Map<number, TempoInfo> {
@@ -757,6 +1020,20 @@ export class ScoreViewer {
     return this.countInInfo
   }
 
+  getScorePartNames(): string[] {
+    const parts: unknown[] = this.osmd?.Sheet?.Parts ?? []
+    const labels: string[] = []
+
+    for (const part of parts) {
+      const label = this.findLabelValue(part)
+      if (label) {
+        labels.push(label)
+      }
+    }
+
+    return labels
+  }
+
   private extractMeterInfo(xmlText: string): MeterInfo {
     const result: MeterInfo = { beatsPerBar: 4, beatUnitWholeNotes: 0.25 }
     try {
@@ -776,7 +1053,7 @@ export class ScoreViewer {
         result.beatsPerBar = parsedBeats
       }
       if (Number.isFinite(parsedBeatType) && parsedBeatType > 0) {
-        result.beatUnitWholeNotes = 4 / parsedBeatType
+        result.beatUnitWholeNotes = 1 / parsedBeatType
       }
     } catch {
       // Keep the default 4/4 fallback when the XML structure is unusual.
@@ -986,7 +1263,8 @@ export class ScoreViewer {
       const instrumentName = this.getAnnotationInstrumentName(best, e.clientY)
 
       this.onAnnotationContextMenu?.({
-        anchor: this.toAnnotationAnchor(best),
+        barNumber: best.barNumber,
+        beatNumber: best.beatNumber,
         positionLabel,
         instrumentName,
         clientX: e.clientX,

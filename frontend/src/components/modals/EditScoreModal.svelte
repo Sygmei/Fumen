@@ -10,41 +10,32 @@
         modalId,
     }: {
         music: AdminMusic;
-        onSave: (draft: EditScoreDraft) => Promise<void>;
+        onSave: (draft: EditScoreDraft) => void | Promise<void>;
         modalId?: string;
     } = $props();
 
     let title = $state(music.title);
+    let subtitle = $state(music.subtitle ?? "");
     let publicId = $state(music.public_id ?? "");
     let icon = $state(music.icon ?? "");
     let iconFile = $state<File | null>(null);
-    let saving = $state(false);
     let errorMsg = $state("");
 
-    async function handleSave() {
+    function handleSave() {
         if (!title.trim()) {
             errorMsg = "Title cannot be empty.";
             return;
         }
 
-        saving = true;
         errorMsg = "";
-        try {
-            await onSave({
-                title,
-                publicId,
-                icon,
-                iconFile,
-            });
-            closeModal();
-        } catch (error) {
-            errorMsg =
-                error instanceof Error
-                    ? error.message
-                    : "Unable to update score metadata.";
-        } finally {
-            saving = false;
-        }
+        void onSave({
+            title,
+            subtitle,
+            publicId,
+            icon,
+            iconFile,
+        });
+        closeModal();
     }
 </script>
 
@@ -53,7 +44,6 @@
         <button
             class="button ghost"
             type="button"
-            disabled={saving}
             onclick={closeModal}
         >
             Cancel
@@ -61,10 +51,9 @@
         <button
             class="button"
             type="button"
-            disabled={saving}
-            onclick={() => void handleSave()}
+            onclick={handleSave}
         >
-            {saving ? "Saving..." : "Save changes"}
+            Save changes
         </button>
     </div>
 {/snippet}
@@ -75,13 +64,19 @@
     title="Edit score"
     subtitle={title}
     {footer}
-    canClose={!saving}
     {modalId}
 >
     <div class="upload-grid admin-score-modal-grid">
         <label class="field">
             <span>Title</span>
             <input bind:value={title} />
+        </label>
+        <label class="field">
+            <span>Subtitle</span>
+            <input
+                bind:value={subtitle}
+                placeholder="Optional subtitle"
+            />
         </label>
         <label class="field file-field admin-score-file-field">
             <span>Icon image</span>

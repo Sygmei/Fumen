@@ -1,4 +1,4 @@
-import type { AccessTokenRefreshResponse, AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicResponse, AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest, AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, AdminUserScorePlaytimeResponse, AuthTokenResponse, CreateEnsembleRequest, CreateScoreAnnotationRequest, CreateUserRequest, CurrentUserResponse, DrumMapEntry, EnsembleMemberResponse, ErrorResponse, ExchangeLoginTokenRequest, HealthResponse, JsonValue, LoginLinkResponse, MoveMusicRequest, MusicPlaytimeLeaderboardEntryResponse, MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, RefreshTokenRequest, ReportPlaytimeRequest, ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo, TrackPlaytimeIncrementRequest, UpdateEnsembleMemberItemRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateMusicEnsemblesRequest, UpdateMyProfileMultipartRequest, UserLibraryEnsembleResponse, UserLibraryResponse, UserLibraryScoreResponse, UserResponse } from "./models";
+import type { AccessTokenRefreshResponse, AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicResponse, AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest, AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, AdminUserScorePlaytimeResponse, AuthTokenResponse, CreateEnsembleRequest, CreateScoreAnnotationRequest, CreateUserRequest, CurrentUserResponse, DrumMapEntry, EnsembleMemberResponse, ErrorResponse, ExchangeLoginTokenRequest, HealthResponse, JsonValue, LoginLinkResponse, MoveMusicRequest, MusicPlaytimeLeaderboardEntryResponse, MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, RefreshTokenRequest, ReportPlaytimeRequest, ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo, TrackPlaytimeIncrementRequest, UpdateEnsembleMemberItemRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest, UpdateMusicEnsemblesRequest, UpdateMyProfileMultipartRequest, UserLibraryEnsembleResponse, UserLibraryResponse, UserLibraryScoreResponse, UserResponse } from "./models";
 
 export type ErrorHandler = (response: globalThis.Response) => void | Promise<void>;
 
@@ -606,6 +606,35 @@ export class ApiClient {
 
   /**
    * Returns the raw HTTP response without parsing it or throwing for HTTP errors.
+   * @param id Ensemble identifier
+   */
+  async _adminUpdateEnsembleScoresRaw(id: string, body: UpdateEnsembleScoresRequest, requestOptions?: RequestOptions): Promise<Response> {
+    const path = `/api/admin/ensembles/${id}/scores`;
+    const query = this.mergeQuery(undefined, requestOptions);
+    const headers = this.createHeaders();
+    headers.set("Content-Type", "application/json");
+    const mergedHeaders = this.mergeHeaders(headers, requestOptions);
+    const requestInit = this.createRequestInit(requestOptions);
+    requestInit.method = "PATCH";
+    if (mergedHeaders) { requestInit.headers = mergedHeaders; }
+    requestInit.body = JSON.stringify(body);
+    const response = await this.fetchFn(this.buildUrl(path, query), requestInit);
+    return response;
+  }
+
+  /**
+   * @param id Ensemble identifier
+   */
+  async adminUpdateEnsembleScores(id: string, body: UpdateEnsembleScoresRequest, requestOptions?: RequestOptions): Promise<unknown> {
+    const response = await this._adminUpdateEnsembleScoresRaw(id, body, requestOptions);
+    await this.handleError(response, requestOptions);
+    return await this.parseResponse<unknown>(response, undefined, requestOptions);
+  }
+
+
+
+  /**
+   * Returns the raw HTTP response without parsing it or throwing for HTTP errors.
    * @param id Music identifier
    */
   async _adminUpdateMusicRaw(id: string, body: AdminUpdateMusicMultipartRequest, requestOptions?: RequestOptions): Promise<Response> {
@@ -750,6 +779,35 @@ export class ApiClient {
 
 
 
+  /**
+   * Returns the raw HTTP response without parsing it or throwing for HTTP errors.
+   * @param accessKey Public score token or public id
+   */
+  async _createPublicMusicAnnotationRaw(accessKey: string, body: CreateScoreAnnotationRequest, requestOptions?: RequestOptions): Promise<Response> {
+    const path = `/api/public/${accessKey}/annotations`;
+    const query = this.mergeQuery(undefined, requestOptions);
+    const headers = this.createHeaders();
+    headers.set("Content-Type", "application/json");
+    const mergedHeaders = this.mergeHeaders(headers, requestOptions);
+    const requestInit = this.createRequestInit(requestOptions);
+    requestInit.method = "POST";
+    if (mergedHeaders) { requestInit.headers = mergedHeaders; }
+    requestInit.body = JSON.stringify(body);
+    const response = await this.fetchFn(this.buildUrl(path, query), requestInit);
+    return response;
+  }
+
+  /**
+   * @param accessKey Public score token or public id
+   */
+  async createPublicMusicAnnotation(accessKey: string, body: CreateScoreAnnotationRequest, requestOptions?: RequestOptions): Promise<ScoreAnnotationResponse> {
+    const response = await this._createPublicMusicAnnotationRaw(accessKey, body, requestOptions);
+    await this.handleError(response, requestOptions);
+    return await this.parseResponse<ScoreAnnotationResponse>(response, undefined, requestOptions);
+  }
+
+
+
   async _currentUserRaw(body?: unknown, requestOptions?: RequestOptions): Promise<Response> {
     const path = `/api/me`;
     const query = this.mergeQuery(undefined, requestOptions);
@@ -865,6 +923,32 @@ export class ApiClient {
     const response = await this._publicMusicRaw(accessKey, body, requestOptions);
     await this.handleError(response, requestOptions);
     return await this.parseResponse<PublicMusicResponse>(response, undefined, requestOptions);
+  }
+
+
+
+  /**
+   * Returns the raw HTTP response without parsing it or throwing for HTTP errors.
+   * @param accessKey Public score token or public id
+   */
+  async _publicMusicAnnotationsRaw(accessKey: string, body?: unknown, requestOptions?: RequestOptions): Promise<Response> {
+    const path = `/api/public/${accessKey}/annotations`;
+    const query = this.mergeQuery(undefined, requestOptions);
+    const mergedHeaders = this.mergeHeaders(undefined, requestOptions);
+    const requestInit = this.createRequestInit(requestOptions);
+    requestInit.method = "GET";
+    if (mergedHeaders) { requestInit.headers = mergedHeaders; }
+    const response = await this.fetchFn(this.buildUrl(path, query), requestInit);
+    return response;
+  }
+
+  /**
+   * @param accessKey Public score token or public id
+   */
+  async publicMusicAnnotations(accessKey: string, body?: unknown, requestOptions?: RequestOptions): Promise<ScoreAnnotationListResponse> {
+    const response = await this._publicMusicAnnotationsRaw(accessKey, body, requestOptions);
+    await this.handleError(response, requestOptions);
+    return await this.parseResponse<ScoreAnnotationListResponse>(response, undefined, requestOptions);
   }
 
 
@@ -995,61 +1079,6 @@ export class ApiClient {
     const response = await this._publicMusicMusicxmlRaw(accessKey, body, requestOptions);
     await this.handleError(response, requestOptions);
     return await this.parseResponse<unknown>(response, undefined, requestOptions);
-  }
-
-
-
-  /**
-   * Returns the raw HTTP response without parsing it or throwing for HTTP errors.
-   * @param accessKey Public score token or public id
-   */
-  async _publicMusicAnnotationsRaw(accessKey: string, body?: unknown, requestOptions?: RequestOptions): Promise<Response> {
-    const path = `/api/public/${accessKey}/annotations`;
-    const query = this.mergeQuery(undefined, requestOptions);
-    const mergedHeaders = this.mergeHeaders(undefined, requestOptions);
-    const requestInit = this.createRequestInit(requestOptions);
-    requestInit.method = "GET";
-    if (mergedHeaders) { requestInit.headers = mergedHeaders; }
-    const response = await this.fetchFn(this.buildUrl(path, query), requestInit);
-    return response;
-  }
-
-  /**
-   * @param accessKey Public score token or public id
-   */
-  async publicMusicAnnotations(accessKey: string, body?: unknown, requestOptions?: RequestOptions): Promise<ScoreAnnotationListResponse> {
-    const response = await this._publicMusicAnnotationsRaw(accessKey, body, requestOptions);
-    await this.handleError(response, requestOptions);
-    return await this.parseResponse<ScoreAnnotationListResponse>(response, undefined, requestOptions);
-  }
-
-
-
-  /**
-   * Returns the raw HTTP response without parsing it or throwing for HTTP errors.
-   * @param accessKey Public score token or public id
-   */
-  async _createPublicMusicAnnotationRaw(accessKey: string, body: CreateScoreAnnotationRequest, requestOptions?: RequestOptions): Promise<Response> {
-    const path = `/api/public/${accessKey}/annotations`;
-    const query = this.mergeQuery(undefined, requestOptions);
-    const headers = this.createHeaders();
-    headers.set("Content-Type", "application/json");
-    const mergedHeaders = this.mergeHeaders(headers, requestOptions);
-    const requestInit = this.createRequestInit(requestOptions);
-    requestInit.method = "POST";
-    if (mergedHeaders) { requestInit.headers = mergedHeaders; }
-    requestInit.body = JSON.stringify(body);
-    const response = await this.fetchFn(this.buildUrl(path, query), requestInit);
-    return response;
-  }
-
-  /**
-   * @param accessKey Public score token or public id
-   */
-  async createPublicMusicAnnotation(accessKey: string, body: CreateScoreAnnotationRequest, requestOptions?: RequestOptions): Promise<ScoreAnnotationResponse> {
-    const response = await this._createPublicMusicAnnotationRaw(accessKey, body, requestOptions);
-    await this.handleError(response, requestOptions);
-    return await this.parseResponse<ScoreAnnotationResponse>(response, undefined, requestOptions);
   }
 
 

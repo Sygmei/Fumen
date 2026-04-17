@@ -145,6 +145,16 @@
         flex-shrink: 0;
     }
 
+    :global(.admin-record-actions-compact) {
+        width: auto;
+        min-width: 0;
+        grid-template-columns: none;
+        grid-auto-flow: column;
+        grid-auto-columns: 34px;
+        justify-content: end;
+        justify-self: end;
+    }
+
     @media (max-width: 760px) {
         :global(.admin-record-card) {
             grid-template-columns: 1fr;
@@ -169,6 +179,15 @@
         :global(.admin-record-actions .button) {
             width: 100%;
             min-width: 0;
+        }
+
+        :global(.admin-record-actions-compact) {
+            width: 100%;
+            min-width: 0;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-auto-flow: row;
+            grid-auto-columns: auto;
+            justify-self: stretch;
         }
     }
 </style>

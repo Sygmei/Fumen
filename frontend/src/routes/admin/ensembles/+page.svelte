@@ -1,6 +1,7 @@
 <script lang="ts">
     import type {
         AdminEnsembleResponse as Ensemble,
+        EnsembleMemberResponse,
     } from "$backend/models";
     import { authenticatedApiClient } from "$lib/auth-client";
     import AdminEnsembleCard from "$components/admin/AdminEnsembleCard.svelte";
@@ -28,7 +29,9 @@
     const adminState = getAdminStateContext();
 
     let ensembleSearchQuery = $state("");
-    let deletingEnsembleFor = $state("");
+    let creatingEnsembleIds = $state<string[]>([]);
+    let savingEnsembleIds = $state<string[]>([]);
+    let deletingEnsembleIds = $state<string[]>([]);
 
     const filteredEnsembles = $derived.by(() => {
         const query = ensembleSearchQuery.trim().toLowerCase();
@@ -51,23 +54,46 @@
         });
     }
 
+    function buildPendingEnsemble(id: string, name: string): Ensemble {
+        return {
+            id,
+            name,
+            created_at: new Date().toISOString(),
+            created_by_user_id: appShell.currentUser?.id ?? null,
+            members: [],
+            score_count: 0,
+        };
+    }
+
+    function findEnsembleById(ensembleId: string) {
+        return adminState.ensembles.find((item) => item.id === ensembleId) ?? null;
+    }
+
     async function handleCreateEnsemble(name: string) {
+        const optimisticId = `creating-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const optimisticEnsemble = buildPendingEnsemble(optimisticId, name);
+        creatingEnsembleIds = [...creatingEnsembleIds, optimisticId];
+        adminState.addEnsemble(optimisticEnsemble);
+
         try {
             const ensemble = await authenticatedApiClient.adminCreateEnsemble({ name });
+            adminState.removeEnsemble(optimisticId);
             adminState.addEnsemble(ensemble);
             adminState.setSuccess(`Ensemble ${ensemble.name} created.`);
         } catch (error) {
+            adminState.removeEnsemble(optimisticId);
             const message =
                 error instanceof Error
                     ? error.message
                     : "Unable to create ensemble";
             adminState.setError(message);
-            throw error instanceof Error ? error : new Error(message);
+        } finally {
+            creatingEnsembleIds = creatingEnsembleIds.filter((id) => id !== optimisticId);
         }
     }
 
     async function deleteEnsembleAccount(ensemble: Ensemble) {
-        deletingEnsembleFor = ensemble.id;
+        deletingEnsembleIds = [...deletingEnsembleIds, ensemble.id];
         try {
             await authenticatedApiClient.adminDeleteEnsemble(ensemble.id);
             await adminState.refresh();
@@ -79,7 +105,7 @@
                     : "Unable to delete ensemble",
             );
         } finally {
-            deletingEnsembleFor = "";
+            deletingEnsembleIds = deletingEnsembleIds.filter((id) => id !== ensemble.id);
         }
     }
 
@@ -89,7 +115,9 @@
             message: `Delete ensemble ${ensemble.name}?`,
             confirmText: "Delete",
             variant: "danger",
-            onConfirm: () => deleteEnsembleAccount(ensemble),
+            onConfirm: () => {
+                void deleteEnsembleAccount(ensemble);
+            },
         });
     }
 
@@ -107,22 +135,34 @@
         ensembleId: string,
         members: EnsembleMemberAssignment[],
     ) {
+        const originalEnsemble = findEnsembleById(ensembleId);
+        if (!originalEnsemble) return;
+
+        const optimisticMembers: EnsembleMemberResponse[] = members.map((member) => ({
+            user_id: member.userId,
+            role: member.role,
+        }));
+        savingEnsembleIds = [...savingEnsembleIds, ensembleId];
+        adminState.updateEnsemble({
+            ...originalEnsemble,
+            members: optimisticMembers,
+        });
+
         try {
             await authenticatedApiClient.adminUpdateEnsembleMembers(ensembleId, {
-                members: members.map((member) => ({
-                    user_id: member.userId,
-                    role: member.role,
-                })),
+                members: optimisticMembers,
             });
             await adminState.refresh();
             adminState.setSuccess("Ensemble members updated.");
         } catch (error) {
+            adminState.updateEnsemble(originalEnsemble);
             const message =
                 error instanceof Error
                     ? error.message
                     : "Unable to update ensemble members";
             adminState.setError(message);
-            throw error instanceof Error ? error : new Error(message);
+        } finally {
+            savingEnsembleIds = savingEnsembleIds.filter((id) => id !== ensembleId);
         }
     }
 
@@ -135,19 +175,33 @@
     }
 
     async function saveEnsembleScores(ensembleId: string, musicIds: string[]) {
+        const originalEnsemble = findEnsembleById(ensembleId);
+        if (!originalEnsemble) return;
+
+        const uniqueMusicIds = [...new Set(musicIds)].sort((left, right) =>
+            left.localeCompare(right),
+        );
+        savingEnsembleIds = [...savingEnsembleIds, ensembleId];
+        adminState.updateEnsemble({
+            ...originalEnsemble,
+            score_count: uniqueMusicIds.length,
+        });
+
         try {
-            await authenticatedApiClient.adminUpdateMusicEnsembles(ensembleId, {
-                ensemble_ids: musicIds,
+            await authenticatedApiClient.adminUpdateEnsembleScores(ensembleId, {
+                music_ids: uniqueMusicIds,
             });
             await adminState.refresh();
             adminState.setSuccess("Ensemble scores updated.");
         } catch (error) {
+            adminState.updateEnsemble(originalEnsemble);
             const message =
                 error instanceof Error
                     ? error.message
                     : "Failed to update scores";
             adminState.setError(message);
-            throw error instanceof Error ? error : new Error(message);
+        } finally {
+            savingEnsembleIds = savingEnsembleIds.filter((id) => id !== ensembleId);
         }
     }
 </script>
@@ -213,7 +267,9 @@
                         {#each filteredEnsembles as ensemble}
                             <AdminEnsembleCard
                                 {ensemble}
-                                deleting={deletingEnsembleFor === ensemble.id}
+                                creating={creatingEnsembleIds.includes(ensemble.id)}
+                                saving={savingEnsembleIds.includes(ensemble.id)}
+                                deleting={deletingEnsembleIds.includes(ensemble.id)}
                                 canManageScores={canManageEnsembleScores(
                                     ensemble,
                                     appShell.currentUser,

@@ -19,6 +19,7 @@ diesel::table! {
     musics (id) {
         id -> Text,
         title -> Text,
+        subtitle -> Nullable<Text>,
         icon -> Nullable<Text>,
         icon_image_key -> Nullable<Text>,
         filename -> Text,
@@ -56,8 +57,9 @@ diesel::table! {
         id -> Text,
         music_id -> Text,
         user_id -> Text,
-        step_index -> BigInt,
-        seconds -> Double,
+        bar_number -> BigInt,
+        beat_number -> BigInt,
+        instrument -> Text,
         comment -> Text,
         created_at -> Text,
     }

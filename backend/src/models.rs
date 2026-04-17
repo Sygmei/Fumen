@@ -3,7 +3,7 @@ use crate::schema::{
     user_login_links, user_music_track_playtime, user_sessions, users,
 };
 use diesel::QueryableByName;
-use diesel::sql_types::{BigInt, Bool, Double, Nullable, Text};
+use diesel::sql_types::{BigInt, Bool, Nullable, Text};
 use diesel::{AsChangeset, Associations, Identifiable, Insertable, Queryable, Selectable};
 
 #[derive(Clone, Debug, Queryable, QueryableByName, Selectable, Identifiable)]
@@ -13,6 +13,8 @@ pub struct MusicRecord {
     pub id: String,
     #[diesel(sql_type = Text)]
     pub title: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub subtitle: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     pub icon: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -169,9 +171,11 @@ pub struct ScoreAnnotationRecord {
     #[diesel(sql_type = Text)]
     pub user_id: String,
     #[diesel(sql_type = BigInt)]
-    pub step_index: i64,
-    #[diesel(sql_type = Double)]
-    pub seconds: f64,
+    pub bar_number: i64,
+    #[diesel(sql_type = BigInt)]
+    pub beat_number: i64,
+    #[diesel(sql_type = Text)]
+    pub instrument: String,
     #[diesel(sql_type = Text)]
     pub comment: String,
     #[diesel(sql_type = Text)]
@@ -271,6 +275,7 @@ pub struct NewStem<'a> {
 pub struct NewMusic<'a> {
     pub id: &'a str,
     pub title: &'a str,
+    pub subtitle: Option<&'a str>,
     pub icon: Option<&'a str>,
     pub icon_image_key: Option<&'a str>,
     pub filename: &'a str,
@@ -301,8 +306,9 @@ pub struct NewScoreAnnotation<'a> {
     pub id: &'a str,
     pub music_id: &'a str,
     pub user_id: &'a str,
-    pub step_index: i64,
-    pub seconds: f64,
+    pub bar_number: i64,
+    pub beat_number: i64,
+    pub instrument: &'a str,
     pub comment: &'a str,
     pub created_at: &'a str,
 }
@@ -366,6 +372,7 @@ pub struct MarkMusicProcessingFailed<'a> {
 #[diesel(table_name = musics)]
 pub struct UpdateMusicMetadata<'a> {
     pub title: &'a str,
+    pub subtitle: Option<&'a str>,
     pub public_id: Option<&'a str>,
     pub icon: Option<&'a str>,
     pub icon_image_key: Option<&'a str>,

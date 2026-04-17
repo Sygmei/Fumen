@@ -23,7 +23,7 @@
         user: AppUser;
         currentUser: AppUser;
         roleOptions: GlobalRoleOption[];
-        onSave: (draft: UserEditDraft) => Promise<void>;
+        onSave: (draft: UserEditDraft) => void | Promise<void>;
         modalId?: string;
     } = $props();
 
@@ -36,7 +36,6 @@
     let avatarFile = $state<File | null>(null);
     let avatarPreview = $state<string | null>(user.avatar_url ?? null);
     let clearAvatar = $state(false);
-    let saving = $state(false);
     let errorMsg = $state("");
 
     const canEditRole = $derived(
@@ -70,24 +69,16 @@
         avatarPreview = null;
     }
 
-    async function handleSave() {
-        saving = true;
+    function handleSave() {
         errorMsg = "";
-        try {
-            await onSave({
-                displayName: displayName.trim(),
-                role,
-                avatarFile,
-                avatarPreview,
-                clearAvatar,
-            });
-            closeModal();
-        } catch (error) {
-            errorMsg =
-                error instanceof Error ? error.message : "Failed to save.";
-        } finally {
-            saving = false;
-        }
+        void onSave({
+            displayName: displayName.trim(),
+            role,
+            avatarFile,
+            avatarPreview,
+            clearAvatar,
+        });
+        closeModal();
     }
 </script>
 
@@ -96,7 +87,7 @@
         class="edit-user-form"
         onsubmit={(event) => {
             event.preventDefault();
-            void handleSave();
+            handleSave();
         }}
     >
         <div class="edit-user-avatar-row">
@@ -170,17 +161,15 @@
             class="button ghost"
             type="button"
             onclick={closeModal}
-            disabled={saving}
         >
             Cancel
         </button>
         <button
             class="button"
             type="button"
-            onclick={() => void handleSave()}
-            disabled={saving}
+            onclick={handleSave}
         >
-            {saving ? "Saving..." : "Save"}
+            Save
         </button>
     </div>
 {/snippet}
@@ -191,6 +180,5 @@
     size="medium"
     {children}
     {footer}
-    canClose={!saving}
     {modalId}
 />

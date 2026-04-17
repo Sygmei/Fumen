@@ -9,12 +9,13 @@
         Pencil,
         Info,
         Download,
-        ChevronDown,
         Music,
     } from "@lucide/svelte";
 
     let {
         music,
+        creating = false,
+        saving = false,
         processing = false,
         downloadOpen = false,
         deleting = false,
@@ -30,6 +31,8 @@
         onCloseDownloadMenu,
     }: {
         music: AdminMusic;
+        creating?: boolean;
+        saving?: boolean;
         processing?: boolean;
         downloadOpen?: boolean;
         deleting?: boolean;
@@ -44,25 +47,58 @@
         onDelete: () => void;
         onCloseDownloadMenu: () => void;
     } = $props();
+
+    const cardState = $derived(
+        deleting ? "deleting" : saving ? "saving" : creating ? "creating" : "",
+    );
+    const actionsDisabled = $derived(creating || saving || deleting);
 </script>
 
 {#snippet body()}
     <div class="admin-score-header">
-        <h3 class="admin-score-title">
+        <div class="admin-score-main">
             <ScoreIcon
                 variant="admin"
                 icon={music.icon}
                 imageUrl={music.icon_image_url}
             />
-            <a
-                href={music.public_url}
-                target="_blank"
-                rel="noreferrer">{music.title}</a
-            >
-            {#if processing}
-                <span class="status-pill admin-score-processing-pill">Processing</span>
+            <h3 class="admin-score-title">
+                {#if creating || !music.public_url}
+                    <span class="admin-score-copy">
+                        <span class="admin-score-primary">{music.title}</span>
+                        {#if music.subtitle}
+                            <span class="admin-score-subtitle">{music.subtitle}</span>
+                        {/if}
+                    </span>
+                {:else}
+                    <a
+                        class="admin-score-copy"
+                        href={music.public_url}
+                        target="_blank"
+                        rel="noreferrer"
+                    >
+                        <span class="admin-score-primary">{music.title}</span>
+                        {#if music.subtitle}
+                            <span class="admin-score-subtitle">{music.subtitle}</span>
+                        {/if}
+                    </a>
+                {/if}
+            </h3>
+            {#if creating || saving || deleting || processing}
+                <div class="admin-score-badges">
+                    {#if creating}
+                        <span class="status-pill admin-user-creating-pill">CREATING</span>
+                    {:else if saving}
+                        <span class="status-pill admin-user-saving-pill">SAVING</span>
+                    {:else if deleting}
+                        <span class="status-pill admin-user-deleting-pill">DELETING</span>
+                    {/if}
+                    {#if processing}
+                        <span class="status-pill admin-score-processing-pill">Processing</span>
+                    {/if}
+                </div>
             {/if}
-        </h3>
+        </div>
         <div
             class="download-menu admin-score-download-menu"
             class:open={downloadOpen}
@@ -70,6 +106,7 @@
             <button
                 class="download-menu-btn admin-score-download-btn"
                 type="button"
+                disabled={actionsDisabled}
                 onclick={onToggleDownloadMenu}
                 aria-label={`Download files for ${music.title}`}
                 title="Downloads"
@@ -77,12 +114,6 @@
                 aria-expanded={downloadOpen}
             >
                 <Download size={15} strokeWidth={2.2} />
-                <span>Download</span>
-                <ChevronDown
-                    class="chevron"
-                    size={12}
-                    strokeWidth={2.5}
-                />
             </button>
             {#if downloadOpen}
                 <div class="download-dropdown">
@@ -128,6 +159,7 @@
             <button
                 class="button secondary admin-user-action"
                 type="button"
+                disabled={actionsDisabled}
                 onclick={onManageEnsembles}
                 aria-label={`Manage ensembles for ${music.title}`}
                 title="Manage ensembles"
@@ -142,6 +174,7 @@
             <button
                 class="button secondary admin-user-action"
                 type="button"
+                disabled={actionsDisabled}
                 onclick={onEdit}
                 aria-label={`Edit metadata for ${music.title}`}
                 title="Edit metadata"
@@ -152,6 +185,7 @@
         <button
             class="button secondary admin-user-action"
             type="button"
+            disabled={actionsDisabled}
             onclick={onShowQr}
             aria-label={`Share QR for ${music.title}`}
             title="Share QR code"
@@ -161,6 +195,7 @@
         <button
             class="button secondary admin-user-action"
             type="button"
+            disabled={actionsDisabled}
             onclick={onShowInfo}
             aria-label={`View metadata for ${music.title}`}
             title="View metadata"
@@ -173,7 +208,7 @@
                 type="button"
                 aria-label={`Delete ${music.title}`}
                 title="Delete score"
-                disabled={deleting}
+                disabled={actionsDisabled}
                 onclick={onDelete}
             >
                 <Trash2 size={16} aria-hidden="true" />
@@ -183,7 +218,7 @@
 {/snippet}
 
 <AdminCard
-    cardClass={`admin-score-card${downloadOpen ? " download-open" : ""}${processing ? " processing" : ""}`}
+    cardClass={`admin-score-card${downloadOpen ? " download-open" : ""}${processing ? " processing" : ""}${cardState ? ` is-${cardState}` : ""}`}
     {body}
     {footer}
     footerClass="admin-score-footer"

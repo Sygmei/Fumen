@@ -10,6 +10,8 @@ import CredentialModal from "./CredentialModal.svelte";
 import ScannerModal from "./ScannerModal.svelte";
 import { setActiveModal, type ModalSettings } from "./modalState";
 
+export type AnnotationDefaultPlacement = "above" | "below";
+
 export interface ConfirmOptions {
     title?: string;
     message?: string;
@@ -39,8 +41,12 @@ export interface AccountModalOptions {
 export interface AppConfigModalOptions {
     enableCountIn: boolean;
     countInMeasures: number;
+    annotationDefaultPlacement: AnnotationDefaultPlacement;
     onToggleCountIn: (value: boolean) => void;
     onChangeCountInMeasures: (value: number) => void;
+    onChangeAnnotationDefaultPlacement: (
+        value: AnnotationDefaultPlacement,
+    ) => void;
 }
 
 export interface AnnotationModalOptions {
@@ -113,8 +119,11 @@ export function showAppConfigModal(options: AppConfigModalOptions) {
     showModal(AppConfigModal, {
         enableCountIn: options.enableCountIn,
         countInMeasures: options.countInMeasures,
+        annotationDefaultPlacement: options.annotationDefaultPlacement,
         onToggleCountIn: options.onToggleCountIn,
         onChangeCountInMeasures: options.onChangeCountInMeasures,
+        onChangeAnnotationDefaultPlacement:
+            options.onChangeAnnotationDefaultPlacement,
     });
 }
 

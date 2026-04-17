@@ -35,6 +35,11 @@ const DEFAULT_OTLP_HTTP_TRACES_URL: &str = "http://127.0.0.1:4318/v1/traces";
 const TRACER_NAME: &str = "fumen-backend";
 pub(crate) const TRACE_ID_HEADER_NAME: HeaderName = HeaderName::from_static("x-trace-id");
 
+#[derive(Clone, Debug)]
+pub(crate) struct ServerErrorContext {
+    pub(crate) message: String,
+}
+
 pub(crate) struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
 }
@@ -163,17 +168,23 @@ pub(crate) fn on_http_response(response: &Response<Body>, latency: Duration, spa
     );
 }
 
-pub(crate) fn on_http_failure(
-    failure_classification: ServerErrorsFailureClass,
-    latency: Duration,
-    span: &Span,
-) {
-    let failure = format!("{failure_classification:?}");
+pub(crate) fn on_http_failure(response: &Response<Body>, latency: Duration, span: &Span) {
+    let failure = format!("{:?}", ServerErrorsFailureClass::StatusCode(response.status()));
+    let trace_id = span.context().span().span_context().trace_id().to_string();
+    let message = response
+        .extensions()
+        .get::<ServerErrorContext>()
+        .map(|details| details.message.as_str())
+        .unwrap_or("no AppError details attached");
+
     span.record("error.type", failure.as_str());
     tracing::error!(
         parent: span,
         latency_ms = latency.as_millis() as u64,
-        error = %failure,
+        status = response.status().as_u16(),
+        trace_id = %trace_id,
+        error.type = %failure,
+        error.message = %message,
         "http request failed"
     );
 }
@@ -206,7 +217,7 @@ pub(crate) async fn trace_operation_request(
     let status = response.status();
 
     if status.is_server_error() {
-        on_http_failure(ServerErrorsFailureClass::StatusCode(status), latency, &span);
+        on_http_failure(&response, latency, &span);
     } else {
         on_http_response(&response, latency, &span);
     }

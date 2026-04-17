@@ -36,7 +36,7 @@
         onSave: (
             ensembleId: string,
             members: EnsembleMemberAssignment[],
-        ) => Promise<void>;
+        ) => void | Promise<void>;
         modalId?: string;
     } = $props();
 
@@ -49,7 +49,6 @@
         ) as Record<string, ManagedMemberDraftRole>,
     );
     let managedMemberDraftRoles = $state({ ...originalManagedMemberRoles });
-    let saving = $state(false);
     let errorMsg = $state("");
 
     function memberRoleLabel(role: EnsembleRole) {
@@ -194,33 +193,23 @@
         });
     }
 
-    async function handleSave() {
+    function handleSave() {
         if (!hasManagedMemberChanges()) {
             closeModal();
             return;
         }
 
-        saving = true;
         errorMsg = "";
-        try {
-            const members = Object.entries(managedMemberDraftRoles)
-                .filter(([, role]) => role !== "none")
-                .map(([userId, role]) => ({
-                    userId,
-                    role: role as EnsembleRole,
-                }))
-                .sort((left, right) => left.userId.localeCompare(right.userId));
+        const members = Object.entries(managedMemberDraftRoles)
+            .filter(([, role]) => role !== "none")
+            .map(([userId, role]) => ({
+                userId,
+                role: role as EnsembleRole,
+            }))
+            .sort((left, right) => left.userId.localeCompare(right.userId));
 
-            await onSave(ensemble.id, members);
-            closeModal();
-        } catch (error) {
-            errorMsg =
-                error instanceof Error
-                    ? error.message
-                    : "Unable to update ensemble members.";
-        } finally {
-            saving = false;
-        }
+        void onSave(ensemble.id, members);
+        closeModal();
     }
 
     function handleAddUser(userId: string) {
@@ -236,7 +225,6 @@
         <button
             class="button ghost"
             type="button"
-            disabled={saving}
             onclick={closeModal}
         >
             Cancel
@@ -244,10 +232,10 @@
         <button
             class="button"
             type="button"
-            disabled={saving || !hasManagedMemberChanges()}
-            onclick={() => void handleSave()}
+            disabled={!hasManagedMemberChanges()}
+            onclick={handleSave}
         >
-            {saving ? "Saving..." : "Save changes"}
+            Save changes
         </button>
     </div>
 {/snippet}
@@ -258,10 +246,89 @@
     title="Members"
     subtitle={ensemble.name}
     {footer}
-    canClose={!saving}
     {modalId}
 >
     <div class="admin-split-pane">
+        <section class="admin-split-column">
+            <div class="admin-split-header">
+                <div class="admin-split-header-main">
+                    <h4>Add members</h4>
+                    <label class="field admin-user-search admin-split-search">
+                        <span class="sr-only">Search available users</span>
+                        <div class="admin-user-search-input-wrap">
+                            <Search size={15} aria-hidden="true" />
+                            <input
+                                bind:value={addMemberSearchQuery}
+                                placeholder="Search available users"
+                            />
+                        </div>
+                    </label>
+                    <span class="admin-user-role-pill">
+                        {filteredAvailableEnsembleUsers.length}
+                    </span>
+                </div>
+            </div>
+            <div class="admin-inline-list">
+                {#if filteredAvailableEnsembleUsers.length === 0}
+                    <p class="hint">No available users.</p>
+                {:else}
+                    {#each filteredAvailableEnsembleUsers as user}
+                        <div class="admin-inline-row">
+                            <div class="admin-inline-copy">
+                                <strong>{user.username}</strong>
+                                <span class="admin-user-role-pill">
+                                    {user.role}
+                                </span>
+                            </div>
+                            <div class="admin-inline-actions">
+                                <button
+                                    class="button secondary admin-inline-role-btn admin-inline-role-btn-mobile"
+                                    type="button"
+                                    aria-label={`Change role for ${user.username}`}
+                                    title={`Change role for ${user.username}`}
+                                    onclick={() =>
+                                        openRolePicker(
+                                            "invite",
+                                            user,
+                                            inviteRoleForUser(user),
+                                        )}
+                                >
+                                    <UserCog size={15} aria-hidden="true" />
+                                </button>
+                                <div
+                                    class="admin-member-role-select admin-inline-role-select-desktop"
+                                >
+                                    <CustomSelect
+                                        value={inviteRoleForUser(user)}
+                                        options={ensembleRoleOptionsForUser(
+                                            user,
+                                        )}
+                                        compact={true}
+                                        showDescriptionInTrigger={false}
+                                        onValueChange={(nextRole) => {
+                                            inviteRoles = {
+                                                ...inviteRoles,
+                                                [user.id]:
+                                                    nextRole as EnsembleRole,
+                                            };
+                                        }}
+                                    />
+                                </div>
+                                <button
+                                    class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
+                                    type="button"
+                                    aria-label={`Add ${user.username}`}
+                                    title={`Add ${user.username}`}
+                                    onclick={() => handleAddUser(user.id)}
+                                >
+                                    <span aria-hidden="true">+</span>
+                                </button>
+                            </div>
+                        </div>
+                    {/each}
+                {/if}
+            </div>
+        </section>
         <section class="admin-split-column">
             <div class="admin-split-header">
                 <div class="admin-split-header-main">
@@ -346,86 +413,6 @@
                                 {:else}
                                     <span class="hint">Locked</span>
                                 {/if}
-                            </div>
-                        </div>
-                    {/each}
-                {/if}
-            </div>
-        </section>
-        <section class="admin-split-column">
-            <div class="admin-split-header">
-                <div class="admin-split-header-main">
-                    <h4>Add members</h4>
-                    <label class="field admin-user-search admin-split-search">
-                        <span class="sr-only">Search available users</span>
-                        <div class="admin-user-search-input-wrap">
-                            <Search size={15} aria-hidden="true" />
-                            <input
-                                bind:value={addMemberSearchQuery}
-                                placeholder="Search available users"
-                            />
-                        </div>
-                    </label>
-                    <span class="admin-user-role-pill">
-                        {filteredAvailableEnsembleUsers.length}
-                    </span>
-                </div>
-            </div>
-            <div class="admin-inline-list">
-                {#if filteredAvailableEnsembleUsers.length === 0}
-                    <p class="hint">No available users.</p>
-                {:else}
-                    {#each filteredAvailableEnsembleUsers as user}
-                        <div class="admin-inline-row">
-                            <div class="admin-inline-copy">
-                                <strong>{user.username}</strong>
-                                <span class="admin-user-role-pill">
-                                    {user.role}
-                                </span>
-                            </div>
-                            <div class="admin-inline-actions">
-                                <button
-                                    class="button secondary admin-inline-role-btn admin-inline-role-btn-mobile"
-                                    type="button"
-                                    aria-label={`Change role for ${user.username}`}
-                                    title={`Change role for ${user.username}`}
-                                    onclick={() =>
-                                        openRolePicker(
-                                            "invite",
-                                            user,
-                                            inviteRoleForUser(user),
-                                        )}
-                                >
-                                    <UserCog size={15} aria-hidden="true" />
-                                </button>
-                                <div
-                                    class="admin-member-role-select admin-inline-role-select-desktop"
-                                >
-                                    <CustomSelect
-                                        value={inviteRoleForUser(user)}
-                                        options={ensembleRoleOptionsForUser(
-                                            user,
-                                        )}
-                                        compact={true}
-                                        showDescriptionInTrigger={false}
-                                        onValueChange={(nextRole) => {
-                                            inviteRoles = {
-                                                ...inviteRoles,
-                                                [user.id]:
-                                                    nextRole as EnsembleRole,
-                                            };
-                                        }}
-                                    />
-                                </div>
-                                <button
-                                    class="button secondary admin-inline-icon-btn admin-inline-symbol-btn"
-                                    type="button"
-                                    aria-label={`Add ${user.username}`}
-                                    title={`Add ${user.username}`}
-                                    onclick={() => handleAddUser(user.id)}
-                                >
-                                    <span aria-hidden="true">+</span>
-                                </button>
                             </div>
                         </div>
                     {/each}

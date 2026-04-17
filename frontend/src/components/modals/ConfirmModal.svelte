@@ -1,5 +1,6 @@
 <script lang="ts">
     import BaseModal from "./BaseModal.svelte";
+    import { closeModal } from "./modalState";
 
     let {
         title = "Confirm Action",
@@ -26,6 +27,22 @@
     const confirmButtonClass = $derived(
         `button${variant === "danger" || variant === "warning" ? " danger" : ""}`,
     );
+
+    async function handleCancel() {
+        try {
+            await onCancel();
+        } finally {
+            closeModal();
+        }
+    }
+
+    async function handleConfirm() {
+        try {
+            await onConfirm();
+        } finally {
+            closeModal();
+        }
+    }
 </script>
 
 {#snippet children()}
@@ -40,7 +57,7 @@
             class="button ghost"
             type="button"
             disabled={busy}
-            onclick={() => void onCancel()}
+            onclick={() => void handleCancel()}
         >
             {cancelText}
         </button>
@@ -48,7 +65,7 @@
             class={confirmButtonClass}
             type="button"
             disabled={busy}
-            onclick={() => void onConfirm()}
+            onclick={() => void handleConfirm()}
         >
             {busy ? "Please wait..." : confirmText}
         </button>

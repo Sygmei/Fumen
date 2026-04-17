@@ -1,19 +1,27 @@
 <script lang="ts">
-    import { Music2 } from "@lucide/svelte";
+    import { MessageSquare, Music2 } from "@lucide/svelte";
     import BaseModal from "./BaseModal.svelte";
+
+    type AnnotationDefaultPlacement = "above" | "below";
 
     let {
         enableCountIn,
         countInMeasures,
+        annotationDefaultPlacement = "below",
         onToggleCountIn,
         onChangeCountInMeasures,
+        onChangeAnnotationDefaultPlacement,
         onClose = () => {},
         modalId,
     }: {
         enableCountIn: boolean;
         countInMeasures: number;
+        annotationDefaultPlacement?: AnnotationDefaultPlacement;
         onToggleCountIn: (value: boolean) => void;
         onChangeCountInMeasures: (value: number) => void;
+        onChangeAnnotationDefaultPlacement?: (
+            value: AnnotationDefaultPlacement,
+        ) => void;
         onClose?: () => void;
         modalId?: string;
     } = $props();
@@ -21,7 +29,7 @@
 
 <BaseModal
     title="App settings"
-    subtitle="Playback preferences"
+    subtitle="Playback and annotation preferences"
     size="small"
     cardClass="app-config-modal"
     {onClose}
@@ -85,6 +93,42 @@
                         />
                     </label>
                 </div>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2.5 pt-1">
+            <span class="flex items-center justify-center w-8 h-8 border border-(--border-strong) bg-(--surface-alt) text-(--accent)">
+                <MessageSquare size={16} aria-hidden="true" />
+            </span>
+            <div class="grid gap-0.5 min-w-0">
+                <strong class="text-sm">Annotations</strong>
+                <p class="text-sm text-(--text-dim)">
+                    Control the default bubble direction for instruments in the
+                    middle of the score.
+                </p>
+            </div>
+        </div>
+
+        <div class="toggle-grid">
+            <div class="toggle-row">
+                <span class="grid gap-0.5 min-w-0">
+                    <strong>Default annotation position</strong>
+                    <small>
+                        Top two staves always open below the note, bottom two
+                        always open above it.
+                    </small>
+                </span>
+                <select
+                    class="w-full min-w-[14rem] max-w-[18rem] rounded-md border border-(--border-strong) bg-(--surface-alt) px-2.5 py-1.5 text-sm text-(--text) outline-none"
+                    value={annotationDefaultPlacement}
+                    onchange={(event) =>
+                        onChangeAnnotationDefaultPlacement?.(
+                            (event.currentTarget as HTMLSelectElement).value as AnnotationDefaultPlacement,
+                        )}
+                >
+                    <option value="below">Below the staff (arrow on top)</option>
+                    <option value="above">Above the staff (arrow on bottom)</option>
+                </select>
             </div>
         </div>
     </section>

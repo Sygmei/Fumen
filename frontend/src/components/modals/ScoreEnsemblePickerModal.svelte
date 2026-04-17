@@ -25,7 +25,6 @@
 
     let searchQuery = $state("");
     let selectedEnsembleIds = $state([...initialSelectedEnsembleIds]);
-    let saving = $state(false);
     let errorMsg = $state("");
 
     const filteredEnsembles = $derived.by(() =>
@@ -65,20 +64,10 @@
         );
     }
 
-    async function handleApply() {
-        saving = true;
+    function handleApply() {
         errorMsg = "";
-        try {
-            await onApply([...selectedEnsembleIds].sort((a, b) => a.localeCompare(b)));
-            closeModal();
-        } catch (error) {
-            errorMsg =
-                error instanceof Error
-                    ? error.message
-                    : "Unable to save ensembles.";
-        } finally {
-            saving = false;
-        }
+        void onApply([...selectedEnsembleIds].sort((a, b) => a.localeCompare(b)));
+        closeModal();
     }
 </script>
 
@@ -87,7 +76,6 @@
         <button
             class="button ghost"
             type="button"
-            disabled={saving}
             onclick={closeModal}
         >
             Cancel
@@ -95,10 +83,9 @@
         <button
             class="button"
             type="button"
-            disabled={saving}
-            onclick={() => void handleApply()}
+            onclick={handleApply}
         >
-            {saving ? "Saving..." : confirmText}
+            {confirmText}
         </button>
     </div>
 {/snippet}
@@ -109,7 +96,6 @@
     title="Ensembles"
     {subtitle}
     {footer}
-    canClose={!saving}
     {modalId}
 >
     <label class="field admin-user-search">

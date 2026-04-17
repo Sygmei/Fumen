@@ -34,7 +34,9 @@
     const adminState = getAdminStateContext();
 
     let scoreSearchQuery = $state("");
-    let deletingMusicFor = $state("");
+    let creatingMusicIds = $state<string[]>([]);
+    let savingMusicIds = $state<string[]>([]);
+    let deletingMusicIds = $state<string[]>([]);
     let openDownloadMenuFor = $state("");
 
     const filteredMusics = $derived.by(() => {
@@ -46,6 +48,7 @@
         return sorted.filter((music) =>
             [
                 music.title,
+                music.subtitle ?? "",
                 music.filename,
                 music.public_id ?? "",
                 ...music.ensemble_names,
@@ -70,11 +73,69 @@
         });
     }
 
+    function displayTitleForDraft(draft: UploadScoreDraft) {
+        const titled = draft.title.trim();
+        if (titled) return titled;
+
+        const filename = draft.file?.name?.trim() ?? "";
+        return filename.replace(/\.mscz$/i, "") || "Untitled score";
+    }
+
+    function buildPendingMusic(
+        id: string,
+        draft: UploadScoreDraft,
+    ): AdminMusic {
+        const ensembleNames = draft.ensembleIds
+            .map((ensembleId) =>
+                adminState.ensembles.find((ensemble) => ensemble.id === ensembleId)?.name,
+            )
+            .filter((name): name is string => !!name)
+            .sort((left, right) => left.localeCompare(right));
+
+        return {
+            id,
+            title: displayTitleForDraft(draft),
+            subtitle: draft.subtitle.trim() || null,
+            icon: "",
+            icon_image_url: null,
+            filename: draft.file?.name ?? "upload.mscz",
+            content_type: draft.file?.type || "application/octet-stream",
+            audio_status: "processing",
+            audio_error: null,
+            midi_status: "processing",
+            midi_error: null,
+            musicxml_status: "processing",
+            musicxml_error: null,
+            stems_status: "processing",
+            stems_error: null,
+            public_token: "",
+            public_id: draft.publicId.trim() || null,
+            public_url: "",
+            public_id_url: null,
+            download_url: "",
+            midi_download_url: null,
+            quality_profile: draft.qualityProfile,
+            created_at: new Date().toISOString(),
+            stems_total_bytes: 0,
+            ensemble_ids: [...draft.ensembleIds].sort((left, right) =>
+                left.localeCompare(right),
+            ),
+            ensemble_names: ensembleNames,
+            owner_user_id: appShell.currentUser?.id ?? null,
+        };
+    }
+
     async function handleUpload(draft: UploadScoreDraft) {
+        const optimisticId = `creating-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const optimisticMusic = buildPendingMusic(optimisticId, draft);
+        creatingMusicIds = [...creatingMusicIds, optimisticId];
+        adminState.updateMusic(optimisticMusic);
+
         try {
             const payload = {
                 file: draft.file,
                 title: draft.title,
+                subtitle: draft.subtitle,
                 icon: "",
                 icon_file: draft.iconFile ?? undefined,
                 public_id: draft.publicId,
@@ -82,15 +143,18 @@
                 ensemble_id: draft.ensembleIds,
             } as unknown as AdminUploadMusicMultipartRequest;
             const uploaded = await authenticatedApiClient.adminUploadMusic(payload);
+            adminState.removeMusic(optimisticId);
             adminState.updateMusic(uploaded);
             void adminState.refresh();
             adminState.setSuccess(
                 "Upload started. The score will keep processing in the background.",
             );
         } catch (error) {
+            adminState.removeMusic(optimisticId);
             const message = error instanceof Error ? error.message : "Upload failed";
             adminState.setError(message);
-            throw error instanceof Error ? error : new Error(message);
+        } finally {
+            creatingMusicIds = creatingMusicIds.filter((id) => id !== optimisticId);
         }
     }
 
@@ -117,21 +181,36 @@
         if (toAdd.length === 0 && toRemove.length === 0) {
             return;
         }
+        const optimisticEnsembleIds = [...staged].sort((left, right) =>
+            left.localeCompare(right),
+        );
+        const optimisticEnsembleNames = optimisticEnsembleIds
+            .map((ensembleId) =>
+                adminState.ensembles.find((ensemble) => ensemble.id === ensembleId)?.name,
+            )
+            .filter((name): name is string => !!name)
+            .sort((left, right) => left.localeCompare(right));
+        savingMusicIds = [...savingMusicIds, music.id];
+        adminState.updateMusic({
+            ...music,
+            ensemble_ids: optimisticEnsembleIds,
+            ensemble_names: optimisticEnsembleNames,
+        });
         try {
             await authenticatedApiClient.adminUpdateMusicEnsembles(music.id, {
-                ensemble_ids: [...staged].sort((left, right) =>
-                    left.localeCompare(right),
-                ),
+                ensemble_ids: optimisticEnsembleIds,
             });
             await adminState.refresh();
             adminState.setSuccess("Score ensembles updated.");
         } catch (error) {
+            adminState.updateMusic(music);
             const message =
                 error instanceof Error
                     ? error.message
                     : "Failed to update ensembles";
             adminState.setError(message);
-            throw error instanceof Error ? error : new Error(message);
+        } finally {
+            savingMusicIds = savingMusicIds.filter((id) => id !== music.id);
         }
     }
 
@@ -148,9 +227,19 @@
         music: AdminMusic,
         draft: EditScoreDraft,
     ) {
+        const optimisticMusic: AdminMusic = {
+            ...music,
+            title: draft.title.trim(),
+            subtitle: draft.subtitle.trim() || null,
+            public_id: draft.publicId.trim() || null,
+            icon: draft.icon,
+        };
+        savingMusicIds = [...savingMusicIds, music.id];
+        adminState.updateMusic(optimisticMusic);
         try {
             const payload = {
                 title: draft.title,
+                subtitle: draft.subtitle,
                 public_id: draft.publicId,
                 icon: draft.icon,
                 icon_file: draft.iconFile ?? undefined,
@@ -162,12 +251,14 @@
             adminState.updateMusic(updated);
             adminState.setSuccess("Score metadata updated.");
         } catch (error) {
+            adminState.updateMusic(music);
             const message =
                 error instanceof Error
                     ? error.message
                     : "Unable to update score metadata";
             adminState.setError(message);
-            throw error instanceof Error ? error : new Error(message);
+        } finally {
+            savingMusicIds = savingMusicIds.filter((id) => id !== music.id);
         }
     }
 
@@ -200,7 +291,7 @@
     }
 
     async function deleteMusicAccount(musicId: string) {
-        deletingMusicFor = musicId;
+        deletingMusicIds = [...deletingMusicIds, musicId];
         try {
             await authenticatedApiClient.adminDeleteMusic(musicId);
             await adminState.refresh();
@@ -212,7 +303,7 @@
                     : "Unable to delete score",
             );
         } finally {
-            deletingMusicFor = "";
+            deletingMusicIds = deletingMusicIds.filter((id) => id !== musicId);
         }
     }
 
@@ -222,7 +313,9 @@
             message: "Delete this score permanently?",
             confirmText: "Delete",
             variant: "danger",
-            onConfirm: () => deleteMusicAccount(musicId),
+            onConfirm: () => {
+                void deleteMusicAccount(musicId);
+            },
         });
     }
 
@@ -304,30 +397,34 @@
                     </p>
                 </div>
             {:else}
-                <div
-                    class="grid grid-cols-3 gap-2 items-start content-start max-[1360px]:grid-cols-2 max-[760px]:grid-cols-1"
-                >
-                    {#each filteredMusics as music}
-                        <AdminScoreCard
-                            {music}
-                            processing={isProcessingMusic(music)}
-                            downloadOpen={openDownloadMenuFor === music.id}
-                            deleting={deletingMusicFor === music.id}
-                            canManageEnsembles={canManageScoreEnsembles(
-                                music,
-                                appShell.currentUser,
-                            )}
-                            canEdit={canEditOwnedScore(music, appShell.currentUser)}
-                            canDelete={canDeleteScore(music, appShell.currentUser)}
-                            onToggleDownloadMenu={() => toggleDownloadMenu(music.id)}
-                            onManageEnsembles={() => openScoreEnsembleModal(music)}
-                            onEdit={() => openScoreMetadataModal(music)}
-                            onShowQr={() => void handleShowScoreQr(music)}
-                            onShowInfo={() => openScoreInfoModal(music)}
-                            onDelete={() => handleDeleteMusic(music.id)}
-                            onCloseDownloadMenu={() => (openDownloadMenuFor = "")}
-                        />
-                    {/each}
+                <div class="admin-score-scroll-area">
+                    <div
+                        class="admin-score-list grid grid-cols-3 gap-2 items-start content-start max-[1360px]:grid-cols-2 max-[760px]:grid-cols-1"
+                    >
+                        {#each filteredMusics as music}
+                            <AdminScoreCard
+                                {music}
+                                creating={creatingMusicIds.includes(music.id)}
+                                saving={savingMusicIds.includes(music.id)}
+                                processing={isProcessingMusic(music)}
+                                downloadOpen={openDownloadMenuFor === music.id}
+                                deleting={deletingMusicIds.includes(music.id)}
+                                canManageEnsembles={canManageScoreEnsembles(
+                                    music,
+                                    appShell.currentUser,
+                                )}
+                                canEdit={canEditOwnedScore(music, appShell.currentUser)}
+                                canDelete={canDeleteScore(music, appShell.currentUser)}
+                                onToggleDownloadMenu={() => toggleDownloadMenu(music.id)}
+                                onManageEnsembles={() => openScoreEnsembleModal(music)}
+                                onEdit={() => openScoreMetadataModal(music)}
+                                onShowQr={() => void handleShowScoreQr(music)}
+                                onShowInfo={() => openScoreInfoModal(music)}
+                                onDelete={() => handleDeleteMusic(music.id)}
+                                onCloseDownloadMenu={() => (openDownloadMenuFor = "")}
+                            />
+                        {/each}
+                    </div>
                 </div>
             {/if}
         </div>

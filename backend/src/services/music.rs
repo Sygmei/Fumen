@@ -60,6 +60,8 @@ struct AdminUserScorePlaytimeRow {
     #[diesel(sql_type = Text)]
     title: String,
     #[diesel(sql_type = Nullable<Text>)]
+    subtitle: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
     icon: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     icon_image_key: Option<String>,
@@ -88,9 +90,11 @@ struct ScoreAnnotationRow {
     #[diesel(sql_type = Text)]
     comment: String,
     #[diesel(sql_type = BigInt)]
-    step_index: i64,
-    #[diesel(sql_type = Double)]
-    seconds: f64,
+    bar_number: i64,
+    #[diesel(sql_type = BigInt)]
+    beat_number: i64,
+    #[diesel(sql_type = Text)]
+    instrument: String,
     #[diesel(sql_type = Text)]
     created_at: String,
 }
@@ -153,8 +157,9 @@ fn score_annotation_response_from_row(
         display_name: row.display_name,
         avatar_url,
         comment: row.comment,
-        step_index: row.step_index,
-        seconds: row.seconds,
+        instrument: row.instrument,
+        bar_number: row.bar_number,
+        beat_number: row.beat_number,
         created_at: row.created_at,
     }
 }
@@ -165,8 +170,9 @@ fn score_annotation_response_from_user(
     user: &UserRecord,
     annotation_id: &str,
     comment: &str,
-    step_index: i64,
-    seconds: f64,
+    instrument: &str,
+    bar_number: i64,
+    beat_number: i64,
     created_at: &str,
 ) -> ScoreAnnotationResponse {
     let avatar_url = resolve_user_avatar_url(storage, &user.id, user.avatar_image_key.as_deref());
@@ -179,8 +185,9 @@ fn score_annotation_response_from_user(
         display_name: user.display_name.clone(),
         avatar_url,
         comment: comment.to_owned(),
-        step_index,
-        seconds,
+        instrument: instrument.to_owned(),
+        bar_number,
+        beat_number,
         created_at: created_at.to_owned(),
     }
 }
@@ -577,6 +584,8 @@ pub(crate) async fn add_user_track_playtime(
     }
 
     let updated_at = utc_now_string();
+    let mut track_totals = track_totals.to_vec();
+    track_totals.sort_unstable_by_key(|(track_index, _)| *track_index);
     let mut conn = db.get().await?;
     conn.transaction::<_, AppError, _>(|tx| {
         Box::pin(async move {
@@ -585,8 +594,8 @@ pub(crate) async fn add_user_track_playtime(
                     .values(NewUserMusicTrackPlaytime {
                         user_id,
                         music_id,
-                        track_index: *track_index,
-                        total_seconds: *total_seconds,
+                        track_index,
+                        total_seconds,
                         updated_at: &updated_at,
                     })
                     .on_conflict((
@@ -742,6 +751,7 @@ pub(crate) async fn build_admin_user_metadata_playtime_response(
         SELECT
             m.id AS music_id,
             m.title,
+            m.subtitle,
             m.icon,
             m.icon_image_key,
             m.public_token,
@@ -755,6 +765,7 @@ pub(crate) async fn build_admin_user_metadata_playtime_response(
         GROUP BY
             m.id,
             m.title,
+            m.subtitle,
             m.icon,
             m.icon_image_key,
             m.public_token,
@@ -779,6 +790,7 @@ pub(crate) async fn build_admin_user_metadata_playtime_response(
         score_playtimes.push(AdminUserScorePlaytimeResponse {
             music_id: row.music_id,
             title: row.title,
+            subtitle: row.subtitle,
             icon: row.icon,
             icon_image_url,
             public_url: resolve_music_public_url(
@@ -941,14 +953,15 @@ pub(crate) async fn build_public_score_annotations_response(
                 u.display_name,
                 u.avatar_image_key,
                 a.comment,
-                a.step_index,
-                a.seconds,
+                a.bar_number,
+                a.beat_number,
+                a.instrument,
                 a.created_at
             FROM score_annotations a
             JOIN users u
                 ON u.id = a.user_id
             WHERE a.music_id = $1
-            ORDER BY a.step_index ASC, a.created_at ASC, a.id ASC
+            ORDER BY a.bar_number ASC, a.beat_number ASC, a.created_at ASC, a.id ASC
             "#,
         )
         .bind::<Text, _>(&record.id)
@@ -966,15 +979,16 @@ pub(crate) async fn build_public_score_annotations_response(
                 u.display_name,
                 u.avatar_image_key,
                 a.comment,
-                a.step_index,
-                a.seconds,
+                a.bar_number,
+                a.beat_number,
+                a.instrument,
                 a.created_at
             FROM score_annotations a
             JOIN users u
                 ON u.id = a.user_id
             WHERE a.music_id = $1
               AND a.user_id = $2
-            ORDER BY a.step_index ASC, a.created_at ASC, a.id ASC
+            ORDER BY a.bar_number ASC, a.beat_number ASC, a.created_at ASC, a.id ASC
             "#,
         )
         .bind::<Text, _>(&record.id)
@@ -1009,11 +1023,16 @@ pub(crate) async fn create_public_score_annotation(
     if comment.chars().count() > 1000 {
         return Err(AppError::bad_request("Annotation comment is too long"));
     }
-    if payload.step_index < 0 {
-        return Err(AppError::bad_request("Annotation position is invalid"));
-    }
-    if !payload.seconds.is_finite() || payload.seconds < 0.0 {
+    if payload.bar_number <= 0 || payload.beat_number <= 0 {
         return Err(AppError::bad_request("Annotation timestamp is invalid"));
+    }
+
+    let instrument = payload.instrument.trim();
+    if instrument.is_empty() {
+        return Err(AppError::bad_request("Annotation instrument is required"));
+    }
+    if instrument.chars().count() > 200 {
+        return Err(AppError::bad_request("Annotation instrument is too long"));
     }
 
     let created_at = utc_now_string();
@@ -1024,8 +1043,9 @@ pub(crate) async fn create_public_score_annotation(
             id: &annotation_id,
             music_id: &record.id,
             user_id: &auth.user.id,
-            step_index: payload.step_index,
-            seconds: payload.seconds,
+            bar_number: payload.bar_number,
+            beat_number: payload.beat_number,
+            instrument,
             comment,
             created_at: &created_at,
         })
@@ -1042,8 +1062,9 @@ pub(crate) async fn create_public_score_annotation(
         &author,
         &annotation_id,
         comment,
-        payload.step_index,
-        payload.seconds,
+        instrument,
+        payload.bar_number,
+        payload.beat_number,
         &created_at,
     ))
 }
@@ -1178,6 +1199,7 @@ pub(crate) fn record_to_admin_response(
     AdminMusicResponse {
         id: record.id,
         title: record.title,
+        subtitle: record.subtitle,
         icon: record.icon.clone(),
         icon_image_url,
         filename: record.filename,
@@ -1236,6 +1258,7 @@ pub(crate) fn record_to_public_response(
 
     PublicMusicResponse {
         title: record.title,
+        subtitle: record.subtitle,
         icon: record.icon,
         icon_image_url,
         filename: record.filename,

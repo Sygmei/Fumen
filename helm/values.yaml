@@ -1,5 +1,5 @@
 backend:
-  version: "1.5.0"
+  version: "1.5.2"
   replicas: 1
   corsAllowedOrigins: ""
   superadminUsername: "superadmin"
@@ -21,7 +21,7 @@ backend:
     domain: "fumen-api.lehang.art"
 
 frontend:
-  version: "1.5.0"
+  version: "1.5.2"
   apiBaseUrl: ""
   ingress:
     domain: "fumen.lehang.art"
