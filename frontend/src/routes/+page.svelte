@@ -68,7 +68,7 @@
             onLogout={() => void appShell.logoutUser()}
             onMyAccount={() => appShell.handleMyAccount()}
             onAppConfig={() => appShell.handleAppConfig()}
-            showBrandTitleOnMobile={!appShell.currentUser}
+            showBrandTitleOnMobile={true}
         />
         <section
             class="content-panel home-grid"
