@@ -22,6 +22,8 @@ jobs:
         include:
           - image_name: fumen-backend
             dockerfile: ./Dockerfile.backend
+          - image_name: fumen-processor
+            dockerfile: ./Dockerfile.processor
           - image_name: fumen-frontend
             dockerfile: ./Dockerfile.frontend
 

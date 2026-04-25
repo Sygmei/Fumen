@@ -1,0 +1,99 @@
+# syntax=docker/dockerfile:1.7
+FROM rust:1-bookworm AS build
+
+WORKDIR /app/backend
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/Cargo.toml backend/Cargo.lock ./
+RUN mkdir -p src \
+    && printf 'fn main() {}\n' > src/main.rs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
+    cargo fetch --locked
+
+COPY backend/src ./src
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git/db \
+    --mount=type=cache,target=/app/backend/target \
+    cargo build --release --locked --bin processor \
+    && cp /app/backend/target/release/processor /tmp/fumen-processor
+
+FROM debian:bookworm AS musescore-build
+
+ARG MUSESCORE_APPIMAGE_URL=https://github.com/musescore/MuseScore/releases/download/v4.6.5/MuseScore-Studio-4.6.5.253511702-x86_64.AppImage
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+
+RUN curl -fsSL "$MUSESCORE_APPIMAGE_URL" -o MuseScore.AppImage \
+    && chmod +x MuseScore.AppImage \
+    && ./MuseScore.AppImage --appimage-extract \
+    && mv squashfs-root /opt/musescore4
+
+FROM debian:bookworm-slim
+
+ARG APP_UID=10001
+ARG APP_GID=10001
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        ffmpeg \
+        libasound2 \
+        libdbus-1-3 \
+        libegl1 \
+        libfontconfig1 \
+        libfreetype6 \
+        libglib2.0-0 \
+        libnss3 \
+        libopengl0 \
+        libpipewire-0.3-0 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb-cursor0 \
+        libxcb-icccm4 \
+        libxcb-image0 \
+        libxcb-keysyms1 \
+        libxcb-render-util0 \
+        libxcb-xinerama0 \
+        libxkbcommon-x11-0 \
+        tini \
+        xauth \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system --gid "${APP_GID}" app \
+    && useradd --system --uid "${APP_UID}" --gid app --create-home --home-dir /home/app app \
+    && mkdir -p /data/storage \
+    && chown -R app:app /data /home/app
+
+WORKDIR /app
+
+COPY --from=build /tmp/fumen-processor /usr/local/bin/fumen-processor
+COPY backend/migrations /app/backend/migrations
+COPY --from=musescore-build /opt/musescore4 /opt/musescore4
+
+RUN printf '#!/bin/sh\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"\nexport LANG="${LANG:-C.UTF-8}"\nexport LC_ALL="${LC_ALL:-C.UTF-8}"\nexport XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/fumen-musescore-runtime}"\nmkdir -p "$XDG_RUNTIME_DIR"\nexec xvfb-run -a -s "-screen 0 1280x1024x24" /opt/musescore4/AppRun "$@"\n' > /usr/local/bin/musescore4 \
+    && chmod +x /usr/local/bin/musescore4 \
+    && ln -s /usr/local/bin/musescore4 /usr/local/bin/musescore
+
+ENV LOCAL_STORAGE_PATH=/data/storage \
+    MUSESCORE_BIN=/usr/local/bin/musescore4 \
+    QT_QPA_PLATFORM=offscreen
+
+USER ${APP_UID}:${APP_GID}
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/local/bin/fumen-processor"]

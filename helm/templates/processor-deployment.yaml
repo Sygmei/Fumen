@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: processor
-          image: ghcr.io/sygmei/fumen-backend:{{ .Values.processor.version }}
+          image: ghcr.io/sygmei/fumen-processor:{{ .Values.processor.version }}
           imagePullPolicy: IfNotPresent
           command:
             - /usr/local/bin/fumen-processor

@@ -56,9 +56,9 @@ impl Drop for TelemetryGuard {
 
 pub(crate) fn init() -> Result<TelemetryGuard> {
     let default_filter = if is_enabled() {
-        "fumen_backend=info,diesel=debug,tower_http=info"
+        "fumen_backend=info,processor=info,diesel=debug,tower_http=info"
     } else {
-        "fumen_backend=info,tower_http=info"
+        "fumen_backend=info,processor=info,tower_http=info"
     };
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
