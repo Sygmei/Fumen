@@ -47,11 +47,13 @@ export interface AdminMusicResponse {
   midi_status: string;
   musicxml_error?: string | null;
   musicxml_status: string;
-  owner_user_id?: string | null;
-  processing_job_attempt?: number | null;
-  processing_job_error?: string | null;
-  processing_job_status?: string | null;
-  processing_job_step?: string | null;
+    owner_user_id?: string | null;
+    processing_job_attempt?: number | null;
+    processing_job_error?: string | null;
+    processing_job_heartbeat_at?: string | null;
+    processing_job_lease_expires_at?: string | null;
+    processing_job_status?: string | null;
+    processing_job_step?: string | null;
   public_id?: string | null;
   public_id_url?: string | null;
   public_token: string;

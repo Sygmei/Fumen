@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{SecondsFormat, Utc};
 use opentelemetry::{KeyValue, global, trace::TracerProvider as _};
 use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{
@@ -7,14 +8,52 @@ use opentelemetry_sdk::{
     trace::{Sampler, SdkTracerProvider},
 };
 use reqwest::blocking::Client;
-use std::{collections::HashMap, env};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use std::{collections::HashMap, env, fmt};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::{
+    EnvFilter,
+    fmt::{
+        FmtContext,
+        format::{FormatEvent, FormatFields, Writer},
+    },
+    layer::SubscriberExt,
+    registry::LookupSpan,
+    util::SubscriberInitExt,
+};
 
 const DEFAULT_DEPLOYMENT_ENVIRONMENT: &str = "production";
 const DEFAULT_OTLP_HTTP_TRACES_URL: &str = "http://127.0.0.1:4318/v1/traces";
 
+struct PlainTextEventFormatter;
+
 pub struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
+}
+
+impl<S, N> FormatEvent<S, N> for PlainTextEventFormatter
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        let metadata = event.metadata();
+        let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+        write!(
+            writer,
+            "{} {:>5} {}: ",
+            timestamp,
+            metadata.level(),
+            metadata.target()
+        )?;
+        ctx.format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
+    }
 }
 
 impl Drop for TelemetryGuard {
@@ -35,7 +74,9 @@ pub fn init_tracing(
 ) -> Result<TelemetryGuard> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
-    let fmt_layer = tracing_subscriber::fmt::layer();
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .event_format(PlainTextEventFormatter)
+        .with_ansi(is_ansi_enabled());
 
     if !is_enabled() {
         tracing_subscriber::registry()
@@ -136,6 +177,20 @@ fn is_enabled() -> bool {
             .ok()
             .map(|value| value.trim().to_ascii_lowercase()),
         Some(value) if matches!(value.as_str(), "1" | "true" | "yes" | "on")
+    )
+}
+
+fn is_ansi_enabled() -> bool {
+    matches!(
+        env::var("LOG_ANSI")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase()),
+        Some(value) if matches!(value.as_str(), "1" | "true" | "yes" | "on" | "always")
+    ) || matches!(
+        env::var("RUST_LOG_STYLE")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase()),
+        Some(value) if matches!(value.as_str(), "always" | "yes" | "true" | "on")
     )
 }
 

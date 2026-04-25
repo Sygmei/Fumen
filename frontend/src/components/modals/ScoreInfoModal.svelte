@@ -48,7 +48,12 @@
     let retrying = $state(false);
     let retryError = $state("");
 
-    type ProcessingStepStatus = "done" | "active" | "pending" | "failed";
+    type ProcessingStepStatus =
+        | "done"
+        | "active"
+        | "pending"
+        | "failed"
+        | "stalled";
     type ProcessingStep = {
         key: string;
         label: string;
@@ -71,6 +76,34 @@
 
     function processingJobStep(item: AdminMusic) {
         return item.processing_job_step ?? null;
+    }
+
+    function parseTimestampMs(value?: string | null) {
+        if (!value) return null;
+        const timestamp = Date.parse(value);
+        return Number.isFinite(timestamp) ? timestamp : null;
+    }
+
+    function processingJobLeaseExpired(item: AdminMusic) {
+        if (processingJobStatus(item) !== "running") {
+            return false;
+        }
+
+        const leaseExpiresAt = parseTimestampMs(
+            item.processing_job_lease_expires_at,
+        );
+        return leaseExpiresAt !== null && leaseExpiresAt <= Date.now();
+    }
+
+    function processingJobStallMessage(item: AdminMusic) {
+        if (!processingJobLeaseExpired(item) || hasProcessingFailure(item)) {
+            return "";
+        }
+
+        const heartbeatAt = item.processing_job_heartbeat_at;
+        return heartbeatAt
+            ? `Processor worker heartbeat stopped after ${prettyDate(heartbeatAt)}. Waiting for another worker to reclaim the job.`
+            : "Processor worker lease expired. Waiting for another worker to reclaim the job.";
     }
 
     function isReadyMusic(item: AdminMusic) {
@@ -175,6 +208,7 @@
             lower.includes("stems status:");
         const storageStarted = hasStorageActivity || (stemsDone && !isComplete);
         const storageDone = isComplete;
+        const leaseExpired = processingJobLeaseExpired(item) && !isComplete && !failed;
 
         let failedIndex: number | null = null;
         if (failed) {
@@ -226,6 +260,15 @@
             },
         ];
 
+        const stalledDetails = [
+            "worker lost",
+            "worker lease expired",
+            "worker lease expired",
+            "worker lease expired",
+            "worker lease expired",
+            "worker lease expired",
+        ];
+
         const statuses: ProcessingStepStatus[] = [
             jobStatus === "running" || isComplete || failed ? "done" : "active",
             inputDone
@@ -265,6 +308,28 @@
                     statuses[index] = "pending";
                 }
             }
+        } else if (leaseExpired) {
+            const stalledIndex =
+                jobStep === "finalizing"
+                    ? 5
+                    : jobStep === "uploading_assets"
+                      ? 4
+                      : jobStep === "generating_stems"
+                        ? 3
+                        : jobStep === "generating_core"
+                          ? 2
+                          : 1;
+
+            for (let index = 0; index < statuses.length; index++) {
+                if (index < stalledIndex) {
+                    statuses[index] = "done";
+                } else if (index === stalledIndex) {
+                    statuses[index] = "stalled";
+                    steps[index].detail = stalledDetails[index];
+                } else {
+                    statuses[index] = "pending";
+                }
+            }
         }
 
         return steps.map((step, index) => ({
@@ -274,6 +339,9 @@
     }
 
     const processingSteps = $derived(deriveProcessingSteps(currentMusic, processingLog));
+    const processingStallMessage = $derived(
+        processingJobStallMessage(currentMusic),
+    );
 
     async function refreshCurrentMusic() {
         currentMusic = await reloadMusic(currentMusic.id);
@@ -512,11 +580,17 @@
 
             {#if processingLogError}
                 <p class="status error">{processingLogError}</p>
-            {:else if retryError}
+            {/if}
+            {#if retryError}
                 <p class="status error">{retryError}</p>
-            {:else if processingLogLoading}
+            {/if}
+            {#if processingStallMessage}
+                <p class="status warning">{processingStallMessage}</p>
+            {/if}
+
+            {#if !processingLogError && !retryError && processingLogLoading}
                 <p class="hint">Loading processing log...</p>
-            {:else if processingLog}
+            {:else if !processingLogError && !retryError && processingLog}
                 <div class="processing-journey" aria-label="Processing progress">
                     {#each processingSteps as step, index (step.key)}
                         <article class={`processing-stop is-${step.status}`}>
@@ -540,7 +614,7 @@
                     showLevelFilter={false}
                     showDownloadButton={false}
                 />
-            {:else}
+            {:else if !processingLogError && !retryError}
                 <p class="hint">No processing log has been recorded for this score yet.</p>
             {/if}
         </section>

@@ -117,6 +117,8 @@ pub struct AdminMusicResponse {
     pub processing_job_status: Option<String>,
     pub processing_job_step: Option<String>,
     pub processing_job_attempt: Option<i64>,
+    pub processing_job_lease_expires_at: Option<String>,
+    pub processing_job_heartbeat_at: Option<String>,
     pub processing_job_error: Option<String>,
 }
 

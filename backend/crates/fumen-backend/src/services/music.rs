@@ -1167,6 +1167,9 @@ pub(crate) fn record_to_admin_response(
         processing_job_status: processing_job.map(|job| job.status.clone()),
         processing_job_step: processing_job.map(|job| job.current_step.clone()),
         processing_job_attempt: processing_job.map(|job| job.attempt),
+        processing_job_lease_expires_at: processing_job
+            .and_then(|job| job.lease_expires_at.clone()),
+        processing_job_heartbeat_at: processing_job.and_then(|job| job.heartbeat_at.clone()),
         processing_job_error: processing_job.and_then(|job| job.error_message.clone()),
     }
 }

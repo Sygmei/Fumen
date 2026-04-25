@@ -1065,7 +1065,7 @@ fn file_name(path: &Path) -> Result<&str> {
 // ---------------------------------------------------------------------------
 
 #[tracing::instrument(
-    skip(config),
+    skip(config, unavailable_reason, progress_log),
     fields(
         input_path = %input_path.display(),
         output_path = %output_path.display(),

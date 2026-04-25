@@ -6,7 +6,7 @@ use axum::{
     extract::State,
     http::{
         HeaderValue, Request, Response,
-        header::{AUTHORIZATION, HeaderName, USER_AGENT},
+        header::{HeaderName, USER_AGENT},
     },
     middleware::Next,
     response::IntoResponse,
@@ -174,7 +174,7 @@ pub(crate) async fn trace_operation_request(
 }
 
 fn record_token_claims(span: &Span, headers: &axum::http::HeaderMap, state: &AppState) {
-    let Some(header_value) = headers.get(AUTHORIZATION) else {
+    let Some(header_value) = headers.get(axum::http::header::AUTHORIZATION) else {
         return;
     };
 
