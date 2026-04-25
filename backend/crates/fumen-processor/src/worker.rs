@@ -1,57 +1,16 @@
-#[path = "../app.rs"]
-mod app;
-#[path = "../audio.rs"]
-mod audio;
-#[path = "../config.rs"]
-mod config;
-#[path = "../db.rs"]
-mod db;
-#[path = "../models.rs"]
-mod models;
-#[path = "../openapi.rs"]
-mod openapi;
-#[path = "../routes/mod.rs"]
-mod routes;
-#[path = "../schema.rs"]
-mod schema;
-#[path = "../schemas.rs"]
-mod schemas;
-#[path = "../services/mod.rs"]
-mod services;
-#[path = "../storage.rs"]
-mod storage;
-#[path = "../telemetry.rs"]
-mod telemetry;
-
-pub(crate) use app::{
-    ACCESS_TOKEN_TTL_SECONDS, AppError, AppRole, AppState, AuthContext, EnsembleRole,
-    LOGIN_LINK_TTL_MINUTES, ensure_membership_entities_exist, format_timestamp,
-    generate_auth_token, generate_public_token, normalize_music_icon, normalize_name,
-    normalize_public_id, normalize_username, parse_quality_profile, sanitize_content_disposition,
-    sanitize_filename, utc_now_string,
+use crate::{AppError, AppState, processing};
+use anyhow::Result;
+use fumen_core::{
+    config::AppConfig,
+    db::{open_database_pool, run_migrations},
+    models,
+    storage::Storage,
 };
-
-use anyhow::{Context, Result};
-use config::AppConfig;
-use db::{open_database_pool, run_migrations};
-use services::processing;
 use std::time::Duration;
-use storage::Storage;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-fn main() -> Result<()> {
-    let _telemetry = telemetry::init()?;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("failed to build Tokio runtime")?;
-    let result = runtime.block_on(async_main());
-    drop(runtime);
-    result
-}
-
-async fn async_main() -> Result<()> {
+pub async fn run() -> Result<()> {
     let config = AppConfig::from_env()?;
     run_migrations(&config.database_url_admin).await?;
 

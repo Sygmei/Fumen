@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
-use crate::schemas::DrumMapEntry;
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use fumen_core::drums::DrumMapEntry;
 use midly::{MetaMessage, MidiMessage, Smf, TrackEventKind};
 use roxmltree::{Document, Node};
 use std::collections::{HashMap, HashSet};

@@ -31,22 +31,22 @@ pub(crate) const JOB_STEP_FINALIZING: &str = "finalizing";
 pub(crate) const JOB_STEP_COMPLETED: &str = "completed";
 pub(crate) const JOB_STEP_FAILED: &str = "failed";
 
-pub(crate) struct QueueProcessingJobRequest<'a> {
-    pub(crate) music_id: &'a str,
-    pub(crate) source_object_key: &'a str,
-    pub(crate) source_filename: &'a str,
-    pub(crate) quality_profile: &'a str,
+pub struct QueueProcessingJobRequest<'a> {
+    pub music_id: &'a str,
+    pub source_object_key: &'a str,
+    pub source_filename: &'a str,
+    pub quality_profile: &'a str,
 }
 
 #[derive(Clone)]
-pub(crate) struct MusicProcessingLog {
+pub struct MusicProcessingLog {
     state: AppState,
     log_key: String,
     content: Arc<Mutex<String>>,
 }
 
 impl MusicProcessingLog {
-    pub(crate) fn new(state: AppState, music_id: impl Into<String>) -> Self {
+    pub fn new(state: AppState, music_id: impl Into<String>) -> Self {
         let music_id = music_id.into();
         Self {
             state,
@@ -55,7 +55,7 @@ impl MusicProcessingLog {
         }
     }
 
-    pub(crate) async fn reset(&mut self, lines: &[String]) {
+    pub async fn reset(&mut self, lines: &[String]) {
         let mut content = self.content.lock().await;
         content.clear();
         for line in lines {
@@ -64,15 +64,15 @@ impl MusicProcessingLog {
         self.persist(content.clone()).await;
     }
 
-    pub(crate) async fn append(&mut self, message: impl AsRef<str>) {
+    pub async fn append(&mut self, message: impl AsRef<str>) {
         self.append_with_level("INFO", message).await;
     }
 
-    pub(crate) async fn append_warning(&mut self, message: impl AsRef<str>) {
+    pub async fn append_warning(&mut self, message: impl AsRef<str>) {
         self.append_with_level("WARNING", message).await;
     }
 
-    pub(crate) async fn append_error(&mut self, message: impl AsRef<str>) {
+    pub async fn append_error(&mut self, message: impl AsRef<str>) {
         self.append_with_level("ERROR", message).await;
     }
 
@@ -130,7 +130,7 @@ pub(crate) fn spawn_processing_log_bridge(
     (sender, handle)
 }
 
-pub(crate) async fn load_music_processing_log(state: &AppState, music_id: &str) -> String {
+pub async fn load_music_processing_log(state: &AppState, music_id: &str) -> String {
     match state
         .storage
         .get_bytes(&music::processing_log_key(music_id))
@@ -148,7 +148,7 @@ pub(crate) async fn load_music_processing_log(state: &AppState, music_id: &str) 
     }
 }
 
-pub(crate) fn processing_statuses(record: &MusicRecord) -> [&str; 4] {
+pub fn processing_statuses(record: &MusicRecord) -> [&str; 4] {
     [
         record.audio_status.as_str(),
         record.midi_status.as_str(),
@@ -157,7 +157,7 @@ pub(crate) fn processing_statuses(record: &MusicRecord) -> [&str; 4] {
     ]
 }
 
-pub(crate) fn build_processing_log_header(
+pub fn build_processing_log_header(
     action: &str,
     filename: &str,
     quality_profile: &StemQualityProfile,
@@ -169,7 +169,7 @@ pub(crate) fn build_processing_log_header(
     ]
 }
 
-pub(crate) async fn reset_music_processing_state(
+pub async fn reset_music_processing_state(
     state: &AppState,
     record: &MusicRecord,
     log: &mut MusicProcessingLog,
@@ -232,7 +232,7 @@ pub(crate) async fn reset_music_processing_state(
     Ok(())
 }
 
-pub(crate) async fn enqueue_music_processing_job(
+pub async fn enqueue_music_processing_job(
     db: &DbPool,
     request: QueueProcessingJobRequest<'_>,
 ) -> Result<(), AppError> {

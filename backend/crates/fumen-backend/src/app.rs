@@ -10,8 +10,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use chrono::{SecondsFormat, Utc};
-use rand::{Rng, distr::Alphanumeric};
 use std::collections::HashSet;
 
 pub(crate) const LOGIN_LINK_TTL_MINUTES: i64 = 5;
@@ -225,15 +223,7 @@ impl IntoResponse for AppError {
 }
 
 pub(crate) fn generate_public_token() -> String {
-    generate_auth_token(24)
-}
-
-pub(crate) fn generate_auth_token(length: usize) -> String {
-    rand::rng()
-        .sample_iter(Alphanumeric)
-        .take(length)
-        .map(char::from)
-        .collect()
+    fumen_core::generate_auth_token(24)
 }
 
 pub(crate) fn normalize_music_icon(value: Option<&str>) -> Result<Option<String>, AppError> {
@@ -255,14 +245,6 @@ pub(crate) fn normalize_music_icon(value: Option<&str>) -> Result<Option<String>
     Ok(Some(trimmed.chars().take(2).collect::<String>()))
 }
 
-pub(crate) fn utc_now_string() -> String {
-    format_timestamp(Utc::now())
-}
-
-pub(crate) fn format_timestamp(value: chrono::DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
 pub(crate) fn parse_quality_profile(
     raw: Option<&str>,
 ) -> Result<audio::StemQualityProfile, AppError> {
@@ -276,26 +258,6 @@ pub(crate) fn parse_quality_profile(
             "Invalid quality profile. Use one of: standard, small, very-small, tiny.",
         )
     })
-}
-
-pub(crate) fn normalize_username(raw: &str) -> Result<String, AppError> {
-    let value = raw.trim().to_ascii_lowercase();
-    if !(3..=32).contains(&value.len()) {
-        return Err(AppError::bad_request(
-            "Usernames must be between 3 and 32 characters",
-        ));
-    }
-
-    if !value
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
-    {
-        return Err(AppError::bad_request(
-            "Usernames can only contain letters, numbers, hyphens, and underscores",
-        ));
-    }
-
-    Ok(value)
 }
 
 pub(crate) fn normalize_name(
@@ -352,29 +314,6 @@ pub(crate) async fn ensure_membership_entities_exist(
     crate::services::auth::find_user_by_id(db, user_id)
         .await?
         .ok_or_else(|| AppError::not_found("User not found"))
-}
-
-pub(crate) fn sanitize_filename(filename: &str) -> String {
-    let mut sanitized = filename
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric()
-                || character == '.'
-                || character == '-'
-                || character == '_'
-            {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-
-    if sanitized.is_empty() {
-        sanitized = "score.mscz".to_owned();
-    }
-
-    sanitized
 }
 
 pub(crate) fn sanitize_content_disposition(filename: &str) -> String {

@@ -1,12 +1,9 @@
 use crate::models::{
     EnsembleRecord, MusicEnsembleLinkRecord, MusicRecord, NewEnsemble, NewMusic,
     NewMusicEnsembleLink, NewUser, NewUserEnsembleMembership, UpdateAdminUser,
-    UpdateMusicDirectory, UpdateMusicMetadata, UpdateMusicProcessing, UserEnsembleMembershipRecord,
-    UserRecord,
+    UpdateMusicDirectory, UpdateMusicMetadata, UserEnsembleMembershipRecord, UserRecord,
 };
-use crate::schema::{
-    ensembles, music_ensemble_links, musics, stems, user_ensemble_memberships, users,
-};
+use crate::schema::{ensembles, music_ensemble_links, musics, user_ensemble_memberships, users};
 use crate::schemas::{
     AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicProcessingLogResponse,
     AdminMusicResponse, AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest,
@@ -15,11 +12,11 @@ use crate::schemas::{
     UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest,
     UpdateMusicEnsemblesRequest, UserResponse,
 };
-use crate::services::{auth, music, processing};
+use crate::services::{auth, music};
 use crate::{
     AppError, AppRole, AppState, EnsembleRole, audio, ensure_membership_entities_exist,
     generate_public_token, normalize_music_icon, normalize_name, normalize_public_id,
-    normalize_username, parse_quality_profile, sanitize_filename, utc_now_string,
+    normalize_username, parse_quality_profile, processing, sanitize_filename, utc_now_string,
 };
 use axum::{
     Json, Router,
@@ -33,13 +30,7 @@ use diesel::sql_types::{BigInt, Text};
 use diesel::upsert::excluded;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use tokio::fs;
-use tokio::sync::{Mutex, mpsc};
-use tracing::Instrument;
 use uuid::Uuid;
-
-const PROCESSING_LOG_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
 
 #[derive(QueryableByName)]
 struct MusicTotalBytesRow {
@@ -237,200 +228,6 @@ async fn read_field_bytes_with_progress(
     Ok(Bytes::from(data))
 }
 
-#[derive(Clone)]
-struct MusicProcessingLog {
-    state: AppState,
-    log_key: String,
-    content: Arc<Mutex<String>>,
-}
-
-impl MusicProcessingLog {
-    fn new(state: AppState, music_id: impl Into<String>) -> Self {
-        let music_id = music_id.into();
-        Self {
-            state,
-            log_key: music::processing_log_key(&music_id),
-            content: Arc::new(Mutex::new(String::new())),
-        }
-    }
-
-    async fn reset(&mut self, lines: &[String]) {
-        let mut content = self.content.lock().await;
-        content.clear();
-        for line in lines {
-            Self::push_line(&mut content, &format!("INFO {line}"));
-        }
-        self.persist(content.clone()).await;
-    }
-
-    async fn append(&mut self, message: impl AsRef<str>) {
-        self.append_with_level("INFO", message).await;
-    }
-
-    async fn append_warning(&mut self, message: impl AsRef<str>) {
-        self.append_with_level("WARNING", message).await;
-    }
-
-    async fn append_error(&mut self, message: impl AsRef<str>) {
-        self.append_with_level("ERROR", message).await;
-    }
-
-    async fn append_with_level(&mut self, level: &str, message: impl AsRef<str>) {
-        let mut content = self.content.lock().await;
-        Self::push_line(&mut content, &format!("{level} {}", message.as_ref()));
-        self.persist(content.clone()).await;
-    }
-
-    fn push_line(content: &mut String, message: &str) {
-        let timestamp = chrono::Utc::now().to_rfc3339();
-        for line in message.lines() {
-            let line = line.trim_end();
-            if line.is_empty() {
-                continue;
-            }
-            content.push('[');
-            content.push_str(&timestamp);
-            content.push_str("] ");
-            content.push_str(line);
-            content.push('\n');
-        }
-    }
-
-    async fn persist(&self, content: String) {
-        if let Err(error) = self
-            .state
-            .storage
-            .upload_bytes(
-                &self.log_key,
-                Bytes::from(content.into_bytes()),
-                PROCESSING_LOG_CONTENT_TYPE,
-            )
-            .await
-        {
-            tracing::warn!(
-                storage_key = %self.log_key,
-                error = ?error,
-                "failed to persist score processing log"
-            );
-        }
-    }
-}
-
-fn spawn_processing_log_bridge(
-    log: MusicProcessingLog,
-) -> (audio::ProgressLogSender, tokio::task::JoinHandle<()>) {
-    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
-    let handle = tokio::spawn(async move {
-        let mut log = log;
-        while let Some(message) = receiver.recv().await {
-            log.append(message).await;
-        }
-    });
-    (sender, handle)
-}
-
-async fn load_music_processing_log(state: &AppState, music_id: &str) -> String {
-    match state
-        .storage
-        .get_bytes(&music::processing_log_key(music_id))
-        .await
-    {
-        Ok((bytes, _, _)) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(error) => {
-            tracing::warn!(
-                music_id = %music_id,
-                error = ?error,
-                "failed to load score processing log"
-            );
-            String::new()
-        }
-    }
-}
-
-fn processing_statuses(record: &MusicRecord) -> [&str; 4] {
-    [
-        record.audio_status.as_str(),
-        record.midi_status.as_str(),
-        record.musicxml_status.as_str(),
-        record.stems_status.as_str(),
-    ]
-}
-
-fn build_processing_log_header(
-    action: &str,
-    filename: &str,
-    quality_profile: &audio::StemQualityProfile,
-) -> Vec<String> {
-    vec![
-        format!("{action} requested."),
-        format!("Input file: {filename}"),
-        format!("Stem quality: {}", quality_profile.as_str()),
-    ]
-}
-
-async fn reset_music_processing_state(
-    state: &AppState,
-    record: &MusicRecord,
-    log: &mut MusicProcessingLog,
-) -> Result<(), AppError> {
-    log.append("Resetting score processing state and clearing previous derived assets.")
-        .await;
-
-    let existing_stems = music::find_public_stems(&state.db_rw, &state.db_rw, &record.id).await?;
-    let mut keys_to_delete = Vec::new();
-    if let Some(value) = record.audio_object_key.as_ref() {
-        keys_to_delete.push(value.clone());
-    }
-    if let Some(value) = record.midi_object_key.as_ref() {
-        keys_to_delete.push(value.clone());
-    }
-    if let Some(value) = record.musicxml_object_key.as_ref() {
-        keys_to_delete.push(value.clone());
-    }
-    for stem in &existing_stems {
-        keys_to_delete.push(stem.storage_key.clone());
-    }
-
-    let mut conn = state.db_rw.get().await?;
-    diesel::delete(stems::table.filter(stems::music_id.eq(&record.id)))
-        .execute(&mut conn)
-        .await?;
-    diesel::update(musics::table.find(&record.id))
-        .set(UpdateMusicProcessing {
-            audio_object_key: None,
-            audio_status: "processing",
-            audio_error: None,
-            midi_object_key: None,
-            midi_status: "processing",
-            midi_error: None,
-            musicxml_object_key: None,
-            musicxml_status: "processing",
-            musicxml_error: None,
-            stems_status: "processing",
-            stems_error: None,
-        })
-        .execute(&mut conn)
-        .await?;
-    drop(conn);
-
-    for key in keys_to_delete {
-        if let Err(error) = state.storage.delete_key(&key).await {
-            tracing::warn!(
-                music_id = %record.id,
-                storage_key = %key,
-                error = ?error,
-                "failed to delete derived asset during restart"
-            );
-            log.append_warning(format!("Failed to remove previous asset {key}: {error}"))
-                .await;
-        }
-    }
-
-    log.append("Processing state reset. The score has been queued again.")
-        .await;
-    Ok(())
-}
-
 async fn build_admin_music_response(
     state: &AppState,
     id: &str,
@@ -451,62 +248,6 @@ async fn build_admin_music_response(
         ensemble_names,
         processing_job.as_ref(),
     ))
-}
-
-fn spawn_music_processing_task(
-    state: AppState,
-    music_id: String,
-    quality_profile: audio::StemQualityProfile,
-    bytes: Bytes,
-    safe_filename: String,
-    mut log: MusicProcessingLog,
-) {
-    let failure_state = state.clone();
-    let render_music_id = music_id.clone();
-
-    tokio::spawn(
-        async move {
-            if let Err(error) = process_uploaded_music(
-                state,
-                render_music_id.clone(),
-                quality_profile,
-                bytes,
-                safe_filename,
-                &mut log,
-            )
-            .await
-            {
-                tracing::error!(
-                    music_id = %render_music_id,
-                    error = ?error,
-                    "score processing failed"
-                );
-                let _ = log
-                    .append_error(format!("Processing failed: {}", error.message))
-                    .await;
-                if let Err(mark_error) = mark_music_processing_failed(
-                    &failure_state,
-                    &render_music_id,
-                    error.message.clone(),
-                )
-                .await
-                {
-                    tracing::error!(
-                        music_id = %render_music_id,
-                        error = ?mark_error,
-                        "failed to mark score processing as failed"
-                    );
-                    let _ = log
-                        .append_error(format!(
-                            "Failed to update processing state after error: {}",
-                            mark_error.message
-                        ))
-                        .await;
-                }
-            }
-        }
-        .in_current_span(),
-    );
 }
 
 #[utoipa::path(
@@ -1888,186 +1629,6 @@ pub(crate) async fn admin_upload_music(
     Ok(Json(build_admin_music_response(&state, &music_id).await?))
 }
 
-#[tracing::instrument(
-    skip(state, bytes, log),
-    fields(music_id = %music_id, quality_profile = %quality_profile.as_str(), filename = %safe_filename)
-)]
-async fn process_uploaded_music(
-    state: AppState,
-    music_id: String,
-    quality_profile: audio::StemQualityProfile,
-    bytes: Bytes,
-    safe_filename: String,
-    log: &mut MusicProcessingLog,
-) -> Result<(), AppError> {
-    let (progress_sender, progress_handle) = spawn_processing_log_bridge(log.clone());
-    let temp_dir = tempfile::tempdir()?;
-    let temp_input_path = temp_dir.path().join(&safe_filename);
-    log.append(format!(
-        "Writing temporary input file to {}.",
-        temp_input_path.display()
-    ))
-    .await;
-    tracing::info!(music_id = %music_id, path = %temp_input_path.display(), "score upload writing temporary input file");
-    fs::write(&temp_input_path, &bytes).await?;
-    tracing::info!(music_id = %music_id, path = %temp_input_path.display(), "score upload wrote temporary input file");
-    log.append("Temporary input file written. Starting conversion pipeline.")
-        .await;
-
-    tracing::info!(music_id = %music_id, "score upload starting conversion pipeline");
-    let (audio_outcome, midi_outcome, musicxml_outcome) = tokio::try_join!(
-        async {
-            audio::generate_audio(
-                &state.config,
-                &temp_input_path,
-                temp_dir.path(),
-                Some(&progress_sender),
-            )
-            .await
-            .map_err(AppError::from)
-        },
-        async {
-            audio::generate_midi(
-                &state.config,
-                &temp_input_path,
-                temp_dir.path(),
-                Some(&progress_sender),
-            )
-            .await
-            .map_err(AppError::from)
-        },
-        async {
-            audio::generate_musicxml(
-                &state.config,
-                &temp_input_path,
-                temp_dir.path(),
-                Some(&progress_sender),
-            )
-            .await
-            .map_err(AppError::from)
-        },
-    )?;
-    log.append("Audio, MIDI, and MusicXML conversion finished. Storing generated files.")
-        .await;
-
-    let (stem_results, stems_status, stems_error) = audio::generate_stems(
-        &state.config,
-        &temp_input_path,
-        temp_dir.path(),
-        quality_profile,
-        Some(&progress_sender),
-    )
-    .await?;
-    log.append(format!(
-        "Stem generation finished with {} rendered stem file(s).",
-        stem_results.len()
-    ))
-    .await;
-
-    let (
-        (audio_object_key, audio_status, audio_error),
-        (midi_object_key, midi_status, midi_error),
-        (musicxml_object_key, musicxml_status, musicxml_error),
-        (stems_status, stems_error),
-    ) = tokio::try_join!(
-        music::store_conversion(
-            &state,
-            &music_id,
-            "audio",
-            audio_outcome,
-            Some(&progress_sender),
-        ),
-        music::store_conversion(
-            &state,
-            &music_id,
-            "midi",
-            midi_outcome,
-            Some(&progress_sender),
-        ),
-        music::store_conversion(
-            &state,
-            &music_id,
-            "musicxml",
-            musicxml_outcome,
-            Some(&progress_sender),
-        ),
-        music::store_stems(
-            &state,
-            &music_id,
-            stem_results,
-            stems_status,
-            stems_error,
-            Some(&progress_sender),
-        ),
-    )?;
-    drop(progress_sender);
-    let _ = progress_handle.await;
-    log.append(format!("Audio status: {audio_status}.")).await;
-    if let Some(error) = audio_error.as_deref() {
-        log.append(format!("Audio detail: {error}")).await;
-    }
-    log.append(format!("MIDI status: {midi_status}.")).await;
-    if let Some(error) = midi_error.as_deref() {
-        log.append(format!("MIDI detail: {error}")).await;
-    }
-    log.append(format!("MusicXML status: {musicxml_status}."))
-        .await;
-    if let Some(error) = musicxml_error.as_deref() {
-        log.append(format!("MusicXML detail: {error}")).await;
-    }
-    log.append(format!("Stems status: {stems_status}.")).await;
-    if let Some(error) = stems_error.as_deref() {
-        log.append(format!("Stems detail: {error}")).await;
-    }
-
-    let mut conn = state.db_rw.get().await?;
-    diesel::update(musics::table.find(&music_id))
-        .set(UpdateMusicProcessing {
-            audio_object_key: audio_object_key.as_deref(),
-            audio_status: &audio_status,
-            audio_error: audio_error.as_deref(),
-            midi_object_key: midi_object_key.as_deref(),
-            midi_status: &midi_status,
-            midi_error: midi_error.as_deref(),
-            musicxml_object_key: musicxml_object_key.as_deref(),
-            musicxml_status: &musicxml_status,
-            musicxml_error: musicxml_error.as_deref(),
-            stems_status: &stems_status,
-            stems_error: stems_error.as_deref(),
-        })
-        .execute(&mut conn)
-        .await?;
-
-    tracing::info!(music_id = %music_id, "score upload processing completed");
-    log.append("Processing completed. Database state updated.")
-        .await;
-    Ok(())
-}
-
-#[tracing::instrument(skip(state, error), fields(music_id = %music_id))]
-async fn mark_music_processing_failed(
-    state: &AppState,
-    music_id: &str,
-    error: String,
-) -> Result<(), AppError> {
-    let mut conn = state.db_rw.get().await?;
-    diesel::update(musics::table.find(music_id))
-        .set(crate::models::MarkMusicProcessingFailed {
-            audio_status: "failed",
-            audio_error: Some(error.as_str()),
-            midi_status: "failed",
-            midi_error: Some(error.as_str()),
-            musicxml_status: "failed",
-            musicxml_error: Some(error.as_str()),
-            stems_status: "failed",
-            stems_error: Some(error.as_str()),
-        })
-        .execute(&mut conn)
-        .await?;
-
-    Ok(())
-}
-
 #[tracing::instrument(skip(state, headers), fields(music_id = %id))]
 #[utoipa::path(
     get,
@@ -2284,13 +1845,6 @@ pub(crate) async fn admin_update_music(
         return Err(AppError::not_found("Music not found"));
     }
 
-    let record = music::find_music_by_id(&state.db_rw, &id)
-        .await?
-        .ok_or_else(|| AppError::not_found("Music not found"))?;
-
-    let stems_total = music::fetch_stems_total(&state.db_rw, &id).await;
-    let (ensemble_ids, ensemble_names) =
-        music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
     Ok(Json(build_admin_music_response(&state, &id).await?))
 }
 
@@ -2353,12 +1907,6 @@ pub(crate) async fn admin_move_music(
         .execute(&mut conn)
         .await?;
 
-    let record = music::find_music_by_id(&state.db_rw, &id)
-        .await?
-        .ok_or_else(|| AppError::not_found("Music not found"))?;
-    let stems_total = music::fetch_stems_total(&state.db_rw, &id).await;
-    let (ensemble_ids, ensemble_names) =
-        music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
     Ok(Json(build_admin_music_response(&state, &id).await?))
 }
 

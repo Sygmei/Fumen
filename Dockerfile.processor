@@ -10,19 +10,28 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/crates/fumen-backend/Cargo.toml ./crates/fumen-backend/Cargo.toml
+COPY backend/crates/fumen-core/Cargo.toml ./crates/fumen-core/Cargo.toml
+COPY backend/crates/fumen-processor/Cargo.toml ./crates/fumen-processor/Cargo.toml
 RUN mkdir -p src \
-    && printf 'fn main() {}\n' > src/main.rs
+    && mkdir -p crates/fumen-backend/src crates/fumen-core/src crates/fumen-processor/src \
+    && printf 'fn main() {}\n' > src/main.rs \
+    && printf 'fn main() {}\n' > crates/fumen-backend/src/main.rs \
+    && printf 'pub fn placeholder() {}\n' > crates/fumen-core/src/lib.rs \
+    && printf 'pub fn placeholder() {}\n' > crates/fumen-processor/src/lib.rs \
+    && printf 'fn main() {}\n' > crates/fumen-processor/src/main.rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git/db \
     cargo fetch --locked
 
 COPY backend/src ./src
+COPY backend/crates ./crates
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git/db \
     --mount=type=cache,target=/app/backend/target \
-    cargo build --release --locked --bin processor \
-    && cp /app/backend/target/release/processor /tmp/fumen-processor
+    cargo build --release --locked -p fumen-processor \
+    && cp /app/backend/target/release/fumen-processor /tmp/fumen-processor
 
 FROM debian:bookworm AS musescore-build
 

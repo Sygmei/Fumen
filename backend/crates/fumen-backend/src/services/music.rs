@@ -2,8 +2,8 @@ use crate::config::AppConfig;
 use crate::db::DbPool;
 use crate::models::{
     BigIntValueRow, EnsembleRecord, MusicEnsembleLinkRecord, MusicRecord, NewScoreAnnotation,
-    NewStem, NewUserMusicTrackPlaytime, ProcessingJobRecord, StemRecord,
-    UserEnsembleMembershipRecord, UserRecord,
+    NewUserMusicTrackPlaytime, ProcessingJobRecord, StemRecord, UserEnsembleMembershipRecord,
+    UserRecord,
 };
 use crate::schema::{
     ensembles, music_ensemble_links, musics, processing_jobs, score_annotations, stems,
@@ -20,16 +20,14 @@ use crate::{
     AppError, AppRole, AppState, AuthContext, sanitize_content_disposition, utc_now_string,
 };
 use anyhow::anyhow;
-use bytes::Bytes;
 use diesel::OptionalExtension;
 use diesel::QueryableByName;
 use diesel::prelude::*;
 use diesel::sql_types::{BigInt, Double, Nullable, Text};
 use diesel::upsert::excluded;
 use diesel_async::{AsyncConnection, RunQueryDsl};
-use flate2::{Compression, write::GzEncoder};
+pub(crate) use fumen_core::music::{find_public_stems, processing_log_key};
 use std::collections::HashMap;
-use std::io::Write;
 use tokio::fs;
 use tokio::process::Command;
 use tracing::warn;
@@ -530,32 +528,6 @@ pub(crate) async fn find_accessible_music_for_user(
         .await?)
 }
 
-pub(crate) async fn find_public_stems(
-    db_primary: &DbPool,
-    db_fallback: &DbPool,
-    music_id: &str,
-) -> Result<Vec<StemRecord>, AppError> {
-    let mut primary = db_primary.get().await?;
-    let stems = stems::table
-        .filter(stems::music_id.eq(music_id))
-        .order(stems::track_index.asc())
-        .select(StemRecord::as_select())
-        .load(&mut primary)
-        .await?;
-
-    if !stems.is_empty() {
-        return Ok(stems);
-    }
-
-    let mut fallback = db_fallback.get().await?;
-    Ok(stems::table
-        .filter(stems::music_id.eq(music_id))
-        .order(stems::track_index.asc())
-        .select(StemRecord::as_select())
-        .load(&mut fallback)
-        .await?)
-}
-
 pub(crate) async fn find_public_stem(
     db_primary: &DbPool,
     db_fallback: &DbPool,
@@ -816,86 +788,6 @@ pub(crate) async fn build_admin_user_metadata_playtime_response(
     Ok((total_seconds, score_playtimes))
 }
 
-#[tracing::instrument(
-    skip(state, stems, error),
-    fields(music_id = %music_id, stem_count = stems.len(), stems_status = status)
-)]
-pub(crate) async fn store_stems(
-    state: &AppState,
-    music_id: &str,
-    stems: Vec<crate::audio::StemResult>,
-    status: String,
-    error: Option<String>,
-    progress_log: Option<&crate::audio::ProgressLogSender>,
-) -> Result<(String, Option<String>), AppError> {
-    let mut conn = state.db_rw.get().await?;
-    let storage_target = if state.storage.is_s3() {
-        "S3"
-    } else {
-        "storage"
-    };
-    let total = stems.len();
-
-    emit_storage_progress(
-        progress_log,
-        format!("stems: uploading {total} rendered stem file(s) to {storage_target}."),
-    );
-
-    for (index, stem) in stems.into_iter().enumerate() {
-        let size_bytes = stem.bytes.len() as i64;
-        let storage_key = format!("stems/{music_id}/{}.ogg", stem.track_index);
-        let drum_map_json = stem
-            .drum_map
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|error| AppError::from(anyhow::Error::from(error)))?;
-        emit_storage_progress(
-            progress_log,
-            format!(
-                "stems: uploading [{}/{}] '{}' to {storage_target} as {}.",
-                index + 1,
-                total,
-                stem.track_name,
-                storage_key,
-            ),
-        );
-        state
-            .storage
-            .upload_bytes(&storage_key, stem.bytes.clone(), "audio/ogg")
-            .await?;
-        emit_storage_progress(
-            progress_log,
-            format!(
-                "stems: uploaded [{}/{}] '{}' to {storage_target} ({} KB).",
-                index + 1,
-                total,
-                stem.track_name,
-                size_bytes / 1024,
-            ),
-        );
-
-        diesel::insert_into(stems::table)
-            .values(NewStem {
-                music_id,
-                track_index: stem.track_index as i64,
-                track_name: &stem.track_name,
-                instrument_name: &stem.instrument_name,
-                storage_key: &storage_key,
-                size_bytes,
-                drum_map_json: drum_map_json.as_deref(),
-            })
-            .execute(&mut conn)
-            .await?;
-    }
-
-    emit_storage_progress(
-        progress_log,
-        format!("stems: upload to {storage_target} completed."),
-    );
-    Ok((status, error))
-}
-
 pub(crate) async fn probe_audio_duration_seconds(path: &std::path::Path) -> Result<f64, AppError> {
     let output = Command::new("ffprobe")
         .arg("-v")
@@ -1128,73 +1020,6 @@ pub(crate) async fn create_public_score_annotation(
         system_y_ratio,
         &created_at,
     ))
-}
-
-#[tracing::instrument(skip(state, outcome), fields(music_id = %music_id, kind = kind))]
-pub(crate) async fn store_conversion(
-    state: &AppState,
-    music_id: &str,
-    kind: &str,
-    outcome: crate::audio::ConversionOutcome,
-    progress_log: Option<&crate::audio::ProgressLogSender>,
-) -> Result<(Option<String>, String, Option<String>), AppError> {
-    match outcome {
-        crate::audio::ConversionOutcome::Ready {
-            bytes,
-            content_type,
-            extension,
-        } => {
-            let object_key = format!("{kind}/{music_id}.{extension}");
-            let storage_target = if state.storage.is_s3() {
-                "S3"
-            } else {
-                "storage"
-            };
-            let (stored_bytes, content_encoding) = if kind == "musicxml" && state.storage.is_s3() {
-                (gzip_bytes(&bytes)?, Some("gzip"))
-            } else {
-                (bytes, None)
-            };
-            emit_storage_progress(
-                progress_log,
-                format!(
-                    "{kind}: uploading {} KB to {storage_target} as {}.",
-                    stored_bytes.len() / 1024,
-                    object_key,
-                ),
-            );
-            state
-                .storage
-                .upload_bytes_with_encoding(
-                    &object_key,
-                    stored_bytes,
-                    content_type,
-                    content_encoding,
-                )
-                .await?;
-            emit_storage_progress(
-                progress_log,
-                format!("{kind}: upload to {storage_target} completed."),
-            );
-            Ok((Some(object_key), "ready".to_owned(), None))
-        }
-        crate::audio::ConversionOutcome::Unavailable { reason } => {
-            Ok((None, "unavailable".to_owned(), Some(reason)))
-        }
-        crate::audio::ConversionOutcome::Failed { reason } => {
-            warn!("{kind} conversion failed for {music_id}: {reason}");
-            Ok((None, "failed".to_owned(), Some(reason)))
-        }
-    }
-}
-
-fn emit_storage_progress(
-    progress_log: Option<&crate::audio::ProgressLogSender>,
-    message: impl Into<String>,
-) {
-    if let Some(progress_log) = progress_log {
-        let _ = progress_log.send(message.into());
-    }
 }
 
 pub(crate) async fn ensure_public_id_available(
@@ -1446,15 +1271,4 @@ pub(crate) fn midi_filename_for(filename: &str) -> String {
         .trim_end_matches(".mscx")
         .trim_end_matches(".MSCX");
     sanitize_content_disposition(&format!("{stem}.mid"))
-}
-
-pub(crate) fn processing_log_key(music_id: &str) -> String {
-    format!("scores/{music_id}/processing.log")
-}
-
-fn gzip_bytes(bytes: &Bytes) -> Result<Bytes, AppError> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(bytes).map_err(AppError::from)?;
-    let compressed = encoder.finish().map_err(AppError::from)?;
-    Ok(Bytes::from(compressed))
 }

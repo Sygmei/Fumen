@@ -1,22 +1,114 @@
 mod app;
-mod audio;
-mod config;
-mod db;
-mod models;
 mod openapi;
 mod routes;
-mod schema;
 mod schemas;
 mod services;
-mod storage;
 mod telemetry;
+
+pub mod audio {
+    pub use fumen_processor::audio::*;
+}
+
+pub mod config {
+    pub use fumen_core::config::*;
+}
+
+pub mod db {
+    pub use fumen_core::db::*;
+}
+
+pub mod models {
+    pub use fumen_core::models::*;
+}
+
+pub mod processing {
+    use crate::{AppError, AppState, models::MusicRecord};
+    use axum::http::StatusCode;
+    pub(crate) use fumen_processor::processing::{
+        QueueProcessingJobRequest, build_processing_log_header, processing_statuses,
+    };
+
+    fn processor_state(state: &AppState) -> fumen_processor::AppState {
+        fumen_processor::AppState {
+            config: state.config.clone(),
+            db_rw: state.db_rw.clone(),
+            db_ro: state.db_ro.clone(),
+            storage: state.storage.clone(),
+        }
+    }
+
+    fn map_processor_error(error: fumen_processor::AppError) -> AppError {
+        AppError::new(StatusCode::INTERNAL_SERVER_ERROR, error.message)
+    }
+
+    pub(crate) struct MusicProcessingLog {
+        inner: fumen_processor::processing::MusicProcessingLog,
+    }
+
+    impl MusicProcessingLog {
+        pub(crate) fn new(state: AppState, music_id: impl Into<String>) -> Self {
+            Self {
+                inner: fumen_processor::processing::MusicProcessingLog::new(
+                    processor_state(&state),
+                    music_id,
+                ),
+            }
+        }
+
+        pub(crate) async fn reset(&mut self, lines: &[String]) {
+            self.inner.reset(lines).await;
+        }
+
+        pub(crate) async fn append(&mut self, message: impl AsRef<str>) {
+            self.inner.append(message).await;
+        }
+    }
+
+    pub(crate) async fn load_music_processing_log(state: &AppState, music_id: &str) -> String {
+        fumen_processor::processing::load_music_processing_log(&processor_state(state), music_id)
+            .await
+    }
+
+    pub(crate) async fn reset_music_processing_state(
+        state: &AppState,
+        record: &MusicRecord,
+        log: &mut MusicProcessingLog,
+    ) -> Result<(), AppError> {
+        fumen_processor::processing::reset_music_processing_state(
+            &processor_state(state),
+            record,
+            &mut log.inner,
+        )
+        .await
+        .map_err(map_processor_error)
+    }
+
+    pub(crate) async fn enqueue_music_processing_job(
+        db: &fumen_core::db::DbPool,
+        request: QueueProcessingJobRequest<'_>,
+    ) -> Result<(), AppError> {
+        fumen_processor::processing::enqueue_music_processing_job(db, request)
+            .await
+            .map_err(map_processor_error)
+    }
+}
+
+pub mod schema {
+    pub use fumen_core::schema::*;
+}
+
+pub mod storage {
+    pub use fumen_core::storage::*;
+}
 
 pub(crate) use app::{
     ACCESS_TOKEN_TTL_SECONDS, AppError, AppRole, AppState, AuthContext, EnsembleRole,
-    LOGIN_LINK_TTL_MINUTES, ensure_membership_entities_exist, format_timestamp,
-    generate_auth_token, generate_public_token, normalize_music_icon, normalize_name,
-    normalize_public_id, normalize_username, parse_quality_profile, sanitize_content_disposition,
-    sanitize_filename, utc_now_string,
+    LOGIN_LINK_TTL_MINUTES, ensure_membership_entities_exist, generate_public_token,
+    normalize_music_icon, normalize_name, normalize_public_id, parse_quality_profile,
+    sanitize_content_disposition,
+};
+pub(crate) use fumen_core::{
+    generate_auth_token, normalize_username, sanitize_filename, utc_now_string,
 };
 
 use anyhow::{Context, Result};
@@ -31,12 +123,7 @@ use axum::{
 };
 use config::{AppConfig, StorageConfig};
 use db::{open_database_pool, run_migrations};
-use diesel::OptionalExtension;
-use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
-use models::{NewUser, UserRecord};
 use routes::api_routes;
-use schema::users::dsl as users_dsl;
 use std::fs;
 use std::{net::SocketAddr, path::PathBuf};
 use storage::Storage;
@@ -48,8 +135,6 @@ use tower_http::{
 use tracing::info;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
-use uuid::Uuid;
-
 fn main() -> Result<()> {
     if let Some(output_path) = dump_openapi_arg()? {
         dump_openapi_to_file(&output_path)?;
@@ -72,10 +157,9 @@ fn dump_openapi_arg() -> Result<Option<PathBuf>> {
     match args.next().as_deref() {
         None => Ok(None),
         Some("--dump-openapi") => {
-            let output_path = args
-                .next()
-                .map(PathBuf::from)
-                .context("usage: cargo run --bin fumen-backend -- --dump-openapi <output-path>")?;
+            let output_path = args.next().map(PathBuf::from).context(
+                "usage: cargo run --package fumen-backend -- --dump-openapi <output-path>",
+            )?;
 
             if let Some(extra) = args.next() {
                 anyhow::bail!("unexpected extra argument: {extra}");
@@ -115,7 +199,7 @@ async fn async_main() -> Result<()> {
 
     run_migrations(&config.database_url_admin).await?;
     let db_admin = open_database_pool(&config.database_url_admin, 1, "admin").await?;
-    let superadmin = ensure_superadmin_user(&db_admin, &config).await?;
+    let superadmin = fumen_core::auth::ensure_superadmin_user(&db_admin, &config).await?;
     let db_rw = open_database_pool(&config.database_url, 5, "read-write").await?;
     let db_ro = open_database_pool(&config.database_url_read_only, 5, "read-only").await?;
     let storage = Storage::new(&config).await?;
@@ -134,7 +218,7 @@ async fn async_main() -> Result<()> {
         .layer(CompressionLayer::new())
         .layer(cors_layer);
 
-    let frontend_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../frontend/dist");
+    let frontend_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../frontend/dist");
     if frontend_dist.exists() {
         app = app.fallback_service(
             ServeDir::new(&frontend_dist)
@@ -180,69 +264,6 @@ fn build_cors_layer(config: &AppConfig) -> Result<CorsLayer> {
             Ok(base.allow_origin(AllowOrigin::list(origins)))
         }
     }
-}
-
-async fn ensure_superadmin_user(db: &db::DbPool, config: &AppConfig) -> Result<UserRecord> {
-    let mut conn = db.get().await?;
-    if let Some(existing) = users_dsl::users
-        .filter(
-            users_dsl::role
-                .eq(AppRole::Superadmin.as_str())
-                .or(users_dsl::is_superadmin.eq(true)),
-        )
-        .select(UserRecord::as_select())
-        .first(&mut conn)
-        .await
-        .optional()?
-    {
-        return Ok(existing);
-    }
-
-    let base_username = normalize_username(&config.superadmin_username)
-        .map_err(|error| anyhow::anyhow!(error.message))?;
-    let mut username = base_username.clone();
-
-    while users_dsl::users
-        .filter(users_dsl::username.eq(&username))
-        .select(users_dsl::id)
-        .first::<String>(&mut conn)
-        .await
-        .optional()?
-        .is_some()
-    {
-        username = format!(
-            "{base_username}-{}",
-            generate_auth_token(6).to_ascii_lowercase()
-        );
-    }
-
-    let record = UserRecord {
-        id: Uuid::new_v4().to_string(),
-        username,
-        created_at: utc_now_string(),
-        is_superadmin: true,
-        role: AppRole::Superadmin.as_str().to_owned(),
-        display_name: None,
-        avatar_image_key: None,
-        created_by_user_id: None,
-    };
-
-    diesel::insert_into(users_dsl::users)
-        .values(&NewUser {
-            id: &record.id,
-            username: &record.username,
-            created_at: &record.created_at,
-            is_superadmin: record.is_superadmin,
-            role: &record.role,
-            display_name: record.display_name.as_deref(),
-            avatar_image_key: record.avatar_image_key.as_deref(),
-            created_by_user_id: record.created_by_user_id.as_deref(),
-        })
-        .execute(&mut conn)
-        .await?;
-
-    info!("created superadmin user '{}'", record.username);
-    Ok(record)
 }
 
 async fn root_message() -> impl IntoResponse {

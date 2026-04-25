@@ -1,20 +1,20 @@
 use crate::config::AppConfig;
 use crate::db::DbPool;
-use crate::models::{EnsembleRecord, MusicRecord, NewUserLoginLink, UserRecord, UserSessionRecord};
-use crate::schema::{ensembles, user_ensemble_memberships, user_login_links, user_sessions, users};
+use crate::models::{EnsembleRecord, MusicRecord, UserRecord, UserSessionRecord};
+use crate::schema::{ensembles, user_ensemble_memberships, user_sessions, users};
 use crate::schemas::{LoginLinkResponse, UserResponse};
 use crate::storage::Storage;
 use crate::{
     ACCESS_TOKEN_TTL_SECONDS, AppError, AppRole, AppState, AuthContext, EnsembleRole,
-    LOGIN_LINK_TTL_MINUTES, format_timestamp, generate_auth_token,
+    LOGIN_LINK_TTL_MINUTES,
 };
 use axum::http::{HeaderMap, header};
-use chrono::{Duration, SecondsFormat, Utc};
+use chrono::{SecondsFormat, Utc};
 use diesel::OptionalExtension;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
+use fumen_core::auth as core_auth;
 use std::collections::HashSet;
-use uuid::Uuid;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct RefreshTokenClaims {
@@ -511,28 +511,13 @@ pub(crate) async fn create_login_link(
     config: &AppConfig,
     user_id: &str,
 ) -> Result<LoginLinkResponse, AppError> {
-    let now = Utc::now();
-    let created_at = format_timestamp(now);
-    let expires_at = format_timestamp(now + Duration::minutes(LOGIN_LINK_TTL_MINUTES));
-    let token = generate_auth_token(48);
-
-    let mut conn = db.get().await?;
-    let login_link_id = Uuid::new_v4().to_string();
-    diesel::insert_into(user_login_links::table)
-        .values(&NewUserLoginLink {
-            id: &login_link_id,
-            user_id,
-            token: &token,
-            created_at: &created_at,
-            expires_at: &expires_at,
-            consumed_at: None,
-        })
-        .execute(&mut conn)
-        .await?;
+    let link = core_auth::create_login_link(db, config, user_id, LOGIN_LINK_TTL_MINUTES)
+        .await
+        .map_err(AppError::from)?;
 
     Ok(LoginLinkResponse {
-        connection_url: config.connection_url_for(&token),
-        expires_at,
+        connection_url: link.connection_url,
+        expires_at: link.expires_at,
     })
 }
 

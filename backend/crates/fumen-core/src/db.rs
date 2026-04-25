@@ -8,14 +8,10 @@ use diesel_migrations::{FileBasedMigrations, MigrationHarness};
 use std::path::PathBuf;
 use tracing::info;
 
-pub(crate) type DbPool = Pool<AsyncPgConnection>;
-pub(crate) type DbPoolError = RunError;
+pub type DbPool = Pool<AsyncPgConnection>;
+pub type DbPoolError = RunError;
 
-pub(crate) async fn open_database_pool(
-    url: &str,
-    max_connections: u32,
-    role: &str,
-) -> Result<DbPool> {
+pub async fn open_database_pool(url: &str, max_connections: u32, role: &str) -> Result<DbPool> {
     let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(url);
 
     Pool::builder()
@@ -25,7 +21,7 @@ pub(crate) async fn open_database_pool(
         .with_context(|| format!("failed to open PostgreSQL connection pool for {role}"))
 }
 
-pub(crate) async fn run_migrations(database_url: &str) -> Result<()> {
+pub async fn run_migrations(database_url: &str) -> Result<()> {
     let migrations = FileBasedMigrations::from_path(migrations_dir())?;
     info!("starting database migrations");
     let connection = AsyncPgConnection::establish(database_url).await?;
@@ -58,5 +54,5 @@ pub(crate) async fn run_migrations(database_url: &str) -> Result<()> {
 }
 
 fn migrations_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../migrations")
 }
