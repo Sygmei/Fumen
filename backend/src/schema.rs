@@ -46,6 +46,26 @@ diesel::table! {
 }
 
 diesel::table! {
+    processing_jobs (music_id) {
+        music_id -> Text,
+        source_object_key -> Text,
+        source_filename -> Text,
+        quality_profile -> Text,
+        status -> Text,
+        current_step -> Text,
+        attempt -> BigInt,
+        max_attempts -> BigInt,
+        worker_id -> Nullable<Text>,
+        lease_expires_at -> Nullable<Text>,
+        heartbeat_at -> Nullable<Text>,
+        queued_at -> Text,
+        started_at -> Nullable<Text>,
+        finished_at -> Nullable<Text>,
+        error_message -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
     music_ensemble_links (music_id, ensemble_id) {
         music_id -> Text,
         ensemble_id -> Text,
@@ -133,6 +153,7 @@ diesel::table! {
 
 diesel::joinable!(music_ensemble_links -> ensembles (ensemble_id));
 diesel::joinable!(music_ensemble_links -> musics (music_id));
+diesel::joinable!(processing_jobs -> musics (music_id));
 diesel::joinable!(score_annotations -> musics (music_id));
 diesel::joinable!(score_annotations -> users (user_id));
 diesel::joinable!(stems -> musics (music_id));
@@ -148,6 +169,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     ensembles,
     musics,
     music_ensemble_links,
+    processing_jobs,
     score_annotations,
     stems,
     user_ensemble_memberships,

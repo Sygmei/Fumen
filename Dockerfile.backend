@@ -22,7 +22,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git/db \
     --mount=type=cache,target=/app/backend/target \
     cargo build --release --locked \
-    && cp /app/backend/target/release/fumen-backend /tmp/fumen-backend
+    && cp /app/backend/target/release/fumen-backend /tmp/fumen-backend \
+    && cp /app/backend/target/release/processor /tmp/fumen-processor
 
 FROM debian:bookworm AS musescore-build
 
@@ -82,6 +83,7 @@ RUN groupadd --system --gid "${APP_GID}" app \
 WORKDIR /app
 
 COPY --from=build /tmp/fumen-backend /usr/local/bin/fumen
+COPY --from=build /tmp/fumen-processor /usr/local/bin/fumen-processor
 COPY backend/migrations /app/backend/migrations
 COPY --from=musescore-build /opt/musescore4 /opt/musescore4
 

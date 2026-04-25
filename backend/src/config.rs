@@ -18,6 +18,10 @@ pub struct AppConfig {
     pub musescore_docker_image: Option<String>,
     pub musescore_qt_platform: Option<String>,
     pub docker_bin: String,
+    pub processor_poll_interval_ms: u64,
+    pub processor_lease_seconds: i64,
+    pub processor_heartbeat_interval_ms: u64,
+    pub processor_worker_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +125,22 @@ impl AppConfig {
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "docker".to_owned());
+        let processor_poll_interval_ms = env::var("PROCESSOR_POLL_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(10_000);
+        let processor_lease_seconds = env::var("PROCESSOR_LEASE_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(600);
+        let processor_heartbeat_interval_ms = env::var("PROCESSOR_HEARTBEAT_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(30_000);
+        let processor_worker_id = env::var("PROCESSOR_WORKER_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
 
         Ok(Self {
             bind_address,
@@ -136,6 +156,10 @@ impl AppConfig {
             musescore_docker_image,
             musescore_qt_platform,
             docker_bin,
+            processor_poll_interval_ms,
+            processor_lease_seconds,
+            processor_heartbeat_interval_ms,
+            processor_worker_id,
         })
     }
 

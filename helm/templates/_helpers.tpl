@@ -14,6 +14,10 @@ fumen
 {{- printf "%s-frontend" (include "fumen.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "fumen.processor.fullname" -}}
+{{- printf "%s-processor" (include "fumen.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "fumen.baseDomain" -}}
 {{- $parts := splitList "." .Values.frontend.ingress.domain -}}
 {{- if gt (len $parts) 2 -}}

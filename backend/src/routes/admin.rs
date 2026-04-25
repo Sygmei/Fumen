@@ -15,7 +15,7 @@ use crate::schemas::{
     UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest,
     UpdateMusicEnsemblesRequest, UserResponse,
 };
-use crate::services::{auth, music};
+use crate::services::{auth, music, processing};
 use crate::{
     AppError, AppRole, AppState, EnsembleRole, audio, ensure_membership_entities_exist,
     generate_public_token, normalize_music_icon, normalize_name, normalize_public_id,
@@ -1883,9 +1883,9 @@ pub(crate) async fn admin_upload_music(
         directory_id: primary_ensemble_id.clone(),
     };
 
-    let mut processing_log = MusicProcessingLog::new(state.clone(), music_id.clone());
+    let mut processing_log = processing::MusicProcessingLog::new(state.clone(), music_id.clone());
     processing_log
-        .reset(&build_processing_log_header(
+        .reset(&processing::build_processing_log_header(
             "Initial upload processing",
             &filename,
             &quality_profile,
@@ -1897,14 +1897,16 @@ pub(crate) async fn admin_upload_music(
             ensemble_names.join(", ")
         ))
         .await;
-    spawn_music_processing_task(
-        state.clone(),
-        music_id.clone(),
-        quality_profile,
-        bytes,
-        safe_filename.clone(),
-        processing_log,
-    );
+    processing::enqueue_music_processing_job(
+        &state.db_rw,
+        processing::QueueProcessingJobRequest {
+            music_id: &music_id,
+            source_object_key: &object_key,
+            source_filename: &safe_filename,
+            quality_profile: quality_profile.as_str(),
+        },
+    )
+    .await?;
 
     Ok(Json(music::record_to_admin_response(
         &state.config,
@@ -2129,7 +2131,7 @@ pub(crate) async fn admin_music_processing_log(
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
     Ok(Json(AdminMusicProcessingLogResponse {
-        content: load_music_processing_log(&state, &id).await,
+        content: processing::load_music_processing_log(&state, &id).await,
     }))
 }
 
@@ -2162,9 +2164,9 @@ pub(crate) async fn admin_retry_render(
     music::ensure_can_manage_music(&state.db_rw, &auth_context, &id).await?;
     let quality_profile =
         audio::StemQualityProfile::from_stored_or_default(&record.quality_profile);
-    let mut processing_log = MusicProcessingLog::new(state.clone(), id.clone());
+    let mut processing_log = processing::MusicProcessingLog::new(state.clone(), id.clone());
     processing_log
-        .reset(&build_processing_log_header(
+        .reset(&processing::build_processing_log_header(
             "Processing restart",
             &record.filename,
             &quality_profile,
@@ -2173,24 +2175,24 @@ pub(crate) async fn admin_retry_render(
     processing_log
         .append(format!(
             "Previous statuses: audio={}, midi={}, musicxml={}, stems={}.",
-            processing_statuses(&record)[0],
-            processing_statuses(&record)[1],
-            processing_statuses(&record)[2],
-            processing_statuses(&record)[3],
+            processing::processing_statuses(&record)[0],
+            processing::processing_statuses(&record)[1],
+            processing::processing_statuses(&record)[2],
+            processing::processing_statuses(&record)[3],
         ))
         .await;
-
-    let (score_bytes, _, _) = state.storage.get_bytes(&record.object_key).await?;
-    reset_music_processing_state(&state, &record, &mut processing_log).await?;
-
-    spawn_music_processing_task(
-        state.clone(),
-        id.clone(),
-        quality_profile,
-        score_bytes,
-        sanitize_filename(&record.filename),
-        processing_log,
-    );
+    processing::reset_music_processing_state(&state, &record, &mut processing_log).await?;
+    let safe_filename = sanitize_filename(&record.filename);
+    processing::enqueue_music_processing_job(
+        &state.db_rw,
+        processing::QueueProcessingJobRequest {
+            music_id: &id,
+            source_object_key: &record.object_key,
+            source_filename: &safe_filename,
+            quality_profile: quality_profile.as_str(),
+        },
+    )
+    .await?;
 
     Ok(Json(build_admin_music_response(&state, &id).await?))
 }

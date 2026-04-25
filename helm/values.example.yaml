@@ -20,6 +20,31 @@ backend:
   ingress:
     domain: "api.yourdomain.com"
 
+processor:
+  enabled: true
+  version: "1.6.0"
+  replicas: 0
+  minReplicas: 0
+  maxReplicas: 5
+  leaseSeconds: 600
+  heartbeatIntervalMs: 30000
+  pollIntervalMs: 10000
+  otel:
+    enabled: true
+    serviceName: "fumen-processor"
+    serviceVersion: ""
+    deploymentEnvironment: "production"
+    endpoint: "http://observability.yourdomain.com:4318"
+    tracesEndpoint: ""
+    headers: ""
+    resourceAttributes: ""
+  keda:
+    enabled: true
+    pollingInterval: 10
+    cooldownPeriod: 30
+    targetQueryValue: 1
+    activationTargetQueryValue: 1
+
 frontend:
   version: "1.6.0"
   apiBaseUrl: ""

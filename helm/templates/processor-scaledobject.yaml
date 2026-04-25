@@ -1,0 +1,32 @@
+{{- if and .Values.processor.enabled .Values.processor.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "fumen.processor.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "fumen.name" . }}
+    app.kubernetes.io/component: processor
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  scaleTargetRef:
+    name: {{ include "fumen.processor.fullname" . }}
+  pollingInterval: {{ .Values.processor.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.processor.keda.cooldownPeriod }}
+  minReplicaCount: {{ .Values.processor.minReplicas }}
+  maxReplicaCount: {{ .Values.processor.maxReplicas }}
+  triggers:
+    - type: postgresql
+      metadata:
+        connectionFromEnv: DATABASE_URL
+        query: >
+          SELECT COUNT(*)
+          FROM processing_jobs
+          WHERE status = 'queued'
+             OR (
+               status = 'running'
+               AND lease_expires_at IS NOT NULL
+               AND lease_expires_at::timestamptz < NOW()
+             )
+        targetQueryValue: "{{ .Values.processor.keda.targetQueryValue }}"
+        activationTargetQueryValue: "{{ .Values.processor.keda.activationTargetQueryValue }}"
+{{- end }}

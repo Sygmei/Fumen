@@ -1,6 +1,6 @@
 use crate::schema::{
-    ensembles, music_ensemble_links, musics, score_annotations, stems, user_ensemble_memberships,
-    user_login_links, user_music_track_playtime, user_sessions, users,
+    ensembles, music_ensemble_links, musics, processing_jobs, score_annotations, stems,
+    user_ensemble_memberships, user_login_links, user_music_track_playtime, user_sessions, users,
 };
 use diesel::QueryableByName;
 use diesel::sql_types::{BigInt, Bool, Double, Nullable, Text};
@@ -59,6 +59,43 @@ pub struct MusicRecord {
     pub directory_id: String,
     #[diesel(sql_type = Nullable<Text>)]
     pub owner_user_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Queryable, QueryableByName, Selectable, Identifiable, Associations)]
+#[diesel(table_name = processing_jobs)]
+#[diesel(primary_key(music_id))]
+#[diesel(belongs_to(MusicRecord, foreign_key = music_id))]
+pub struct ProcessingJobRecord {
+    #[diesel(sql_type = Text)]
+    pub music_id: String,
+    #[diesel(sql_type = Text)]
+    pub source_object_key: String,
+    #[diesel(sql_type = Text)]
+    pub source_filename: String,
+    #[diesel(sql_type = Text)]
+    pub quality_profile: String,
+    #[diesel(sql_type = Text)]
+    pub status: String,
+    #[diesel(sql_type = Text)]
+    pub current_step: String,
+    #[diesel(sql_type = BigInt)]
+    pub attempt: i64,
+    #[diesel(sql_type = BigInt)]
+    pub max_attempts: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub worker_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub lease_expires_at: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub heartbeat_at: Option<String>,
+    #[diesel(sql_type = Text)]
+    pub queued_at: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub started_at: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub finished_at: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub error_message: Option<String>,
 }
 
 #[derive(Clone, Debug, Queryable, QueryableByName, Selectable, Identifiable, Associations)]
@@ -303,6 +340,26 @@ pub struct NewMusic<'a> {
 }
 
 #[derive(Insertable)]
+#[diesel(table_name = processing_jobs)]
+pub struct NewProcessingJob<'a> {
+    pub music_id: &'a str,
+    pub source_object_key: &'a str,
+    pub source_filename: &'a str,
+    pub quality_profile: &'a str,
+    pub status: &'a str,
+    pub current_step: &'a str,
+    pub attempt: i64,
+    pub max_attempts: i64,
+    pub worker_id: Option<&'a str>,
+    pub lease_expires_at: Option<&'a str>,
+    pub heartbeat_at: Option<&'a str>,
+    pub queued_at: &'a str,
+    pub started_at: Option<&'a str>,
+    pub finished_at: Option<&'a str>,
+    pub error_message: Option<&'a str>,
+}
+
+#[derive(Insertable)]
 #[diesel(table_name = score_annotations)]
 pub struct NewScoreAnnotation<'a> {
     pub id: &'a str,
@@ -385,4 +442,17 @@ pub struct UpdateMusicMetadata<'a> {
 #[diesel(table_name = musics)]
 pub struct UpdateMusicDirectory<'a> {
     pub directory_id: &'a str,
+}
+
+#[derive(AsChangeset)]
+#[diesel(table_name = processing_jobs)]
+pub struct UpdateProcessingJobState<'a> {
+    pub status: &'a str,
+    pub current_step: &'a str,
+    pub worker_id: Option<&'a str>,
+    pub lease_expires_at: Option<&'a str>,
+    pub heartbeat_at: Option<&'a str>,
+    pub started_at: Option<&'a str>,
+    pub finished_at: Option<&'a str>,
+    pub error_message: Option<&'a str>,
 }
