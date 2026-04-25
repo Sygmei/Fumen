@@ -10,7 +10,8 @@ use crate::schema::{
     user_ensemble_memberships, user_music_track_playtime,
 };
 use crate::schemas::{
-    AdminMusicPlaytimeResponse, AdminMusicResponse, AdminUserScorePlaytimeResponse,
+    AdminMusicPlaytimeResponse, AdminMusicProcessingProgressResponse,
+    AdminMusicProcessingStepResponse, AdminMusicResponse, AdminUserScorePlaytimeResponse,
     CreateScoreAnnotationRequest, MusicPlaytimeLeaderboardEntryResponse,
     MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, ScoreAnnotationListResponse,
     ScoreAnnotationResponse, StemInfo,
@@ -20,6 +21,7 @@ use crate::{
     AppError, AppRole, AppState, AuthContext, sanitize_content_disposition, utc_now_string,
 };
 use anyhow::anyhow;
+use chrono::{DateTime, Utc};
 use diesel::OptionalExtension;
 use diesel::QueryableByName;
 use diesel::prelude::*;
@@ -1172,6 +1174,212 @@ pub(crate) fn record_to_admin_response(
         processing_job_heartbeat_at: processing_job.and_then(|job| job.heartbeat_at.clone()),
         processing_job_error: processing_job.and_then(|job| job.error_message.clone()),
     }
+}
+
+pub(crate) fn build_admin_music_processing_progress_response(
+    record: &MusicRecord,
+    processing_job: Option<&ProcessingJobRecord>,
+) -> AdminMusicProcessingProgressResponse {
+    let job_status = processing_job.map(|job| job.status.clone());
+    let job_step = processing_job.map(|job| job.current_step.clone());
+    let lease_expires_at = processing_job.and_then(|job| job.lease_expires_at.clone());
+    let heartbeat_at = processing_job.and_then(|job| job.heartbeat_at.clone());
+    let stalled = job_status.as_deref() == Some("running")
+        && lease_expires_at
+            .as_deref()
+            .and_then(parse_rfc3339_utc)
+            .is_some_and(|lease| lease <= Utc::now());
+    let failed = crate::processing::processing_statuses(record).contains(&"failed")
+        || job_status.as_deref() == Some("failed");
+    let complete = crate::processing::processing_statuses(record)
+        .iter()
+        .all(|status| *status == "ready")
+        || job_status.as_deref() == Some("completed");
+
+    let mut steps = vec![
+        AdminMusicProcessingStepResponse {
+            key: "queue".to_owned(),
+            label: "Queue".to_owned(),
+            detail: if job_status.as_deref() == Some("queued") {
+                "waiting worker".to_owned()
+            } else {
+                "claimed".to_owned()
+            },
+            status: if job_status.as_deref() == Some("queued") {
+                "active".to_owned()
+            } else {
+                "done".to_owned()
+            },
+        },
+        AdminMusicProcessingStepResponse {
+            key: "input".to_owned(),
+            label: "Input".to_owned(),
+            detail: "staged".to_owned(),
+            status: "pending".to_owned(),
+        },
+        AdminMusicProcessingStepResponse {
+            key: "musicxml".to_owned(),
+            label: "MusicXML".to_owned(),
+            detail: "notation export".to_owned(),
+            status: "pending".to_owned(),
+        },
+        AdminMusicProcessingStepResponse {
+            key: "stems".to_owned(),
+            label: "Stems".to_owned(),
+            detail: "track render".to_owned(),
+            status: "pending".to_owned(),
+        },
+        AdminMusicProcessingStepResponse {
+            key: "storage".to_owned(),
+            label: "Storage".to_owned(),
+            detail: "asset upload".to_owned(),
+            status: "pending".to_owned(),
+        },
+        AdminMusicProcessingStepResponse {
+            key: "ready".to_owned(),
+            label: "Ready".to_owned(),
+            detail: "published".to_owned(),
+            status: "pending".to_owned(),
+        },
+    ];
+
+    let input_done = processing_job.is_some();
+    let musicxml_done = record.musicxml_status != "processing";
+    let stems_done = record.stems_status != "processing";
+    let storage_done =
+        record.audio_status != "processing" && record.midi_status != "processing" && musicxml_done && stems_done;
+
+    if input_done {
+        steps[1].status = "done".to_owned();
+    } else if job_step.as_deref() == Some("fetching_input") {
+        steps[1].status = "active".to_owned();
+    }
+
+    if musicxml_done {
+        steps[2].status = if record.musicxml_status == "failed" {
+            "failed".to_owned()
+        } else {
+            "done".to_owned()
+        };
+    } else if job_step.as_deref() == Some("generating_core") {
+        steps[2].status = "active".to_owned();
+    }
+
+    if stems_done {
+        steps[3].status = if record.stems_status == "failed" {
+            "failed".to_owned()
+        } else {
+            "done".to_owned()
+        };
+    } else if job_step.as_deref() == Some("generating_stems") {
+        steps[3].status = "active".to_owned();
+    }
+
+    if storage_done {
+        steps[4].status = if record.audio_status == "failed" || record.midi_status == "failed" {
+            "failed".to_owned()
+        } else {
+            "done".to_owned()
+        };
+    } else if job_step.as_deref() == Some("uploading_assets") {
+        steps[4].status = "active".to_owned();
+    }
+
+    if complete {
+        steps[5].status = "done".to_owned();
+    } else if job_step.as_deref() == Some("finalizing") {
+        steps[5].status = "active".to_owned();
+    }
+
+    if failed {
+        let failed_index = if record.musicxml_status == "failed" {
+            2
+        } else if record.stems_status == "failed" {
+            3
+        } else if record.audio_status == "failed" || record.midi_status == "failed" {
+            4
+        } else if job_status.as_deref() == Some("failed") {
+            match job_step.as_deref() {
+                Some("fetching_input") => 1,
+                Some("generating_core") => 2,
+                Some("generating_stems") => 3,
+                Some("uploading_assets") => 4,
+                Some("finalizing") => 5,
+                _ => 1,
+            }
+        } else {
+            1
+        };
+
+        for (index, step) in steps.iter_mut().enumerate() {
+            step.status = if index < failed_index {
+                "done".to_owned()
+            } else if index == failed_index {
+                "failed".to_owned()
+            } else {
+                "pending".to_owned()
+            };
+        }
+    } else if stalled {
+        let stalled_index = match job_step.as_deref() {
+            Some("fetching_input") => 1,
+            Some("generating_core") => 2,
+            Some("generating_stems") => 3,
+            Some("uploading_assets") => 4,
+            Some("finalizing") => 5,
+            _ => 1,
+        };
+
+        for (index, step) in steps.iter_mut().enumerate() {
+            if index < stalled_index {
+                step.status = "done".to_owned();
+            } else if index == stalled_index {
+                step.status = "stalled".to_owned();
+                step.detail = "worker lost".to_owned();
+            } else {
+                step.status = "pending".to_owned();
+            }
+        }
+    }
+
+    let state_message = if stalled {
+        heartbeat_at.as_ref().map_or_else(
+            || Some("Processor worker lease expired. Waiting for another worker to reclaim the job.".to_owned()),
+            |heartbeat| {
+                Some(format!(
+                    "Processor worker heartbeat stopped after {}. Waiting for another worker to reclaim the job.",
+                    heartbeat
+                ))
+            },
+        )
+    } else if let Some(error) = processing_job.and_then(|job| job.error_message.clone()) {
+        Some(error)
+    } else if complete {
+        Some("Processing completed successfully.".to_owned())
+    } else if job_status.as_deref() == Some("queued") {
+        Some("Processing is queued and waiting for a worker.".to_owned())
+    } else {
+        None
+    };
+
+    AdminMusicProcessingProgressResponse {
+        music_id: record.id.clone(),
+        processing_job_status: job_status,
+        processing_job_step: job_step,
+        processing_job_attempt: processing_job.map(|job| job.attempt),
+        processing_job_error: processing_job.and_then(|job| job.error_message.clone()),
+        processing_job_lease_expires_at: lease_expires_at,
+        processing_job_heartbeat_at: heartbeat_at,
+        stalled,
+        state_message,
+        steps,
+    }
+}
+
+fn parse_rfc3339_utc(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|datetime| datetime.with_timezone(&Utc))
 }
 
 pub(crate) fn record_to_public_response(

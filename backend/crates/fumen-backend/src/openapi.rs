@@ -3,7 +3,8 @@ use utoipa::{Modify, OpenApi};
 
 use crate::schemas::{
     AccessTokenRefreshResponse, AdminEnsembleResponse, AdminMusicPlaytimeResponse,
-    AdminMusicProcessingLogResponse, AdminMusicResponse, AdminUpdateMusicMultipartRequest,
+    AdminMusicProcessingLogResponse, AdminMusicProcessingProgressResponse,
+    AdminMusicProcessingStepResponse, AdminMusicResponse, AdminUpdateMusicMultipartRequest,
     AdminUpdateUserMultipartRequest, AdminUploadMusicMultipartRequest, AdminUserMetadataResponse,
     AdminUserScorePlaytimeResponse, AuthTokenResponse, CreateEnsembleRequest,
     CreateScoreAnnotationRequest, CreateUserRequest, CurrentUserResponse, DrumMapEntry,
@@ -77,6 +78,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::admin_list_musics,
         crate::routes::admin::admin_upload_music,
         crate::routes::admin::admin_music_processing_log,
+        crate::routes::admin::admin_music_processing_progress,
         crate::routes::admin::admin_retry_render,
         crate::routes::admin::admin_update_music,
         crate::routes::admin::admin_move_music,
@@ -89,6 +91,8 @@ impl Modify for SecurityAddon {
             AdminEnsembleResponse,
             AdminMusicPlaytimeResponse,
             AdminMusicProcessingLogResponse,
+            AdminMusicProcessingProgressResponse,
+            AdminMusicProcessingStepResponse,
             AdminMusicResponse,
             AdminUpdateMusicMultipartRequest,
             AdminUpdateUserMultipartRequest,

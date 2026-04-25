@@ -6,11 +6,12 @@ use crate::models::{
 use crate::schema::{ensembles, music_ensemble_links, musics, user_ensemble_memberships, users};
 use crate::schemas::{
     AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicProcessingLogResponse,
-    AdminMusicResponse, AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest,
-    AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, CreateEnsembleRequest,
-    CreateUserRequest, EnsembleMemberResponse, ErrorResponse, LoginLinkResponse, MoveMusicRequest,
-    UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest,
-    UpdateMusicEnsemblesRequest, UserResponse,
+    AdminMusicProcessingProgressResponse, AdminMusicResponse, AdminUpdateMusicMultipartRequest,
+    AdminUpdateUserMultipartRequest, AdminUploadMusicMultipartRequest, AdminUserMetadataResponse,
+    CreateEnsembleRequest, CreateUserRequest, EnsembleMemberResponse, ErrorResponse,
+    LoginLinkResponse, MoveMusicRequest, UpdateEnsembleMemberRequest,
+    UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest, UpdateMusicEnsemblesRequest,
+    UserResponse,
 };
 use crate::services::{auth, music};
 use crate::{
@@ -136,6 +137,14 @@ pub(super) fn routes(state: AppState) -> Router<AppState> {
                 state,
                 "/admin/musics/{id}/processing-log",
                 admin_music_processing_log
+            ),
+        )
+        .route(
+            "/admin/musics/{id}/processing-progress",
+            crate::op_get!(
+                state,
+                "/admin/musics/{id}/processing-progress",
+                admin_music_processing_progress
             ),
         )
         .route(
@@ -1664,6 +1673,45 @@ pub(crate) async fn admin_music_processing_log(
     Ok(Json(AdminMusicProcessingLogResponse {
         content: processing::load_music_processing_log(&state, &id).await,
     }))
+}
+
+#[tracing::instrument(skip(state, headers), fields(music_id = %id))]
+#[utoipa::path(
+    get,
+    path = "/api/admin/musics/{id}/processing-progress",
+    tag = "admin",
+    security(("bearer_auth" = [])),
+    params(
+        ("id" = String, Path, description = "Music identifier")
+    ),
+    responses(
+        (status = 200, description = "Structured score processing progress", body = AdminMusicProcessingProgressResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Music not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn admin_music_processing_progress(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<AdminMusicProcessingProgressResponse>, AppError> {
+    let auth_context = auth::require_admin_context(&state, &headers).await?;
+    if !auth_context.has_global_power() {
+        return Err(AppError::unauthorized(
+            "Processing progress is only available to admins",
+        ));
+    }
+
+    let record = music::find_music_by_id(&state.db_rw, &id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Music not found"))?;
+    let processing_job = music::find_processing_job_by_music_id(&state.db_rw, &id).await?;
+
+    Ok(Json(music::build_admin_music_processing_progress_response(
+        &record,
+        processing_job.as_ref(),
+    )))
 }
 
 #[tracing::instrument(skip(state, headers), fields(music_id = %id))]

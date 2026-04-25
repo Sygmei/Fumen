@@ -301,6 +301,8 @@
             loadPlaytime: loadScorePlaytime,
             loadProcessingLog: (musicId: string) =>
                 authenticatedApiClient.adminMusicProcessingLog(musicId),
+            loadProcessingProgress: (musicId: string) =>
+                authenticatedApiClient.adminMusicProcessingProgress(musicId),
             reloadMusic,
             canViewProcessingLog: hasGlobalPower(appShell.currentUser),
             onRetryRender: handleRestartProcessing,

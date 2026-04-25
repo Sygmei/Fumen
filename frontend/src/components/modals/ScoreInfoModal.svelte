@@ -3,6 +3,7 @@
     import type {
         AdminMusicPlaytimeResponse as AdminMusicPlaytime,
         AdminMusicProcessingLogResponse,
+        AdminMusicProcessingProgressResponse,
         AdminMusicResponse as AdminMusic,
         UserResponse as AppUser,
     } from "$backend/models";
@@ -21,6 +22,7 @@
         currentUser,
         loadPlaytime,
         loadProcessingLog,
+        loadProcessingProgress,
         reloadMusic,
         canViewProcessingLog = false,
         onRetryRender,
@@ -32,6 +34,9 @@
         loadProcessingLog: (
             musicId: string,
         ) => Promise<AdminMusicProcessingLogResponse>;
+        loadProcessingProgress: (
+            musicId: string,
+        ) => Promise<AdminMusicProcessingProgressResponse>;
         reloadMusic: (musicId: string) => Promise<AdminMusic>;
         canViewProcessingLog?: boolean;
         onRetryRender: (musicId: string) => Promise<AdminMusic>;
@@ -43,8 +48,12 @@
     let playtimeLoading = $state(true);
     let playtimeError = $state("");
     let processingLog = $state("");
+    let processingProgress = $state<AdminMusicProcessingProgressResponse | null>(
+        null,
+    );
     let processingLogLoading = $state(false);
     let processingLogError = $state("");
+    let processingProgressError = $state("");
     let retrying = $state(false);
     let retryError = $state("");
 
@@ -118,6 +127,10 @@
         return processingStatuses(item).includes("failed");
     }
 
+    function logHasLine(logText: string, matcher: (line: string) => boolean) {
+        return logText.split(/\r?\n/).some((line) => matcher(line.toLowerCase()));
+    }
+
     function deriveProcessingSteps(item: AdminMusic, logText: string): ProcessingStep[] {
         const lower = logText.toLowerCase();
         const storageLabel = lower.includes(" s3") ? "S3" : "Storage";
@@ -177,11 +190,27 @@
             lower.includes("writing temporary input file") ||
             lower.includes("temporary input file written") ||
             lower.includes("score upload");
-        const hasMusicxmlActivity =
-            lower.includes("musicxml") ||
-            lower.includes("application/xml") ||
-            lower.includes("score.musicxml") ||
+        const hasMusicxmlCompletion =
             lower.includes("audio, midi, and musicxml conversion finished");
+        const hasMusicxmlDoneLine =
+            logHasLine(
+                logText,
+                (line) =>
+                    line.includes("score.musicxml") &&
+                    line.includes("musescore: done"),
+            ) ||
+            logHasLine(
+                logText,
+                (line) =>
+                    line.includes("application/xml") &&
+                    line.includes("musescore: done"),
+            );
+        const hasStemRenderActivity =
+            lower.includes("stems: exporting midi from score") ||
+            lower.includes("stems: found ") ||
+            lower.includes("stems: [") ||
+            lower.includes("rendering via musescore") ||
+            lower.includes("stem generation finished");
         const hasStorageActivity =
             lower.includes("uploading ") ||
             lower.includes(" uploaded ") ||
@@ -200,7 +229,10 @@
             logText.trim().length > 0 ||
             processingStatuses(item).some((status) => status !== "processing");
         const musicxmlDone =
-            item.musicxml_status !== "processing" || hasMusicxmlActivity;
+            item.musicxml_status !== "processing" ||
+            hasMusicxmlCompletion ||
+            hasMusicxmlDoneLine;
+        const stemsStarted = jobStep === "generating_stems" || hasStemRenderActivity;
         const stemsDone =
             item.stems_status !== "processing" ||
             lower.includes("stem generation finished") ||
@@ -283,7 +315,7 @@
                   : "pending",
             stemsDone
                 ? "done"
-                : jobStep === "generating_stems" || musicxmlDone
+                : stemsStarted
                   ? "active"
                   : "pending",
             storageDone
@@ -338,9 +370,16 @@
         }));
     }
 
-    const processingSteps = $derived(deriveProcessingSteps(currentMusic, processingLog));
+    const processingSteps = $derived(
+        processingProgress?.steps?.length
+            ? processingProgress.steps.map((step) => ({
+                  ...step,
+                  status: step.status as ProcessingStepStatus,
+              }))
+            : deriveProcessingSteps(currentMusic, processingLog),
+    );
     const processingStallMessage = $derived(
-        processingJobStallMessage(currentMusic),
+        processingProgress?.state_message || processingJobStallMessage(currentMusic),
     );
 
     async function refreshCurrentMusic() {
@@ -366,6 +405,21 @@
             if (showLoading) {
                 processingLogLoading = false;
             }
+        }
+    }
+
+    async function refreshProcessingProgress() {
+        if (!canViewProcessingLog) return;
+
+        processingProgressError = "";
+        try {
+            processingProgress = await loadProcessingProgress(currentMusic.id);
+        } catch (error) {
+            processingProgress = null;
+            processingProgressError =
+                error instanceof Error
+                    ? error.message
+                    : "Unable to load processing progress";
         }
     }
 
@@ -395,7 +449,10 @@
             }
 
             if (!cancelled && canViewProcessingLog) {
-                await refreshProcessingLog();
+                await Promise.all([
+                    refreshProcessingLog(),
+                    refreshProcessingProgress(),
+                ]);
             }
         };
 
@@ -410,7 +467,10 @@
                 try {
                     await refreshCurrentMusic();
                     if (canViewProcessingLog) {
-                        await refreshProcessingLog(false);
+                        await Promise.all([
+                            refreshProcessingLog(false),
+                            refreshProcessingProgress(),
+                        ]);
                     }
                 } catch {
                     // Ignore polling errors and keep the modal interactive.
@@ -431,7 +491,10 @@
         retryError = "";
         try {
             currentMusic = await onRetryRender(currentMusic.id);
-            await refreshProcessingLog();
+            await Promise.all([
+                refreshProcessingLog(),
+                refreshProcessingProgress(),
+            ]);
         } catch (error) {
             retryError =
                 error instanceof Error
@@ -578,6 +641,9 @@
                 </div>
             </div>
 
+            {#if processingProgressError}
+                <p class="status error">{processingProgressError}</p>
+            {/if}
             {#if processingLogError}
                 <p class="status error">{processingLogError}</p>
             {/if}
@@ -588,9 +654,9 @@
                 <p class="status warning">{processingStallMessage}</p>
             {/if}
 
-            {#if !processingLogError && !retryError && processingLogLoading}
+            {#if !processingProgressError && !processingLogError && !retryError && processingLogLoading}
                 <p class="hint">Loading processing log...</p>
-            {:else if !processingLogError && !retryError && processingLog}
+            {:else if !processingProgressError && !processingLogError && !retryError && (processingLog || processingSteps.length)}
                 <div class="processing-journey" aria-label="Processing progress">
                     {#each processingSteps as step, index (step.key)}
                         <article class={`processing-stop is-${step.status}`}>
@@ -614,7 +680,7 @@
                     showLevelFilter={false}
                     showDownloadButton={false}
                 />
-            {:else if !processingLogError && !retryError}
+            {:else if !processingProgressError && !processingLogError && !retryError}
                 <p class="hint">No processing log has been recorded for this score yet.</p>
             {/if}
         </section>

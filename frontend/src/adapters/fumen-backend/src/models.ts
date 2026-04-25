@@ -29,6 +29,26 @@ export interface AdminMusicProcessingLogResponse {
   content: string;
 }
 
+export interface AdminMusicProcessingProgressResponse {
+  music_id: string;
+  processing_job_attempt?: number | null;
+  processing_job_error?: string | null;
+  processing_job_heartbeat_at?: string | null;
+  processing_job_lease_expires_at?: string | null;
+  processing_job_status?: string | null;
+  processing_job_step?: string | null;
+  stalled: boolean;
+  state_message?: string | null;
+  steps: AdminMusicProcessingStepResponse[];
+}
+
+export interface AdminMusicProcessingStepResponse {
+  detail: string;
+  key: string;
+  label: string;
+  status: string;
+}
+
 
 export interface AdminMusicResponse {
   audio_error?: string | null;

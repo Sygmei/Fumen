@@ -128,6 +128,28 @@ pub struct AdminMusicProcessingLogResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct AdminMusicProcessingStepResponse {
+    pub key: String,
+    pub label: String,
+    pub detail: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminMusicProcessingProgressResponse {
+    pub music_id: String,
+    pub processing_job_status: Option<String>,
+    pub processing_job_step: Option<String>,
+    pub processing_job_attempt: Option<i64>,
+    pub processing_job_error: Option<String>,
+    pub processing_job_lease_expires_at: Option<String>,
+    pub processing_job_heartbeat_at: Option<String>,
+    pub stalled: bool,
+    pub state_message: Option<String>,
+    pub steps: Vec<AdminMusicProcessingStepResponse>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MusicPlaytimeTrackSummaryResponse {
     pub track_index: i64,
     pub track_name: String,

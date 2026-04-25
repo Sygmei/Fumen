@@ -13,7 +13,7 @@ use tracing::{Event, Subscriber};
 use tracing_subscriber::{
     EnvFilter,
     fmt::{
-        FmtContext,
+        FmtContext, FormattedFields,
         format::{FormatEvent, FormatFields, Writer},
     },
     layer::SubscriberExt,
@@ -51,9 +51,69 @@ where
             metadata.level(),
             metadata.target()
         )?;
+        write_scope_annotations(ctx, writer.by_ref())?;
         ctx.format_fields(writer.by_ref(), event)?;
         writeln!(writer)
     }
+}
+
+fn write_scope_annotations<S, N>(ctx: &FmtContext<'_, S, N>, mut writer: Writer<'_>) -> fmt::Result
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+{
+    let mut token_sub = None;
+
+    if let Some(scope) = ctx.event_scope() {
+        for span in scope.from_root() {
+            let extensions = span.extensions();
+            let Some(fields) = extensions.get::<FormattedFields<N>>() else {
+                continue;
+            };
+
+            let rendered = fields.to_string();
+            if token_sub.is_none() {
+                token_sub = extract_field_value(&rendered, "token.sub");
+            }
+        }
+    }
+
+    if let Some(token_sub) = token_sub {
+        write!(writer, "user={} ", token_sub)?;
+    }
+
+    Ok(())
+}
+
+fn extract_field_value(fields: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}=");
+    let start = fields.find(&needle)? + needle.len();
+    let tail = &fields[start..];
+    let mut chars = tail.char_indices();
+    let (first_index, first_char) = chars.next()?;
+
+    if first_index != 0 {
+        return None;
+    }
+
+    if first_char == '"' {
+        let mut escaped = false;
+        for (index, ch) in tail[1..].char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => return Some(tail[1..=index].to_owned()),
+                _ => {}
+            }
+        }
+        return None;
+    }
+
+    let end = tail.find(' ').unwrap_or(tail.len());
+    Some(tail[..end].to_owned())
 }
 
 impl Drop for TelemetryGuard {
