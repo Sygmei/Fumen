@@ -21,6 +21,7 @@ pub struct AppConfig {
     pub processor_poll_interval_ms: u64,
     pub processor_lease_seconds: i64,
     pub processor_heartbeat_interval_ms: u64,
+    pub processor_max_parallel_stem_renders: usize,
     pub processor_worker_id: Option<String>,
 }
 
@@ -138,6 +139,11 @@ impl AppConfig {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(30_000);
+        let processor_max_parallel_stem_renders = env::var("PROCESSOR_MAX_PARALLEL_STEM_RENDERS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or_else(default_parallelism);
         let processor_worker_id = env::var("PROCESSOR_WORKER_ID")
             .ok()
             .filter(|value| !value.trim().is_empty());
@@ -159,6 +165,7 @@ impl AppConfig {
             processor_poll_interval_ms,
             processor_lease_seconds,
             processor_heartbeat_interval_ms,
+            processor_max_parallel_stem_renders,
             processor_worker_id,
         })
     }
@@ -179,4 +186,10 @@ impl AppConfig {
             token
         )
     }
+}
+
+fn default_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
 }

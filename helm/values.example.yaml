@@ -43,6 +43,8 @@ processor:
   leaseSeconds: 600
   heartbeatIntervalMs: 30000
   pollIntervalMs: 10000
+  # Leave at 0 to auto-match the pod's available CPU parallelism.
+  maxParallelStemRenders: 0
   otel:
     enabled: true
     serviceName: "fumen-processor"

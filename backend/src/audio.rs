@@ -11,7 +11,9 @@ use std::io::Read;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::process::Command;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
 use zip::ZipArchive;
@@ -428,10 +430,15 @@ async fn generate_stems_with_musescore(
 
     let clean_tempo_chunk = build_global_tempo_chunk(&midi_bytes);
     let total = track_infos.len();
-    tracing::info!("stems: found {total} instrument tracks, starting direct MuseScore render");
+    let max_parallel_stem_renders = config.processor_max_parallel_stem_renders.max(1);
+    tracing::info!(
+        "stems: found {total} instrument tracks, starting direct MuseScore render with max {max_parallel_stem_renders} concurrent render(s)"
+    );
     emit_progress(
         progress_log,
-        format!("stems: found {total} instrument tracks, starting direct MuseScore render"),
+        format!(
+            "stems: found {total} instrument tracks, starting direct MuseScore render with max {max_parallel_stem_renders} concurrent render(s)"
+        ),
     );
 
     let render_dir = output_dir.join("musescore-direct-stems");
@@ -440,6 +447,7 @@ async fn generate_stems_with_musescore(
         .with_context(|| format!("creating {}", render_dir.display()))?;
 
     let config = config.clone();
+    let render_semaphore = Arc::new(Semaphore::new(max_parallel_stem_renders));
     enum StemJobOutcome {
         Ready(StemResult),
         Unavailable(String),
@@ -472,8 +480,14 @@ async fn generate_stems_with_musescore(
         let quality_profile = quality_profile;
         let config = config.clone();
         let progress_log = progress_log.cloned();
+        let render_semaphore = render_semaphore.clone();
 
         jobs.spawn(async move {
+            let _permit = render_semaphore
+                .acquire_owned()
+                .await
+                .context("stem render semaphore closed")?;
+
             tokio::fs::write(&stem_mid_path, &stem_midi)
                 .await
                 .with_context(|| format!("writing {}", stem_mid_path.display()))?;

@@ -123,6 +123,8 @@ spec:
               value: {{ .Values.processor.heartbeatIntervalMs | quote }}
             - name: PROCESSOR_POLL_INTERVAL_MS
               value: {{ .Values.processor.pollIntervalMs | quote }}
+            - name: PROCESSOR_MAX_PARALLEL_STEM_RENDERS
+              value: {{ .Values.processor.maxParallelStemRenders | quote }}
             - name: MUSESCORE_DIRECT_OGG_STEMS
               value: {{ .Values.backend.musescoreDirectOggStems | toString | quote }}
           volumeMounts:
