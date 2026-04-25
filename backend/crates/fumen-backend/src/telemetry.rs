@@ -34,9 +34,9 @@ pub(crate) fn init() -> Result<TelemetryGuard> {
         .map(|value| value.trim().to_ascii_lowercase())
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
     {
-        "fumen_backend=info,processor=info,diesel=debug,tower_http=info"
+        "fumen_backend=info,fumen_core=info,processor=info,diesel=debug,tower_http=info"
     } else {
-        "fumen_backend=info,processor=info,tower_http=info"
+        "fumen_backend=info,fumen_core=info,processor=info,tower_http=info"
     };
 
     fumen_core::telemetry::init_tracing(

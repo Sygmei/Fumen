@@ -9,9 +9,9 @@ pub fn init() -> Result<TelemetryGuard> {
         .map(|value| value.trim().to_ascii_lowercase())
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
     {
-        "fumen_processor=info,diesel=debug"
+        "fumen_processor=info,fumen_core=info,diesel=debug"
     } else {
-        "fumen_processor=info"
+        "fumen_processor=info,fumen_core=info"
     };
     fumen_core::telemetry::init_tracing(
         default_filter,
