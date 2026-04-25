@@ -65,6 +65,14 @@
         ];
     }
 
+    function processingJobStatus(item: AdminMusic) {
+        return item.processing_job_status ?? null;
+    }
+
+    function processingJobStep(item: AdminMusic) {
+        return item.processing_job_step ?? null;
+    }
+
     function isReadyMusic(item: AdminMusic) {
         return processingStatuses(item).every((status) => status === "ready");
     }
@@ -80,13 +88,59 @@
     function deriveProcessingSteps(item: AdminMusic, logText: string): ProcessingStep[] {
         const lower = logText.toLowerCase();
         const storageLabel = lower.includes(" s3") ? "S3" : "Storage";
+        const jobStatus = processingJobStatus(item);
+        const jobStep = processingJobStep(item);
         const failed =
+            jobStatus === "failed" ||
             hasProcessingFailure(item) ||
             lower.includes("processing failed") ||
             lower.includes(" failed.");
 
+        if (jobStatus === "queued") {
+            return [
+                {
+                    key: "queue",
+                    label: "Queue",
+                    detail: "waiting worker",
+                    status: "active",
+                },
+                {
+                    key: "input",
+                    label: "Input",
+                    detail: "staged",
+                    status: "pending",
+                },
+                {
+                    key: "musicxml",
+                    label: "MusicXML",
+                    detail: "notation export",
+                    status: "pending",
+                },
+                {
+                    key: "stems",
+                    label: "Stems",
+                    detail: "track render",
+                    status: "pending",
+                },
+                {
+                    key: "storage",
+                    label: storageLabel,
+                    detail: "asset upload",
+                    status: "pending",
+                },
+                {
+                    key: "ready",
+                    label: "Ready",
+                    detail: "published",
+                    status: "pending",
+                },
+            ];
+        }
+
         const hasInputActivity =
             lower.includes("processing restart requested") ||
+            lower.includes("processor worker") ||
+            lower.includes("fetching source score") ||
             lower.includes("writing temporary input file") ||
             lower.includes("temporary input file written") ||
             lower.includes("score upload");
@@ -125,21 +179,26 @@
         let failedIndex: number | null = null;
         if (failed) {
             if (item.musicxml_status === "failed") {
-                failedIndex = 1;
+                failedIndex = 2;
             } else if (item.stems_status === "failed") {
-                failedIndex = 2;
-            } else if (item.audio_status === "failed" || item.midi_status === "failed") {
-                failedIndex = stemsDone ? 3 : 1;
-            } else if (!musicxmlDone) {
-                failedIndex = 1;
-            } else if (!stemsDone) {
-                failedIndex = 2;
-            } else {
                 failedIndex = 3;
+            } else if (item.audio_status === "failed" || item.midi_status === "failed") {
+                failedIndex = stemsDone ? 4 : 2;
+            } else if (!musicxmlDone) {
+                failedIndex = 2;
+            } else if (!stemsDone) {
+                failedIndex = 3;
+            } else {
+                failedIndex = 4;
             }
         }
 
         const steps = [
+            {
+                key: "queue",
+                label: "Queue",
+                detail: "claimed",
+            },
             {
                 key: "input",
                 label: "Input",
@@ -168,11 +227,32 @@
         ];
 
         const statuses: ProcessingStepStatus[] = [
-            inputDone ? "done" : "active",
-            musicxmlDone ? "done" : inputDone ? "active" : "pending",
-            stemsDone ? "done" : musicxmlDone ? "active" : "pending",
-            storageDone ? "done" : storageStarted ? "active" : "pending",
-            isComplete ? "done" : "pending",
+            jobStatus === "running" || isComplete || failed ? "done" : "active",
+            inputDone
+                ? "done"
+                : jobStep === "fetching_input" || jobStep === "generating_core"
+                  ? "active"
+                  : "pending",
+            musicxmlDone
+                ? "done"
+                : jobStep === "generating_core" || inputDone
+                  ? "active"
+                  : "pending",
+            stemsDone
+                ? "done"
+                : jobStep === "generating_stems" || musicxmlDone
+                  ? "active"
+                  : "pending",
+            storageDone
+                ? "done"
+                : jobStep === "uploading_assets" || storageStarted
+                  ? "active"
+                  : "pending",
+            isComplete || jobStatus === "completed"
+                ? "done"
+                : jobStep === "finalizing"
+                  ? "active"
+                  : "pending",
         ];
 
         if (failedIndex !== null) {

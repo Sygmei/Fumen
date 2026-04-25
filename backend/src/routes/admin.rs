@@ -441,6 +441,7 @@ async fn build_admin_music_response(
     let stems_total = music::fetch_stems_total(&state.db_rw, id).await;
     let (ensemble_ids, ensemble_names) =
         music::ensemble_metadata_for_music(&state.db_rw, id).await?;
+    let processing_job = music::find_processing_job_by_music_id(&state.db_rw, id).await?;
     Ok(music::record_to_admin_response(
         &state.config,
         &state.storage,
@@ -448,6 +449,7 @@ async fn build_admin_music_response(
         stems_total,
         ensemble_ids,
         ensemble_names,
+        processing_job.as_ref(),
     ))
 }
 
@@ -1623,6 +1625,7 @@ pub(crate) async fn admin_list_musics(
     let links = music::fetch_music_ensemble_links(&state.db_rw).await?;
     let (mut music_ensemble_ids, mut music_ensemble_names) =
         music::build_music_ensemble_maps(links, &ensemble_names);
+    let processing_jobs = music::fetch_processing_job_map(&state.db_rw).await?;
 
     let mut visible_items = Vec::new();
     for record in rows {
@@ -1630,6 +1633,7 @@ pub(crate) async fn admin_list_musics(
             let total = totals.get(&record.id).copied().unwrap_or(0);
             let ensemble_ids = music_ensemble_ids.remove(&record.id).unwrap_or_default();
             let ensemble_names = music_ensemble_names.remove(&record.id).unwrap_or_default();
+            let processing_job = processing_jobs.get(&record.id);
             visible_items.push(music::record_to_admin_response(
                 &state.config,
                 &state.storage,
@@ -1637,6 +1641,7 @@ pub(crate) async fn admin_list_musics(
                 total,
                 ensemble_ids,
                 ensemble_names,
+                processing_job,
             ));
         }
     }
@@ -1855,34 +1860,6 @@ pub(crate) async fn admin_upload_music(
         .filter_map(|ensemble_id| ensemble_name_map.get(ensemble_id).cloned())
         .collect::<Vec<_>>();
 
-    let record = MusicRecord {
-        id: music_id.clone(),
-        title: resolved_title.clone(),
-        subtitle: subtitle.clone(),
-        icon: icon.clone(),
-        icon_image_key: icon_image_key.clone(),
-        filename: filename.clone(),
-        content_type: content_type.clone(),
-        object_key: object_key.clone(),
-        audio_object_key: None,
-        audio_status: "processing".to_owned(),
-        audio_error: None,
-        midi_object_key: None,
-        midi_status: "processing".to_owned(),
-        midi_error: None,
-        musicxml_object_key: None,
-        musicxml_status: "processing".to_owned(),
-        musicxml_error: None,
-        stems_status: "processing".to_owned(),
-        stems_error: None,
-        public_token: public_token.clone(),
-        public_id: public_id.clone(),
-        quality_profile: quality_profile.as_str().to_owned(),
-        created_at: created_at.clone(),
-        owner_user_id: Some(auth_context.user.id.clone()),
-        directory_id: primary_ensemble_id.clone(),
-    };
-
     let mut processing_log = processing::MusicProcessingLog::new(state.clone(), music_id.clone());
     processing_log
         .reset(&processing::build_processing_log_header(
@@ -1908,14 +1885,7 @@ pub(crate) async fn admin_upload_music(
     )
     .await?;
 
-    Ok(Json(music::record_to_admin_response(
-        &state.config,
-        &state.storage,
-        record,
-        0,
-        ensemble_ids,
-        ensemble_names,
-    )))
+    Ok(Json(build_admin_music_response(&state, &music_id).await?))
 }
 
 #[tracing::instrument(
@@ -2321,14 +2291,7 @@ pub(crate) async fn admin_update_music(
     let stems_total = music::fetch_stems_total(&state.db_rw, &id).await;
     let (ensemble_ids, ensemble_names) =
         music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
-    Ok(Json(music::record_to_admin_response(
-        &state.config,
-        &state.storage,
-        record,
-        stems_total,
-        ensemble_ids,
-        ensemble_names,
-    )))
+    Ok(Json(build_admin_music_response(&state, &id).await?))
 }
 
 #[utoipa::path(
@@ -2396,14 +2359,7 @@ pub(crate) async fn admin_move_music(
     let stems_total = music::fetch_stems_total(&state.db_rw, &id).await;
     let (ensemble_ids, ensemble_names) =
         music::ensemble_metadata_for_music(&state.db_rw, &id).await?;
-    Ok(Json(music::record_to_admin_response(
-        &state.config,
-        &state.storage,
-        record,
-        stems_total,
-        ensemble_ids,
-        ensemble_names,
-    )))
+    Ok(Json(build_admin_music_response(&state, &id).await?))
 }
 
 #[utoipa::path(

@@ -60,6 +60,13 @@
     });
 
     function isProcessingMusic(music: AdminMusic) {
+        if (
+            music.processing_job_status === "queued" ||
+            music.processing_job_status === "running"
+        ) {
+            return true;
+        }
+
         return [
             music.audio_status,
             music.midi_status,
@@ -142,6 +149,10 @@
             ),
             ensemble_names: ensembleNames,
             owner_user_id: appShell.currentUser?.id ?? null,
+            processing_job_attempt: 1,
+            processing_job_error: null,
+            processing_job_status: "queued",
+            processing_job_step: "queued",
         };
     }
 

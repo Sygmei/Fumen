@@ -2,11 +2,12 @@ use crate::config::AppConfig;
 use crate::db::DbPool;
 use crate::models::{
     BigIntValueRow, EnsembleRecord, MusicEnsembleLinkRecord, MusicRecord, NewScoreAnnotation,
-    NewStem, NewUserMusicTrackPlaytime, StemRecord, UserEnsembleMembershipRecord, UserRecord,
+    NewStem, NewUserMusicTrackPlaytime, ProcessingJobRecord, StemRecord,
+    UserEnsembleMembershipRecord, UserRecord,
 };
 use crate::schema::{
-    ensembles, music_ensemble_links, musics, score_annotations, stems, user_ensemble_memberships,
-    user_music_track_playtime,
+    ensembles, music_ensemble_links, musics, processing_jobs, score_annotations, stems,
+    user_ensemble_memberships, user_music_track_playtime,
 };
 use crate::schemas::{
     AdminMusicPlaytimeResponse, AdminMusicResponse, AdminUserScorePlaytimeResponse,
@@ -1253,6 +1254,32 @@ pub(crate) async fn find_music_by_access_key(
         .optional()?)
 }
 
+pub(crate) async fn find_processing_job_by_music_id(
+    db: &DbPool,
+    music_id: &str,
+) -> Result<Option<ProcessingJobRecord>, AppError> {
+    let mut conn = db.get().await?;
+    Ok(processing_jobs::table
+        .find(music_id)
+        .select(ProcessingJobRecord::as_select())
+        .first(&mut conn)
+        .await
+        .optional()?)
+}
+
+pub(crate) async fn fetch_processing_job_map(
+    db: &DbPool,
+) -> Result<HashMap<String, ProcessingJobRecord>, AppError> {
+    let mut conn = db.get().await?;
+    Ok(processing_jobs::table
+        .select(ProcessingJobRecord::as_select())
+        .load::<ProcessingJobRecord>(&mut conn)
+        .await?
+        .into_iter()
+        .map(|job| (job.music_id.clone(), job))
+        .collect())
+}
+
 pub(crate) fn record_to_admin_response(
     config: &AppConfig,
     storage: &Storage,
@@ -1260,6 +1287,7 @@ pub(crate) fn record_to_admin_response(
     stems_total_bytes: i64,
     ensemble_ids: Vec<String>,
     ensemble_names: Vec<String>,
+    processing_job: Option<&ProcessingJobRecord>,
 ) -> AdminMusicResponse {
     let public_id_url = record
         .public_id
@@ -1311,6 +1339,10 @@ pub(crate) fn record_to_admin_response(
         ensemble_ids,
         ensemble_names,
         owner_user_id: record.owner_user_id,
+        processing_job_status: processing_job.map(|job| job.status.clone()),
+        processing_job_step: processing_job.map(|job| job.current_step.clone()),
+        processing_job_attempt: processing_job.map(|job| job.attempt),
+        processing_job_error: processing_job.and_then(|job| job.error_message.clone()),
     }
 }
 

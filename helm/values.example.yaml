@@ -1,6 +1,13 @@
 backend:
   version: "1.6.0"
   replicas: 1
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
   corsAllowedOrigins: ""
   superadminUsername: "superadmin"
   musescoreDirectOggStems: true
@@ -24,6 +31,13 @@ processor:
   enabled: true
   version: "1.6.0"
   replicas: 0
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
   minReplicas: 0
   maxReplicas: 5
   leaseSeconds: 600
@@ -40,10 +54,13 @@ processor:
     resourceAttributes: ""
   keda:
     enabled: true
+    # Requires KEDA to already be installed in the cluster, otherwise the chart
+    # will skip rendering the ScaledObject and leave the processor Deployment
+    # at the configured replica count.
     pollingInterval: 10
     cooldownPeriod: 30
     targetQueryValue: 1
-    activationTargetQueryValue: 1
+    activationTargetQueryValue: 0
 
 frontend:
   version: "1.6.0"

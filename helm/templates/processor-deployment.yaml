@@ -48,11 +48,11 @@ spec:
             runAsGroup: 10001
           resources:
             requests:
-              cpu: "1"
-              memory: 2Gi
+              cpu: {{ .Values.processor.resources.requests.cpu | quote }}
+              memory: {{ .Values.processor.resources.requests.memory | quote }}
             limits:
-              cpu: "2"
-              memory: 4Gi
+              cpu: {{ .Values.processor.resources.limits.cpu | quote }}
+              memory: {{ .Values.processor.resources.limits.memory | quote }}
           env:
             - name: APP_BASE_URL
               value: https://{{ .Values.frontend.ingress.domain }}

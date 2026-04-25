@@ -123,6 +123,10 @@ pub struct AdminMusicResponse {
     pub ensemble_ids: Vec<String>,
     pub ensemble_names: Vec<String>,
     pub owner_user_id: Option<String>,
+    pub processing_job_status: Option<String>,
+    pub processing_job_step: Option<String>,
+    pub processing_job_attempt: Option<i64>,
+    pub processing_job_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

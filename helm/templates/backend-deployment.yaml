@@ -45,11 +45,11 @@ spec:
             runAsGroup: 10001
           resources:
             requests:
-              cpu: "1"
-              memory: 2Gi
+              cpu: {{ .Values.backend.resources.requests.cpu | quote }}
+              memory: {{ .Values.backend.resources.requests.memory | quote }}
             limits:
-              cpu: "2"
-              memory: 4Gi
+              cpu: {{ .Values.backend.resources.limits.cpu | quote }}
+              memory: {{ .Values.backend.resources.limits.memory | quote }}
           env:
             - name: BIND_ADDRESS
               value: 0.0.0.0:3000
