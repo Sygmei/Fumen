@@ -1,4 +1,4 @@
-import type { AccessTokenRefreshResponse, AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicResponse, AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest, AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, AdminUserScorePlaytimeResponse, AuthTokenResponse, CreateEnsembleRequest, CreateScoreAnnotationRequest, CreateUserRequest, CurrentUserResponse, DrumMapEntry, EnsembleMemberResponse, ErrorResponse, ExchangeLoginTokenRequest, HealthResponse, JsonValue, LoginLinkResponse, MoveMusicRequest, MusicPlaytimeLeaderboardEntryResponse, MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, RefreshTokenRequest, ReportPlaytimeRequest, ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo, TrackPlaytimeIncrementRequest, UpdateEnsembleMemberItemRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest, UpdateMusicEnsemblesRequest, UpdateMyProfileMultipartRequest, UserLibraryEnsembleResponse, UserLibraryResponse, UserLibraryScoreResponse, UserResponse } from "./models";
+import type { AccessTokenRefreshResponse, AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicProcessingLogResponse, AdminMusicResponse, AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest, AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, AdminUserScorePlaytimeResponse, AuthTokenResponse, CreateEnsembleRequest, CreateScoreAnnotationRequest, CreateUserRequest, CurrentUserResponse, DrumMapEntry, EnsembleMemberResponse, ErrorResponse, ExchangeLoginTokenRequest, HealthResponse, JsonValue, LoginLinkResponse, MoveMusicRequest, MusicPlaytimeLeaderboardEntryResponse, MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, RefreshTokenRequest, ReportPlaytimeRequest, ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo, TrackPlaytimeIncrementRequest, UpdateEnsembleMemberItemRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest, UpdateMusicEnsemblesRequest, UpdateMyProfileMultipartRequest, UserLibraryEnsembleResponse, UserLibraryResponse, UserLibraryScoreResponse, UserResponse } from "./models";
 
 export type ErrorHandler = (response: globalThis.Response) => void | Promise<void>;
 
@@ -489,6 +489,32 @@ export class ApiClient {
     const response = await this._adminMusicPlaytimeRaw(id, body, requestOptions);
     await this.handleError(response, requestOptions);
     return await this.parseResponse<AdminMusicPlaytimeResponse>(response, undefined, requestOptions);
+  }
+
+
+
+  /**
+   * Returns the raw HTTP response without parsing it or throwing for HTTP errors.
+   * @param id Music identifier
+   */
+  async _adminMusicProcessingLogRaw(id: string, body?: unknown, requestOptions?: RequestOptions): Promise<Response> {
+    const path = `/api/admin/musics/${id}/processing-log`;
+    const query = this.mergeQuery(undefined, requestOptions);
+    const mergedHeaders = this.mergeHeaders(undefined, requestOptions);
+    const requestInit = this.createRequestInit(requestOptions);
+    requestInit.method = "GET";
+    if (mergedHeaders) { requestInit.headers = mergedHeaders; }
+    const response = await this.fetchFn(this.buildUrl(path, query), requestInit);
+    return response;
+  }
+
+  /**
+   * @param id Music identifier
+   */
+  async adminMusicProcessingLog(id: string, body?: unknown, requestOptions?: RequestOptions): Promise<AdminMusicProcessingLogResponse> {
+    const response = await this._adminMusicProcessingLogRaw(id, body, requestOptions);
+    await this.handleError(response, requestOptions);
+    return await this.parseResponse<AdminMusicProcessingLogResponse>(response, undefined, requestOptions);
   }
 
 

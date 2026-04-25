@@ -1,6 +1,6 @@
 use crate::schemas::{
-    CreateScoreAnnotationRequest, ErrorResponse, PublicMusicResponse,
-    ReportPlaytimeRequest, ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo,
+    CreateScoreAnnotationRequest, ErrorResponse, PublicMusicResponse, ReportPlaytimeRequest,
+    ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo,
 };
 use crate::services::{auth, music};
 use crate::{AppError, AppState, sanitize_content_disposition};
@@ -70,11 +70,19 @@ pub(super) fn routes(state: AppState) -> Router<AppState> {
         )
         .route(
             "/public/{access_key}/annotations",
-            crate::op_get!(state, "/public/{access_key}/annotations", public_music_annotations),
+            crate::op_get!(
+                state,
+                "/public/{access_key}/annotations",
+                public_music_annotations
+            ),
         )
         .route(
             "/public/{access_key}/annotations",
-            crate::op_post!(state, "/public/{access_key}/annotations", create_public_music_annotation),
+            crate::op_post!(
+                state,
+                "/public/{access_key}/annotations",
+                create_public_music_annotation
+            ),
         )
 }
 
@@ -302,12 +310,8 @@ pub(crate) async fn public_music_annotations(
 ) -> Result<Json<ScoreAnnotationListResponse>, AppError> {
     let auth_context = auth::try_build_auth_context(&state, &headers).await?;
     Ok(Json(
-        music::build_public_score_annotations_response(
-            &state,
-            &access_key,
-            auth_context.as_ref(),
-        )
-        .await?,
+        music::build_public_score_annotations_response(&state, &access_key, auth_context.as_ref())
+            .await?,
     ))
 }
 
@@ -493,8 +497,7 @@ pub(crate) async fn create_public_music_annotation(
 ) -> Result<Json<ScoreAnnotationResponse>, AppError> {
     let auth_context = auth::build_auth_context(&state, &headers).await?;
     Ok(Json(
-        music::create_public_score_annotation(&state, &access_key, &auth_context, payload)
-            .await?,
+        music::create_public_score_annotation(&state, &access_key, &auth_context, payload).await?,
     ))
 }
 

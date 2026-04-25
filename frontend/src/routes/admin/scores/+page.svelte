@@ -21,6 +21,7 @@
     import {
         canDeleteScore,
         canEditOwnedScore,
+        hasGlobalPower,
         canManageScoreEnsembles,
     } from "$lib/admin-permissions";
     import { qualityProfileLabel } from "$lib/utils";
@@ -37,6 +38,7 @@
     let creatingMusicIds = $state<string[]>([]);
     let savingMusicIds = $state<string[]>([]);
     let deletingMusicIds = $state<string[]>([]);
+    let restartingMusicIds = $state<string[]>([]);
     let openDownloadMenuFor = $state("");
 
     const filteredMusics = $derived.by(() => {
@@ -64,6 +66,24 @@
             music.musicxml_status,
             music.stems_status,
         ].includes("processing");
+    }
+
+    function canRestartProcessing(music: AdminMusic) {
+        return [
+            music.audio_status,
+            music.midi_status,
+            music.musicxml_status,
+            music.stems_status,
+        ].some((status) => status !== "ready");
+    }
+
+    async function reloadMusic(musicId: string) {
+        await adminState.refresh();
+        const music = adminState.musics.find((item) => item.id === musicId);
+        if (!music) {
+            throw new Error("Score not found");
+        }
+        return music;
     }
 
     function openCreateScoreModal() {
@@ -268,7 +288,11 @@
             music,
             currentUser: appShell.currentUser,
             loadPlaytime: loadScorePlaytime,
-            onRetryRender: handleRetryRender,
+            loadProcessingLog: (musicId: string) =>
+                authenticatedApiClient.adminMusicProcessingLog(musicId),
+            reloadMusic,
+            canViewProcessingLog: hasGlobalPower(appShell.currentUser),
+            onRetryRender: handleRestartProcessing,
         });
         openDownloadMenuFor = "";
     }
@@ -277,18 +301,37 @@
         return authenticatedApiClient.adminMusicPlaytime(musicId);
     }
 
-    async function handleRetryRender(musicId: string) {
+    async function handleRestartProcessing(musicId: string) {
+        restartingMusicIds = [...restartingMusicIds, musicId];
         try {
             const updated = await authenticatedApiClient.adminRetryRender(musicId);
             adminState.updateMusic(updated);
-            adminState.setSuccess("Render retried successfully.");
+            adminState.setSuccess("Processing restarted.");
             return updated;
         } catch (error) {
-            const message = error instanceof Error ? error.message : "Retry failed";
+            const message =
+                error instanceof Error
+                    ? error.message
+                    : "Unable to restart processing";
             adminState.setError(message);
             throw error instanceof Error ? error : new Error(message);
+        } finally {
+            restartingMusicIds = restartingMusicIds.filter((id) => id !== musicId);
         }
     }
+
+    $effect(() => {
+        if (!appShell.currentUser) return;
+        if (!adminState.musics.some((music) => isProcessingMusic(music))) return;
+
+        const interval = window.setInterval(() => {
+            void adminState.refresh();
+        }, 5000);
+
+        return () => {
+            window.clearInterval(interval);
+        };
+    });
 
     async function deleteMusicAccount(musicId: string) {
         deletingMusicIds = [...deletingMusicIds, musicId];
@@ -406,6 +449,7 @@
                                 {music}
                                 creating={creatingMusicIds.includes(music.id)}
                                 saving={savingMusicIds.includes(music.id)}
+                                restarting={restartingMusicIds.includes(music.id)}
                                 processing={isProcessingMusic(music)}
                                 downloadOpen={openDownloadMenuFor === music.id}
                                 deleting={deletingMusicIds.includes(music.id)}
@@ -415,11 +459,14 @@
                                 )}
                                 canEdit={canEditOwnedScore(music, appShell.currentUser)}
                                 canDelete={canDeleteScore(music, appShell.currentUser)}
+                                showRestartAction={canRestartProcessing(music)}
                                 onToggleDownloadMenu={() => toggleDownloadMenu(music.id)}
                                 onManageEnsembles={() => openScoreEnsembleModal(music)}
                                 onEdit={() => openScoreMetadataModal(music)}
                                 onShowQr={() => void handleShowScoreQr(music)}
                                 onShowInfo={() => openScoreInfoModal(music)}
+                                onRestartProcessing={() =>
+                                    void handleRestartProcessing(music.id)}
                                 onDelete={() => handleDeleteMusic(music.id)}
                                 onCloseDownloadMenu={() => (openDownloadMenuFor = "")}
                             />

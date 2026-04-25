@@ -25,6 +25,11 @@ export interface AdminMusicPlaytimeResponse {
 }
 
 
+export interface AdminMusicProcessingLogResponse {
+  content: string;
+}
+
+
 export interface AdminMusicResponse {
   audio_error?: string | null;
   audio_status: string;

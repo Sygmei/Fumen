@@ -3,17 +3,18 @@ use utoipa::{Modify, OpenApi};
 
 use crate::schemas::{
     AccessTokenRefreshResponse, AdminEnsembleResponse, AdminMusicPlaytimeResponse,
-    AdminMusicResponse, AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest,
-    AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, AdminUserScorePlaytimeResponse,
-    AuthTokenResponse, CreateEnsembleRequest, CreateUserRequest, CurrentUserResponse, DrumMapEntry,
-    CreateScoreAnnotationRequest, EnsembleMemberResponse, ErrorResponse, ExchangeLoginTokenRequest, HealthResponse,
+    AdminMusicProcessingLogResponse, AdminMusicResponse, AdminUpdateMusicMultipartRequest,
+    AdminUpdateUserMultipartRequest, AdminUploadMusicMultipartRequest, AdminUserMetadataResponse,
+    AdminUserScorePlaytimeResponse, AuthTokenResponse, CreateEnsembleRequest,
+    CreateScoreAnnotationRequest, CreateUserRequest, CurrentUserResponse, DrumMapEntry,
+    EnsembleMemberResponse, ErrorResponse, ExchangeLoginTokenRequest, HealthResponse,
     LoginLinkResponse, MoveMusicRequest, MusicPlaytimeLeaderboardEntryResponse,
     MusicPlaytimeTrackSummaryResponse, PublicMusicResponse, RefreshTokenRequest,
-    ReportPlaytimeRequest, ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo, TrackPlaytimeIncrementRequest,
-    UpdateEnsembleMemberItemRequest, UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest,
-    UpdateEnsembleScoresRequest,
-    UpdateMusicEnsemblesRequest, UpdateMyProfileMultipartRequest, UserLibraryEnsembleResponse,
-    UserLibraryResponse, UserLibraryScoreResponse, UserResponse,
+    ReportPlaytimeRequest, ScoreAnnotationListResponse, ScoreAnnotationResponse, StemInfo,
+    TrackPlaytimeIncrementRequest, UpdateEnsembleMemberItemRequest, UpdateEnsembleMemberRequest,
+    UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest, UpdateMusicEnsemblesRequest,
+    UpdateMyProfileMultipartRequest, UserLibraryEnsembleResponse, UserLibraryResponse,
+    UserLibraryScoreResponse, UserResponse,
 };
 
 pub(crate) struct SecurityAddon;
@@ -75,6 +76,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::admin_update_music_ensembles,
         crate::routes::admin::admin_list_musics,
         crate::routes::admin::admin_upload_music,
+        crate::routes::admin::admin_music_processing_log,
         crate::routes::admin::admin_retry_render,
         crate::routes::admin::admin_update_music,
         crate::routes::admin::admin_move_music,
@@ -86,6 +88,7 @@ impl Modify for SecurityAddon {
             AccessTokenRefreshResponse,
             AdminEnsembleResponse,
             AdminMusicPlaytimeResponse,
+            AdminMusicProcessingLogResponse,
             AdminMusicResponse,
             AdminUpdateMusicMultipartRequest,
             AdminUpdateUserMultipartRequest,

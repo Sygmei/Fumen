@@ -1278,6 +1278,7 @@ h3 {
 .admin-ensemble-card.is-deleting,
 .admin-score-card.is-creating,
 .admin-score-card.is-saving,
+.admin-score-card.is-restarting,
 .admin-score-card.is-deleting {
   opacity: 0.84;
 }
@@ -1300,6 +1301,15 @@ h3 {
   filter: saturate(0.82);
 }
 
+.admin-user-card.is-restarting,
+.admin-ensemble-card.is-restarting,
+.admin-score-card.is-restarting {
+  --admin-user-state-color: #b45309;
+  border-color: color-mix(in srgb, var(--border-strong) 68%, #b45309);
+  background: color-mix(in srgb, var(--surface) 90%, #f59e0b 10%);
+  filter: saturate(0.82);
+}
+
 .admin-user-card.is-deleting,
 .admin-ensemble-card.is-deleting,
 .admin-score-card.is-deleting {
@@ -1311,12 +1321,15 @@ h3 {
 
 .admin-user-card.is-creating::after,
 .admin-user-card.is-saving::after,
+.admin-user-card.is-restarting::after,
 .admin-user-card.is-deleting::after,
 .admin-ensemble-card.is-creating::after,
 .admin-ensemble-card.is-saving::after,
+.admin-ensemble-card.is-restarting::after,
 .admin-ensemble-card.is-deleting::after,
 .admin-score-card.is-creating::after,
 .admin-score-card.is-saving::after,
+.admin-score-card.is-restarting::after,
 .admin-score-card.is-deleting::after {
   content: '';
   position: absolute;
@@ -1343,21 +1356,26 @@ h3 {
 .admin-ensemble-card.is-deleting .admin-card-accent,
 .admin-score-card.is-creating .admin-card-accent,
 .admin-score-card.is-saving .admin-card-accent,
+.admin-score-card.is-restarting .admin-card-accent,
 .admin-score-card.is-deleting .admin-card-accent {
   opacity: 0.34;
 }
 
 .admin-user-card.is-creating .admin-record-actions,
 .admin-user-card.is-saving .admin-record-actions,
+.admin-user-card.is-restarting .admin-record-actions,
 .admin-user-card.is-deleting .admin-record-actions,
 .admin-ensemble-card.is-creating .admin-record-actions,
 .admin-ensemble-card.is-saving .admin-record-actions,
+.admin-ensemble-card.is-restarting .admin-record-actions,
 .admin-ensemble-card.is-deleting .admin-record-actions,
 .admin-score-card.is-creating .admin-score-actions,
 .admin-score-card.is-saving .admin-score-actions,
+.admin-score-card.is-restarting .admin-score-actions,
 .admin-score-card.is-deleting .admin-score-actions,
 .admin-score-card.is-creating .admin-score-download-menu,
 .admin-score-card.is-saving .admin-score-download-menu,
+.admin-score-card.is-restarting .admin-score-download-menu,
 .admin-score-card.is-deleting .admin-score-download-menu {
   opacity: 0.62;
 }
@@ -1636,6 +1654,119 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.admin-playtime-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.processing-journey {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px 0 6px;
+}
+
+.processing-stop {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.processing-stop-rail {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  min-height: 18px;
+}
+
+.processing-stop-node {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px transparent;
+}
+
+.processing-stop-connector {
+  height: 2px;
+  background: var(--border);
+}
+
+.processing-stop-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.processing-stop-copy strong {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.processing-stop-copy span {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.processing-stop.is-done .processing-stop-node {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.processing-stop.is-done .processing-stop-connector {
+  background: color-mix(in srgb, var(--accent) 70%, var(--amber));
+}
+
+.processing-stop.is-done .processing-stop-copy strong {
+  color: var(--text);
+}
+
+.processing-stop.is-active .processing-stop-node {
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 4px var(--accent);
+}
+
+.processing-stop.is-active .processing-stop-connector {
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 24%, var(--border)));
+}
+
+.processing-stop.is-active .processing-stop-copy strong {
+  color: var(--accent);
+}
+
+.processing-stop.is-failed .processing-stop-node {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 20%, var(--surface));
+  box-shadow: inset 0 0 0 4px var(--danger);
+}
+
+.processing-stop.is-failed .processing-stop-copy strong {
+  color: var(--danger);
+}
+
+.processing-stop.is-pending .processing-stop-copy strong {
+  color: var(--text-dim);
+}
+
+@media (max-width: 760px) {
+  .processing-journey {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .processing-stop-rail {
+    grid-template-columns: 18px;
+  }
+
+  .processing-stop-connector {
+    display: none;
+  }
 }
 
 .admin-user-metadata-summary {

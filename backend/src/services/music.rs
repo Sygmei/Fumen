@@ -138,7 +138,11 @@ fn score_annotation_visibility_scope(
             }
         }
         AppRole::Editor => {
-            if owns_score { "all" } else { "own" }
+            if owns_score {
+                "all"
+            } else {
+                "own"
+            }
         }
         AppRole::User => "own",
         AppRole::Superadmin | AppRole::Admin => "all",
@@ -149,7 +153,8 @@ fn score_annotation_response_from_row(
     storage: &Storage,
     row: ScoreAnnotationRow,
 ) -> ScoreAnnotationResponse {
-    let avatar_url = resolve_user_avatar_url(storage, &row.user_id, row.avatar_image_key.as_deref());
+    let avatar_url =
+        resolve_user_avatar_url(storage, &row.user_id, row.avatar_image_key.as_deref());
 
     ScoreAnnotationResponse {
         id: row.id,
@@ -820,10 +825,22 @@ pub(crate) async fn store_stems(
     stems: Vec<crate::audio::StemResult>,
     status: String,
     error: Option<String>,
+    progress_log: Option<&crate::audio::ProgressLogSender>,
 ) -> Result<(String, Option<String>), AppError> {
     let mut conn = state.db_rw.get().await?;
+    let storage_target = if state.storage.is_s3() {
+        "S3"
+    } else {
+        "storage"
+    };
+    let total = stems.len();
 
-    for stem in stems {
+    emit_storage_progress(
+        progress_log,
+        format!("stems: uploading {total} rendered stem file(s) to {storage_target}."),
+    );
+
+    for (index, stem) in stems.into_iter().enumerate() {
         let size_bytes = stem.bytes.len() as i64;
         let storage_key = format!("stems/{music_id}/{}.ogg", stem.track_index);
         let drum_map_json = stem
@@ -832,10 +849,30 @@ pub(crate) async fn store_stems(
             .map(serde_json::to_string)
             .transpose()
             .map_err(|error| AppError::from(anyhow::Error::from(error)))?;
+        emit_storage_progress(
+            progress_log,
+            format!(
+                "stems: uploading [{}/{}] '{}' to {storage_target} as {}.",
+                index + 1,
+                total,
+                stem.track_name,
+                storage_key,
+            ),
+        );
         state
             .storage
             .upload_bytes(&storage_key, stem.bytes.clone(), "audio/ogg")
             .await?;
+        emit_storage_progress(
+            progress_log,
+            format!(
+                "stems: uploaded [{}/{}] '{}' to {storage_target} ({} KB).",
+                index + 1,
+                total,
+                stem.track_name,
+                size_bytes / 1024,
+            ),
+        );
 
         diesel::insert_into(stems::table)
             .values(NewStem {
@@ -850,6 +887,11 @@ pub(crate) async fn store_stems(
             .execute(&mut conn)
             .await?;
     }
+
+    emit_storage_progress(
+        progress_log,
+        format!("stems: upload to {storage_target} completed."),
+    );
     Ok((status, error))
 }
 
@@ -936,8 +978,8 @@ pub(crate) async fn build_public_score_annotations_response(
         }
         _ => Vec::new(),
     };
-    let visibility_scope = score_annotation_visibility_scope(auth, &record, &music_ensemble_ids)
-        .to_owned();
+    let visibility_scope =
+        score_annotation_visibility_scope(auth, &record, &music_ensemble_ids).to_owned();
 
     if visibility_scope == "none" {
         return Ok(ScoreAnnotationListResponse {
@@ -1093,6 +1135,7 @@ pub(crate) async fn store_conversion(
     music_id: &str,
     kind: &str,
     outcome: crate::audio::ConversionOutcome,
+    progress_log: Option<&crate::audio::ProgressLogSender>,
 ) -> Result<(Option<String>, String, Option<String>), AppError> {
     match outcome {
         crate::audio::ConversionOutcome::Ready {
@@ -1101,11 +1144,24 @@ pub(crate) async fn store_conversion(
             extension,
         } => {
             let object_key = format!("{kind}/{music_id}.{extension}");
+            let storage_target = if state.storage.is_s3() {
+                "S3"
+            } else {
+                "storage"
+            };
             let (stored_bytes, content_encoding) = if kind == "musicxml" && state.storage.is_s3() {
                 (gzip_bytes(&bytes)?, Some("gzip"))
             } else {
                 (bytes, None)
             };
+            emit_storage_progress(
+                progress_log,
+                format!(
+                    "{kind}: uploading {} KB to {storage_target} as {}.",
+                    stored_bytes.len() / 1024,
+                    object_key,
+                ),
+            );
             state
                 .storage
                 .upload_bytes_with_encoding(
@@ -1115,6 +1171,10 @@ pub(crate) async fn store_conversion(
                     content_encoding,
                 )
                 .await?;
+            emit_storage_progress(
+                progress_log,
+                format!("{kind}: upload to {storage_target} completed."),
+            );
             Ok((Some(object_key), "ready".to_owned(), None))
         }
         crate::audio::ConversionOutcome::Unavailable { reason } => {
@@ -1124,6 +1184,15 @@ pub(crate) async fn store_conversion(
             warn!("{kind} conversion failed for {music_id}: {reason}");
             Ok((None, "failed".to_owned(), Some(reason)))
         }
+    }
+}
+
+fn emit_storage_progress(
+    progress_log: Option<&crate::audio::ProgressLogSender>,
+    message: impl Into<String>,
+) {
+    if let Some(progress_log) = progress_log {
+        let _ = progress_log.send(message.into());
     }
 }
 
@@ -1327,6 +1396,8 @@ pub(crate) async fn delete_music_record_and_assets(
         keys.push(stem.storage_key);
     }
 
+    keys.push(processing_log_key(music_id));
+
     for key in keys {
         if let Err(error) = state.storage.delete_key(&key).await {
             warn!("failed to delete storage object {key}: {error}");
@@ -1343,6 +1414,10 @@ pub(crate) fn midi_filename_for(filename: &str) -> String {
         .trim_end_matches(".mscx")
         .trim_end_matches(".MSCX");
     sanitize_content_disposition(&format!("{stem}.mid"))
+}
+
+pub(crate) fn processing_log_key(music_id: &str) -> String {
+    format!("scores/{music_id}/processing.log")
 }
 
 fn gzip_bytes(bytes: &Bytes) -> Result<Bytes, AppError> {

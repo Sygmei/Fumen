@@ -169,7 +169,10 @@ pub(crate) fn on_http_response(response: &Response<Body>, latency: Duration, spa
 }
 
 pub(crate) fn on_http_failure(response: &Response<Body>, latency: Duration, span: &Span) {
-    let failure = format!("{:?}", ServerErrorsFailureClass::StatusCode(response.status()));
+    let failure = format!(
+        "{:?}",
+        ServerErrorsFailureClass::StatusCode(response.status())
+    );
     let trace_id = span.context().span().span_context().trace_id().to_string();
     let message = response
         .extensions()

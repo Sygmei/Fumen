@@ -208,7 +208,10 @@ impl From<MultipartError> for AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let Self { status, message } = self;
-        let mut response = (status, Json(serde_json::json!({ "error": message.clone() })))
+        let mut response = (
+            status,
+            Json(serde_json::json!({ "error": message.clone() })),
+        )
             .into_response();
 
         if status.is_server_error() {

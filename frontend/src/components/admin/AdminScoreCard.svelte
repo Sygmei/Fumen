@@ -10,48 +10,63 @@
         Info,
         Download,
         Music,
+        RotateCcw,
     } from "@lucide/svelte";
 
     let {
         music,
         creating = false,
         saving = false,
+        restarting = false,
         processing = false,
         downloadOpen = false,
         deleting = false,
         canManageEnsembles = false,
         canEdit = false,
         canDelete = false,
+        showRestartAction = false,
         onToggleDownloadMenu,
         onManageEnsembles,
         onEdit,
         onShowQr,
         onShowInfo,
+        onRestartProcessing,
         onDelete,
         onCloseDownloadMenu,
     }: {
         music: AdminMusic;
         creating?: boolean;
         saving?: boolean;
+        restarting?: boolean;
         processing?: boolean;
         downloadOpen?: boolean;
         deleting?: boolean;
         canManageEnsembles?: boolean;
         canEdit?: boolean;
         canDelete?: boolean;
+        showRestartAction?: boolean;
         onToggleDownloadMenu: () => void;
         onManageEnsembles: () => void;
         onEdit: () => void;
         onShowQr: () => void;
         onShowInfo: () => void;
+        onRestartProcessing: () => void;
         onDelete: () => void;
         onCloseDownloadMenu: () => void;
     } = $props();
 
     const cardState = $derived(
-        deleting ? "deleting" : saving ? "saving" : creating ? "creating" : "",
+        deleting
+            ? "deleting"
+            : restarting
+              ? "restarting"
+              : saving
+                ? "saving"
+                : creating
+                  ? "creating"
+                  : "",
     );
-    const actionsDisabled = $derived(creating || saving || deleting);
+    const actionsDisabled = $derived(creating || saving || restarting || deleting);
 </script>
 
 {#snippet body()}
@@ -84,10 +99,12 @@
                     </a>
                 {/if}
             </h3>
-            {#if creating || saving || deleting || processing}
+            {#if creating || saving || restarting || deleting || processing}
                 <div class="admin-score-badges">
                     {#if creating}
                         <span class="status-pill admin-user-creating-pill">CREATING</span>
+                    {:else if restarting}
+                        <span class="status-pill admin-user-saving-pill">RESTARTING</span>
                     {:else if saving}
                         <span class="status-pill admin-user-saving-pill">SAVING</span>
                     {:else if deleting}
@@ -202,6 +219,18 @@
         >
             <Info size={16} aria-hidden="true" />
         </button>
+        {#if showRestartAction && canEdit}
+            <button
+                class="button secondary admin-user-action"
+                type="button"
+                disabled={actionsDisabled}
+                onclick={onRestartProcessing}
+                aria-label={`Restart processing for ${music.title}`}
+                title="Restart processing"
+            >
+                <RotateCcw size={16} aria-hidden="true" />
+            </button>
+        {/if}
         {#if canDelete}
             <button
                 class="button ghost danger admin-user-action"

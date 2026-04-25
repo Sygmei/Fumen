@@ -12,6 +12,7 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 use tokio::process::Command;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
 use zip::ZipArchive;
 
@@ -211,6 +212,7 @@ pub struct StemResult {
 }
 
 type DrumsetMappingMap = HashMap<String, Vec<DrumMapEntry>>;
+pub type ProgressLogSender = UnboundedSender<String>;
 
 struct TrackInfo {
     /// Index into the original MIDI track list / raw MTrk chunk list.
@@ -218,6 +220,12 @@ struct TrackInfo {
     track_name: String,
     program: u8,
     is_percussion: bool,
+}
+
+fn emit_progress(progress_log: Option<&ProgressLogSender>, message: impl Into<String>) {
+    if let Some(progress_log) = progress_log {
+        let _ = progress_log.send(message.into());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +237,7 @@ pub async fn generate_midi(
     config: &AppConfig,
     input_path: &Path,
     output_dir: &Path,
+    progress_log: Option<&ProgressLogSender>,
 ) -> Result<ConversionOutcome> {
     convert_with_musescore(
         config,
@@ -237,6 +246,7 @@ pub async fn generate_midi(
         "audio/midi",
         "mid",
         "MuseScore CLI not configured. Set MUSESCORE_BIN to enable MIDI conversion.",
+        progress_log,
     )
     .await
 }
@@ -246,6 +256,7 @@ pub async fn generate_musicxml(
     config: &AppConfig,
     input_path: &Path,
     output_dir: &Path,
+    progress_log: Option<&ProgressLogSender>,
 ) -> Result<ConversionOutcome> {
     convert_with_musescore(
         config,
@@ -254,6 +265,7 @@ pub async fn generate_musicxml(
         "application/xml",
         "musicxml",
         "MuseScore CLI not configured. Set MUSESCORE_BIN to enable MusicXML export.",
+        progress_log,
     )
     .await
 }
@@ -263,6 +275,7 @@ pub async fn generate_audio(
     config: &AppConfig,
     input_path: &Path,
     output_dir: &Path,
+    progress_log: Option<&ProgressLogSender>,
 ) -> Result<ConversionOutcome> {
     convert_with_musescore(
         config,
@@ -271,6 +284,7 @@ pub async fn generate_audio(
         "audio/mpeg",
         "mp3",
         "MuseScore CLI not configured. Set MUSESCORE_BIN to enable audio conversion.",
+        progress_log,
     )
     .await
 }
@@ -291,6 +305,7 @@ pub async fn generate_stems(
     input_path: &Path,
     output_dir: &Path,
     quality_profile: StemQualityProfile,
+    progress_log: Option<&ProgressLogSender>,
 ) -> Result<(Vec<StemResult>, String, Option<String>)> {
     let profile_bitrate = quality_profile.opus_bitrate().unwrap_or("source");
     tracing::info!(
@@ -299,9 +314,26 @@ pub async fn generate_stems(
         quality_profile.as_str(),
         profile_bitrate,
     );
+    emit_progress(
+        progress_log,
+        format!(
+            "stems: starting pipeline for '{}' with {} profile ({})",
+            input_path.file_name().unwrap_or_default().to_string_lossy(),
+            quality_profile.as_str(),
+            profile_bitrate,
+        ),
+    );
 
     tracing::info!("stems: renderer = musescore");
-    generate_stems_with_musescore(config, input_path, output_dir, quality_profile).await
+    emit_progress(progress_log, "stems: renderer = musescore");
+    generate_stems_with_musescore(
+        config,
+        input_path,
+        output_dir,
+        quality_profile,
+        progress_log,
+    )
+    .await
 }
 
 #[tracing::instrument(
@@ -313,6 +345,7 @@ async fn generate_stems_with_musescore(
     input_path: &Path,
     output_dir: &Path,
     quality_profile: StemQualityProfile,
+    progress_log: Option<&ProgressLogSender>,
 ) -> Result<(Vec<StemResult>, String, Option<String>)> {
     if find_musescore_command(config).await.is_none() {
         return Ok((
@@ -344,7 +377,7 @@ async fn generate_stems_with_musescore(
     };
 
     let midi_bytes: Bytes =
-        match load_or_generate_preview_midi(config, input_path, output_dir).await? {
+        match load_or_generate_preview_midi(config, input_path, output_dir, progress_log).await? {
             ConversionOutcome::Ready { bytes, .. } => bytes,
             ConversionOutcome::Unavailable { reason } => {
                 return Ok((Vec::new(), "unavailable".to_owned(), Some(reason)));
@@ -360,6 +393,13 @@ async fn generate_stems_with_musescore(
             tracing::warn!(
                 "stems: failed to extract MuseScore drumset mappings from '{}': {error}",
                 input_path.display()
+            );
+            emit_progress(
+                progress_log,
+                format!(
+                    "stems: failed to extract MuseScore drumset mappings from '{}': {error}",
+                    input_path.display()
+                ),
             );
             HashMap::new()
         }
@@ -389,6 +429,10 @@ async fn generate_stems_with_musescore(
     let clean_tempo_chunk = build_global_tempo_chunk(&midi_bytes);
     let total = track_infos.len();
     tracing::info!("stems: found {total} instrument tracks, starting direct MuseScore render");
+    emit_progress(
+        progress_log,
+        format!("stems: found {total} instrument tracks, starting direct MuseScore render"),
+    );
 
     let render_dir = output_dir.join("musescore-direct-stems");
     tokio::fs::create_dir_all(&render_dir)
@@ -427,6 +471,7 @@ async fn generate_stems_with_musescore(
         let ffmpeg = ffmpeg.clone();
         let quality_profile = quality_profile;
         let config = config.clone();
+        let progress_log = progress_log.cloned();
 
         jobs.spawn(async move {
             tokio::fs::write(&stem_mid_path, &stem_midi)
@@ -441,6 +486,17 @@ async fn generate_stems_with_musescore(
                 instrument_name,
                 program,
             );
+            emit_progress(
+                progress_log.as_ref(),
+                format!(
+                    "stems: [{}/{}] '{}' ({}, GM prog {}) - rendering via MuseScore",
+                    stem_idx + 1,
+                    total,
+                    track_label,
+                    instrument_name,
+                    program,
+                ),
+            );
 
             match convert_with_musescore(
                 &config,
@@ -449,6 +505,7 @@ async fn generate_stems_with_musescore(
                 "audio/ogg",
                 "ogg",
                 "MuseScore CLI not configured. Set MUSESCORE_BIN to enable direct OGG stem rendering.",
+                progress_log.as_ref(),
             )
             .await?
             {
@@ -483,6 +540,16 @@ async fn generate_stems_with_musescore(
                         total,
                         track_label,
                         reason
+                    );
+                    emit_progress(
+                        progress_log.as_ref(),
+                        format!(
+                            "stems: [{}/{}] '{}' - MuseScore direct render failed: {}",
+                            stem_idx + 1,
+                            total,
+                            track_label,
+                            reason
+                        ),
                     );
                     Ok(StemJobOutcome::Failed(reason))
                 }
@@ -758,12 +825,15 @@ async fn load_or_generate_preview_midi(
     config: &AppConfig,
     input_path: &Path,
     output_dir: &Path,
+    progress_log: Option<&ProgressLogSender>,
 ) -> Result<ConversionOutcome> {
     let midi_path = output_dir.join("preview.mid");
     tracing::info!("stems: exporting MIDI from score");
+    emit_progress(progress_log, "stems: exporting MIDI from score");
 
     if midi_path.exists() {
         tracing::info!("stems: reusing existing MIDI file");
+        emit_progress(progress_log, "stems: reusing existing MIDI file");
         let bytes = tokio::fs::read(&midi_path)
             .await
             .context("reading existing MIDI file")?;
@@ -774,9 +844,10 @@ async fn load_or_generate_preview_midi(
         });
     }
 
-    let outcome = generate_midi(config, input_path, output_dir).await?;
+    let outcome = generate_midi(config, input_path, output_dir, progress_log).await?;
     if matches!(outcome, ConversionOutcome::Ready { .. }) {
         tracing::info!("stems: MIDI export complete");
+        emit_progress(progress_log, "stems: MIDI export complete");
     }
     Ok(outcome)
 }
@@ -994,6 +1065,7 @@ async fn convert_with_musescore(
     content_type: &'static str,
     extension: &'static str,
     unavailable_reason: &str,
+    progress_log: Option<&ProgressLogSender>,
 ) -> Result<ConversionOutcome> {
     let Some(command_kind) = find_musescore_command(config).await else {
         return Ok(ConversionOutcome::Unavailable {
@@ -1008,6 +1080,22 @@ async fn convert_with_musescore(
             .file_name()
             .unwrap_or_default()
             .to_string_lossy(),
+    );
+    emit_progress(
+        progress_log,
+        format!(
+            "convert_with_musescore{{content_type=\"{}\" extension=\"{}\" input_path={} output_path={} format=\"{}\"}}: musescore: converting '{}' -> {}",
+            content_type,
+            extension,
+            input_path.display(),
+            output_path.display(),
+            extension,
+            input_path.file_name().unwrap_or_default().to_string_lossy(),
+            output_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy(),
+        ),
     );
 
     let xdg_runtime_dir =
@@ -1061,6 +1149,18 @@ async fn convert_with_musescore(
         .with_context(|| format!("failed to read generated file at {}", output_path.display()))?;
 
     tracing::info!("musescore: done ({} KB)", bytes.len() / 1024,);
+    emit_progress(
+        progress_log,
+        format!(
+            "convert_with_musescore{{content_type=\"{}\" extension=\"{}\" input_path={} output_path={} format=\"{}\"}}: musescore: done ({} KB)",
+            content_type,
+            extension,
+            input_path.display(),
+            output_path.display(),
+            extension,
+            bytes.len() / 1024,
+        ),
+    );
 
     Ok(ConversionOutcome::Ready {
         bytes: Bytes::from(bytes),

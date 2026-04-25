@@ -39,7 +39,10 @@ pub(crate) async fn run_migrations(database_url: &str) -> Result<()> {
         return Ok(());
     }
 
-    info!(count = pending.len(), "applying pending database migrations");
+    info!(
+        count = pending.len(),
+        "applying pending database migrations"
+    );
 
     for migration in pending {
         let migration_name = migration.name().to_string();

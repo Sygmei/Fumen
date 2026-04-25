@@ -126,6 +126,11 @@ pub struct AdminMusicResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+pub struct AdminMusicProcessingLogResponse {
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MusicPlaytimeTrackSummaryResponse {
     pub track_index: i64,
     pub track_name: String,
