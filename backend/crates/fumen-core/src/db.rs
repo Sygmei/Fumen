@@ -22,7 +22,7 @@ pub async fn open_database_pool(url: &str, max_connections: u32, role: &str) -> 
 }
 
 pub async fn run_migrations(database_url: &str) -> Result<()> {
-    let migrations = FileBasedMigrations::from_path(migrations_dir())?;
+    let migrations = FileBasedMigrations::from_path(migrations_dir()?)?;
     info!("starting database migrations");
     let connection = AsyncPgConnection::establish(database_url).await?;
     let mut harness = AsyncMigrationHarness::new(connection);
@@ -53,6 +53,30 @@ pub async fn run_migrations(database_url: &str) -> Result<()> {
     Ok(())
 }
 
-fn migrations_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../migrations")
+fn migrations_dir() -> Result<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(explicit) = std::env::var_os("FUMEN_MIGRATIONS_DIR") {
+        candidates.push(PathBuf::from(explicit));
+    }
+
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../migrations"));
+    candidates.push(PathBuf::from("/app/backend/migrations"));
+
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            candidates.push(parent.join("../backend/migrations"));
+            candidates.push(parent.join("../../app/backend/migrations"));
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "could not locate database migrations directory; checked FUMEN_MIGRATIONS_DIR, build-time crate path, and container/runtime fallbacks"
+    ))
 }

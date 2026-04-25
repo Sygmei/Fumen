@@ -52,6 +52,7 @@ COPY --from=build /tmp/fumen-backend /usr/local/bin/fumen
 COPY backend/migrations /app/backend/migrations
 
 ENV BIND_ADDRESS=0.0.0.0:3000 \
+    FUMEN_MIGRATIONS_DIR=/app/backend/migrations \
     LOCAL_STORAGE_PATH=/data/storage \
     QT_QPA_PLATFORM=offscreen
 
