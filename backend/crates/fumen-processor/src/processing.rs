@@ -890,6 +890,70 @@ pub(crate) async fn claim_next_processing_job(
     .optional()?)
 }
 
+pub(crate) async fn claim_processing_job_by_music_id(
+    db: &DbPool,
+    music_id: &str,
+    worker_id: &str,
+    lease_seconds: i64,
+) -> Result<Option<ProcessingJobRecord>, AppError> {
+    let now = chrono::Utc::now();
+    let heartbeat_at = format_timestamp(now);
+    let lease_expires_at = format_timestamp(now + chrono::Duration::seconds(lease_seconds));
+    let mut conn = db.get().await?;
+
+    Ok(sql_query(
+        "WITH candidate AS (
+            SELECT music_id
+            FROM processing_jobs
+            WHERE music_id = $1
+              AND (
+                    status = $2
+                 OR (status = $3 AND lease_expires_at IS NOT NULL AND lease_expires_at < $4)
+              )
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE processing_jobs AS jobs
+        SET status = $3,
+            current_step = $5,
+            worker_id = $6,
+            lease_expires_at = $7,
+            heartbeat_at = $4,
+            started_at = COALESCE(jobs.started_at, $4),
+            finished_at = NULL,
+            error_message = NULL
+        FROM candidate
+        WHERE jobs.music_id = candidate.music_id
+        RETURNING
+            jobs.music_id,
+            jobs.source_object_key,
+            jobs.source_filename,
+            jobs.quality_profile,
+            jobs.status,
+            jobs.current_step,
+            jobs.attempt,
+            jobs.max_attempts,
+            jobs.worker_id,
+            jobs.lease_expires_at,
+            jobs.heartbeat_at,
+            jobs.queued_at,
+            jobs.started_at,
+            jobs.finished_at,
+            jobs.progress_json,
+            jobs.error_message",
+    )
+    .bind::<Text, _>(music_id)
+    .bind::<Text, _>(JOB_STATUS_QUEUED)
+    .bind::<Text, _>(JOB_STATUS_RUNNING)
+    .bind::<Text, _>(&heartbeat_at)
+    .bind::<Text, _>(JOB_STEP_FETCHING_INPUT)
+    .bind::<Text, _>(worker_id)
+    .bind::<Text, _>(&lease_expires_at)
+    .get_result::<ProcessingJobRecord>(&mut conn)
+    .await
+    .optional()?)
+}
+
 pub(crate) async fn heartbeat_processing_job(
     db: &DbPool,
     music_id: &str,

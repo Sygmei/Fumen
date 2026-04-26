@@ -258,6 +258,15 @@ The chart maps those secret keys to:
 - `S3_SECRET_ACCESS_KEY` from `secret-key`
 - `S3_ACCESS_KEY_ID` from `access-key-id`
 - `S3_BUCKET` from `bucket-name`
+
+### Processor autoscaling modes
+
+The chart supports two processor scaling models:
+
+- default: `Deployment` + KEDA `ScaledObject`
+- optional: KEDA `ScaledJob` with `processor.keda.useScaledJob=true`
+
+In `ScaledJob` mode, the processor runs in one-shot mode and exits after one claim attempt. With the current PostgreSQL scaler integration, KEDA only reads a single integer queue-depth result from the trigger query. That means KEDA does not pass a specific `music_id` or row payload into each spawned pod. Instead, each one-shot processor pod starts, claims one queued processing row from PostgreSQL, processes it, and exits.
 - `S3_REGION` from `region-name`
 - `S3_ENDPOINT` from `endpoint-url`
 

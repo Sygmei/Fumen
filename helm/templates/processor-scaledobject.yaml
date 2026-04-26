@@ -1,4 +1,4 @@
-{{- if and .Values.processor.enabled .Values.processor.keda.enabled (.Capabilities.APIVersions.Has "keda.sh/v1alpha1/ScaledObject") }}
+{{- if and .Values.processor.enabled .Values.processor.keda.enabled (not .Values.processor.keda.useScaledJob) (.Capabilities.APIVersions.Has "keda.sh/v1alpha1/ScaledObject") }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -22,11 +22,7 @@ spec:
           SELECT COUNT(*)
           FROM processing_jobs
           WHERE status = 'queued'
-             OR (
-               status = 'running'
-               AND lease_expires_at IS NOT NULL
-               AND lease_expires_at::timestamptz < NOW()
-             )
+             OR status = 'running'
         targetQueryValue: "{{ .Values.processor.keda.targetQueryValue }}"
         activationTargetQueryValue: "{{ .Values.processor.keda.activationTargetQueryValue }}"
 {{- end }}

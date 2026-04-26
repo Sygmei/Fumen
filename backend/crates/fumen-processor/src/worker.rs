@@ -1,5 +1,5 @@
 use crate::{AppError, AppState, processing};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use fumen_core::{
     config::AppConfig,
     db::{open_database_pool, run_migrations},
@@ -10,9 +10,19 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-pub async fn run() -> Result<()> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunMode {
+    Service,
+    Oneshot { music_id: Option<String> },
+}
+
+pub async fn run(mode: RunMode) -> Result<()> {
     let config = AppConfig::from_env()?;
-    run_migrations(&config.database_url_admin).await?;
+    if processor_runs_migrations() {
+        run_migrations(&config.database_url_admin).await?;
+    } else {
+        info!("processor startup skipped database migrations");
+    }
 
     let db_rw = open_database_pool(&config.database_url, 5, "processor read-write").await?;
     let db_ro =
@@ -31,16 +41,38 @@ pub async fn run() -> Result<()> {
         .clone()
         .unwrap_or_else(default_worker_id);
 
-    info!(
-        worker_id = %worker_id,
-        poll_interval_ms = state.config.processor_poll_interval_ms,
-        lease_seconds = state.config.processor_lease_seconds,
-        heartbeat_interval_ms = state.config.processor_heartbeat_interval_ms,
-        max_parallel_core_conversions = state.config.processor_max_parallel_core_conversions,
-        max_parallel_stem_renders = state.config.processor_max_parallel_stem_renders,
-        "score processor worker started"
-    );
+    match &mode {
+        RunMode::Service => {
+            info!(
+                worker_id = %worker_id,
+                poll_interval_ms = state.config.processor_poll_interval_ms,
+                lease_seconds = state.config.processor_lease_seconds,
+                heartbeat_interval_ms = state.config.processor_heartbeat_interval_ms,
+                max_parallel_core_conversions = state.config.processor_max_parallel_core_conversions,
+                max_parallel_stem_renders = state.config.processor_max_parallel_stem_renders,
+                "score processor worker started"
+            );
+        }
+        RunMode::Oneshot { music_id } => {
+            info!(
+                worker_id = %worker_id,
+                requested_music_id = music_id.as_deref().unwrap_or("<next queued>"),
+                lease_seconds = state.config.processor_lease_seconds,
+                heartbeat_interval_ms = state.config.processor_heartbeat_interval_ms,
+                max_parallel_core_conversions = state.config.processor_max_parallel_core_conversions,
+                max_parallel_stem_renders = state.config.processor_max_parallel_stem_renders,
+                "score processor oneshot worker started"
+            );
+        }
+    }
 
+    match mode {
+        RunMode::Service => run_service_loop(&state, &worker_id).await,
+        RunMode::Oneshot { music_id } => run_oneshot(&state, &worker_id, music_id.as_deref()).await,
+    }
+}
+
+async fn run_service_loop(state: &AppState, worker_id: &str) -> Result<()> {
     let poll_interval = Duration::from_millis(state.config.processor_poll_interval_ms);
     loop {
         match processing::claim_next_processing_job(
@@ -67,6 +99,47 @@ pub async fn run() -> Result<()> {
                 tokio::time::sleep(poll_interval).await;
             }
         }
+    }
+}
+
+
+async fn run_oneshot(
+    state: &AppState,
+    worker_id: &str,
+    requested_music_id: Option<&str>,
+) -> Result<()> {
+    let claim_result = match requested_music_id {
+        Some(music_id) => {
+            processing::claim_processing_job_by_music_id(
+                &state.db_rw,
+                music_id,
+                worker_id,
+                state.config.processor_lease_seconds,
+            )
+            .await
+        }
+        None => {
+            processing::claim_next_processing_job(
+                &state.db_rw,
+                worker_id,
+                state.config.processor_lease_seconds,
+            )
+            .await
+        }
+    };
+
+    match claim_result {
+        Ok(Some(job)) => run_claimed_job(state, worker_id, job).await.map_err(Into::into),
+        Ok(None) => match requested_music_id {
+            Some(music_id) => Err(anyhow!(
+                "processing job {music_id} was not claimable in oneshot mode"
+            )),
+            None => {
+                info!(worker_id = %worker_id, "no queued processing job available for oneshot worker");
+                Ok(())
+            }
+        },
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -194,6 +267,12 @@ fn default_worker_id() -> String {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "processor".to_owned());
     format!("{hostname}-{}", Uuid::new_v4().simple())
+}
+
+fn processor_runs_migrations() -> bool {
+    !std::env::var("PROCESSOR_RUN_MIGRATIONS")
+        .ok()
+        .is_some_and(|value| matches!(value.trim(), "0" | "false" | "FALSE" | "no" | "off"))
 }
 
 fn debug_marker(message: &str) {

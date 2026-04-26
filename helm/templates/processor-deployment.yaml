@@ -1,4 +1,4 @@
-{{- if .Values.processor.enabled }}
+{{- if and .Values.processor.enabled (not (and .Values.processor.keda.enabled .Values.processor.keda.useScaledJob)) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

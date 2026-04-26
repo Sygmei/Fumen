@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { page } from "$app/state";
     import type { UserResponse as AppUser } from "$backend/models";
     import { Menu, LayoutGrid } from "@lucide/svelte";
     import UserMenu from "./UserMenu.svelte";
@@ -58,6 +59,28 @@
         closeMobileMenu();
         onMobileMenuSelect?.(id);
     }
+
+    function resolveTopBarHref(href: string | undefined) {
+        if (!href) return undefined;
+        if (
+            href.startsWith("#") ||
+            href.startsWith("?") ||
+            /^[a-z][a-z0-9+.-]*:/i.test(href) ||
+            href.startsWith("//")
+        ) {
+            return href;
+        }
+        if (!href.startsWith("/")) {
+            return href;
+        }
+
+        const currentPath = page.url.pathname.replace(/\/+$/, "");
+        const depth = currentPath.split("/").filter(Boolean).length;
+        const relativePrefix = depth === 0 ? "./" : "../".repeat(depth);
+        const target = href.slice(1);
+
+        return target ? `${relativePrefix}${target}` : relativePrefix;
+    }
 </script>
 
 <header
@@ -71,7 +94,7 @@
                     {#if crumb.href}
                         <a
                             class="topbar-brand-link flex items-center gap-[13px] no-underline leading-none self-stretch pr-1"
-                            href={crumb.href}
+                            href={resolveTopBarHref(crumb.href)}
                         >
                             <span class="topbar-home-mark" aria-hidden="true"></span>
                             <span class="topbar-brand-title">
@@ -89,14 +112,14 @@
                 {:else if i === 1}
                     <span class="opacity-55">—</span>
                     {#if crumb.href}
-                        <a href={crumb.href}>{crumb.label}</a>
+                        <a href={resolveTopBarHref(crumb.href)}>{crumb.label}</a>
                     {:else}
                         <span class="text-(--text-dim)">{crumb.label}</span>
                     {/if}
                 {:else}
                     <span class="opacity-55">/</span>
                     {#if crumb.href}
-                        <strong><a href={crumb.href}>{crumb.label}</a></strong>
+                        <strong><a href={resolveTopBarHref(crumb.href)}>{crumb.label}</a></strong>
                     {:else}
                         <strong>{crumb.label}</strong>
                     {/if}
@@ -153,7 +176,7 @@
         {#if adminHref}
             <a
                 class="flex items-center justify-center w-[34px] h-[34px] border border-(--border-strong) bg-(--surface-alt) text-(--text-dim) cursor-pointer transition-[background,color] duration-150 no-underline shrink-0 hover:bg-(--surface) hover:text-(--text)"
-                href={adminHref}
+                href={resolveTopBarHref(adminHref)}
                 title="Admin panel"
                 aria-label="Admin panel"
             >

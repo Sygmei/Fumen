@@ -1,0 +1,158 @@
+{{- if and .Values.processor.enabled .Values.processor.keda.enabled .Values.processor.keda.useScaledJob (.Capabilities.APIVersions.Has "keda.sh/v1alpha1/ScaledJob") }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: {{ include "fumen.processor.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "fumen.name" . }}
+    app.kubernetes.io/component: processor
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  pollingInterval: {{ .Values.processor.keda.pollingInterval }}
+  maxReplicaCount: {{ .Values.processor.maxReplicas }}
+  successfulJobsHistoryLimit: {{ .Values.processor.keda.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.processor.keda.failedJobsHistoryLimit }}
+  jobTargetRef:
+    backoffLimit: {{ .Values.processor.keda.jobBackoffLimit }}
+    template:
+      metadata:
+        labels:
+          app.kubernetes.io/name: {{ include "fumen.name" . }}
+          app.kubernetes.io/component: processor
+          app.kubernetes.io/instance: {{ .Release.Name }}
+      spec:
+        restartPolicy: Never
+        securityContext:
+          runAsNonRoot: true
+          fsGroup: 65532
+          fsGroupChangePolicy: OnRootMismatch
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+          - name: processor
+            image: ghcr.io/sygmei/fumen-processor:{{ .Values.processor.version }}
+            imagePullPolicy: IfNotPresent
+            command:
+              - /usr/local/bin/fumen-processor
+            args:
+              # KEDA's PostgreSQL scaler only provides a queue-length integer.
+              # It does not forward row data such as music_id into the spawned Job.
+              # This oneshot worker claims one queued job for itself on startup.
+              - --oneshot
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                  - ALL
+              runAsNonRoot: true
+              runAsUser: 10001
+              runAsGroup: 10001
+            resources:
+              requests:
+                cpu: {{ .Values.processor.resources.requests.cpu | quote }}
+                memory: {{ .Values.processor.resources.requests.memory | quote }}
+              limits:
+                cpu: {{ .Values.processor.resources.limits.cpu | quote }}
+                memory: {{ .Values.processor.resources.limits.memory | quote }}
+            env:
+              - name: APP_BASE_URL
+                value: https://{{ .Values.frontend.ingress.domain }}
+              - name: OTEL_ENABLED
+                value: {{ .Values.processor.otel.enabled | quote }}
+              - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                value: {{ .Values.processor.otel.endpoint | quote }}
+              - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+                value: {{ .Values.processor.otel.tracesEndpoint | quote }}
+              - name: OTEL_SERVICE_NAME
+                value: {{ .Values.processor.otel.serviceName | quote }}
+              - name: OTEL_SERVICE_VERSION
+                value: {{ .Values.processor.otel.serviceVersion | default .Values.processor.version | quote }}
+              - name: OTEL_DEPLOYMENT_ENVIRONMENT
+                value: {{ .Values.processor.otel.deploymentEnvironment | quote }}
+              - name: OTEL_EXPORTER_OTLP_HEADERS
+                value: {{ .Values.processor.otel.headers | quote }}
+              - name: OTEL_RESOURCE_ATTRIBUTES
+                value: {{ .Values.processor.otel.resourceAttributes | quote }}
+              - name: DATABASE_URL
+                valueFrom:
+                  secretKeyRef:
+                    name: postgresql-credentials
+                    key: connection-string
+              - name: DATABASE_URL_ADMIN
+                valueFrom:
+                  secretKeyRef:
+                    name: postgresql-credentials
+                    key: connection-string-admin
+              - name: DATABASE_URL_READ_ONLY
+                valueFrom:
+                  secretKeyRef:
+                    name: postgresql-credentials
+                    key: connection-string-ro
+              - name: JWT_SECRET
+                valueFrom:
+                  secretKeyRef:
+                    name: jwt-credentials
+                    key: secret
+              - name: S3_BUCKET
+                valueFrom:
+                  secretKeyRef:
+                    name: s3-creds
+                    key: bucket-name
+              - name: S3_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: s3-creds
+                    key: access-key-id
+              - name: S3_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: s3-creds
+                    key: secret-key
+              - name: S3_REGION
+                valueFrom:
+                  secretKeyRef:
+                    name: s3-creds
+                    key: region-name
+              - name: S3_ENDPOINT
+                valueFrom:
+                  secretKeyRef:
+                    name: s3-creds
+                    key: endpoint-url
+              - name: PROCESSOR_LEASE_SECONDS
+                value: {{ .Values.processor.leaseSeconds | quote }}
+              - name: PROCESSOR_HEARTBEAT_INTERVAL_MS
+                value: {{ .Values.processor.heartbeatIntervalMs | quote }}
+              - name: PROCESSOR_POLL_INTERVAL_MS
+                value: {{ .Values.processor.pollIntervalMs | quote }}
+              - name: PROCESSOR_MAX_PARALLEL_CORE_CONVERSIONS
+                value: {{ .Values.processor.maxParallelCoreConversions | quote }}
+              - name: PROCESSOR_MAX_PARALLEL_STEM_RENDERS
+                value: {{ .Values.processor.maxParallelStemRenders | quote }}
+              - name: PROCESSOR_RUN_MIGRATIONS
+                value: "false"
+              - name: MUSESCORE_DIRECT_OGG_STEMS
+                value: {{ .Values.backend.musescoreDirectOggStems | toString | quote }}
+              {{- with .Values.processor.extraEnv }}
+              {{- range . }}
+              - name: {{ .name | quote }}
+                value: {{ .value | quote }}
+              {{- end }}
+              {{- end }}
+            volumeMounts:
+              - name: data
+                mountPath: /data
+        volumes:
+          - name: data
+            emptyDir: {}
+  triggers:
+    - type: postgresql
+      metadata:
+        connectionFromEnv: DATABASE_URL
+        query: >
+          -- ScaledJob uses queue depth only. Each spawned pod claims one queued row itself.
+          SELECT COUNT(*)
+          FROM processing_jobs
+          WHERE status = 'queued'
+        targetQueryValue: "{{ .Values.processor.keda.targetQueryValue }}"
+        activationTargetQueryValue: "{{ .Values.processor.keda.activationTargetQueryValue }}"
+{{- end }}
