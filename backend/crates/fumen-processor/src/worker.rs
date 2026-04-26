@@ -36,6 +36,7 @@ pub async fn run() -> Result<()> {
         poll_interval_ms = state.config.processor_poll_interval_ms,
         lease_seconds = state.config.processor_lease_seconds,
         heartbeat_interval_ms = state.config.processor_heartbeat_interval_ms,
+        max_parallel_core_conversions = state.config.processor_max_parallel_core_conversions,
         max_parallel_stem_renders = state.config.processor_max_parallel_stem_renders,
         "score processor worker started"
     );

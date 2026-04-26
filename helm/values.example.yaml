@@ -43,8 +43,14 @@ processor:
   leaseSeconds: 600
   heartbeatIntervalMs: 30000
   pollIntervalMs: 10000
+  # Core conversions (audio, MIDI, MusicXML) each spawn a full MuseScore process.
+  # Keep this low in Kubernetes to avoid pod OOM kills.
+  maxParallelCoreConversions: 1
   # Leave at 0 to auto-match the pod's available CPU parallelism.
   maxParallelStemRenders: 0
+  extraEnv:
+    - name: PROCESSOR_DEBUG_MARKERS
+      value: "1"
   otel:
     enabled: true
     serviceName: "fumen-processor"

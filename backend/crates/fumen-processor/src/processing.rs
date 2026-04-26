@@ -10,9 +10,11 @@ use diesel::prelude::*;
 use diesel::sql_query;
 use diesel::sql_types::{BigInt, Text};
 use diesel_async::RunQueryDsl;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{Mutex, Semaphore, mpsc, watch};
+use tokio::task::JoinSet;
 
 const PROCESSING_LOG_CONTENT_TYPE: &str = "text/plain; charset=utf-8";
 const DEFAULT_MAX_ATTEMPTS: i64 = 25;
@@ -574,6 +576,98 @@ fn publish_step(step_sender: Option<&watch::Sender<String>>, step: &str) {
     }
 }
 
+enum CoreConversionKind {
+    Audio,
+    Midi,
+    MusicXml,
+}
+
+struct CoreConversionOutputs {
+    audio: audio::ConversionOutcome,
+    midi: audio::ConversionOutcome,
+    musicxml: audio::ConversionOutcome,
+}
+
+async fn run_core_conversions(
+    state: &AppState,
+    input_path: &Path,
+    output_dir: &Path,
+    progress_sender: &audio::ProgressLogSender,
+) -> Result<CoreConversionOutputs, AppError> {
+    let max_parallel = state.config.processor_max_parallel_core_conversions.max(1);
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
+    let mut jobs = JoinSet::new();
+    let input_path = input_path.to_path_buf();
+    let output_dir = output_dir.to_path_buf();
+
+    for kind in [
+        CoreConversionKind::Audio,
+        CoreConversionKind::Midi,
+        CoreConversionKind::MusicXml,
+    ] {
+        let config = state.config.clone();
+        let input_path = input_path.clone();
+        let output_dir = output_dir.clone();
+        let progress_sender = progress_sender.clone();
+        let semaphore = semaphore.clone();
+
+        jobs.spawn(async move {
+            let _permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|_| AppError::new("core conversion semaphore closed"))?;
+
+            let outcome = match kind {
+                CoreConversionKind::Audio => {
+                    audio::generate_audio(&config, &input_path, &output_dir, Some(&progress_sender))
+                        .await
+                        .map_err(AppError::from)?
+                }
+                CoreConversionKind::Midi => {
+                    audio::generate_midi(&config, &input_path, &output_dir, Some(&progress_sender))
+                        .await
+                        .map_err(AppError::from)?
+                }
+                CoreConversionKind::MusicXml => audio::generate_musicxml(
+                    &config,
+                    &input_path,
+                    &output_dir,
+                    Some(&progress_sender),
+                )
+                .await
+                .map_err(AppError::from)?,
+            };
+
+            Ok::<_, AppError>((kind, outcome))
+        });
+    }
+
+    let mut audio_outcome = None;
+    let mut midi_outcome = None;
+    let mut musicxml_outcome = None;
+
+    while let Some(result) = jobs.join_next().await {
+        let (kind, outcome) = result.map_err(|error| {
+            AppError::new(format!("core conversion task join failed: {error}"))
+        })??;
+
+        match kind {
+            CoreConversionKind::Audio => audio_outcome = Some(outcome),
+            CoreConversionKind::Midi => midi_outcome = Some(outcome),
+            CoreConversionKind::MusicXml => musicxml_outcome = Some(outcome),
+        }
+    }
+
+    Ok(CoreConversionOutputs {
+        audio: audio_outcome
+            .ok_or_else(|| AppError::new("audio conversion task did not return a result"))?,
+        midi: midi_outcome
+            .ok_or_else(|| AppError::new("MIDI conversion task did not return a result"))?,
+        musicxml: musicxml_outcome
+            .ok_or_else(|| AppError::new("MusicXML conversion task did not return a result"))?,
+    })
+}
+
 pub(crate) async fn execute_processing_job(
     state: &AppState,
     job: &ProcessingJobRecord,
@@ -620,38 +714,12 @@ pub(crate) async fn execute_processing_job(
 
         log.set_step(LOG_STEP_MUSICXML).await;
         publish_step(step_sender, JOB_STEP_GENERATING_CORE);
-        let (audio_outcome, midi_outcome, musicxml_outcome) = tokio::try_join!(
-            async {
-                audio::generate_audio(
-                    &state.config,
-                    &temp_input_path,
-                    temp_dir.path(),
-                    Some(&progress_sender),
-                )
-                .await
-                .map_err(AppError::from)
-            },
-            async {
-                audio::generate_midi(
-                    &state.config,
-                    &temp_input_path,
-                    temp_dir.path(),
-                    Some(&progress_sender),
-                )
-                .await
-                .map_err(AppError::from)
-            },
-            async {
-                audio::generate_musicxml(
-                    &state.config,
-                    &temp_input_path,
-                    temp_dir.path(),
-                    Some(&progress_sender),
-                )
-                .await
-                .map_err(AppError::from)
-            },
-        )?;
+        let CoreConversionOutputs {
+            audio: audio_outcome,
+            midi: midi_outcome,
+            musicxml: musicxml_outcome,
+        } = run_core_conversions(state, &temp_input_path, temp_dir.path(), &progress_sender)
+            .await?;
         log.append("Audio, MIDI, and MusicXML conversion finished. Storing generated files.")
             .await;
 
