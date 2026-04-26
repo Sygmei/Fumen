@@ -1,5 +1,7 @@
 <script lang="ts">
+    import { tick } from "svelte";
     import type { AdminMusicResponse as AdminMusic } from "$backend/models";
+    import { portal } from "$lib/portal";
     import AdminCard from "./AdminCard.svelte";
     import ScoreIcon from "$components/ScoreIcon.svelte";
     import {
@@ -67,7 +69,93 @@
                   : "",
     );
     const actionsDisabled = $derived(creating || saving || restarting || deleting);
+
+    let downloadMenuRoot = $state<HTMLElement | null>(null);
+    let downloadMenuButton = $state<HTMLButtonElement | null>(null);
+    let downloadMenuPanel = $state<HTMLElement | null>(null);
+    let downloadMenuLeft = $state(0);
+    let downloadMenuTop = $state<number | null>(null);
+    let downloadMenuBottom = $state<number | null>(null);
+    let downloadMenuWidth = $state(208);
+
+    function handleWindowPointerDown(event: PointerEvent) {
+        if (!downloadOpen) {
+            return;
+        }
+
+        const target = event.target;
+        if (
+            target instanceof Node &&
+            !downloadMenuRoot?.contains(target) &&
+            !downloadMenuPanel?.contains(target)
+        ) {
+            onCloseDownloadMenu();
+        }
+    }
+
+    async function updateDownloadMenuPlacement() {
+        if (!downloadOpen || !downloadMenuButton) {
+            return;
+        }
+
+        await tick();
+
+        const rect = downloadMenuButton.getBoundingClientRect();
+        const panelHeight = downloadMenuPanel?.offsetHeight ?? 0;
+        const viewport = window.visualViewport;
+        const viewportWidth = viewport?.width ?? window.innerWidth;
+        const viewportHeight = viewport?.height ?? window.innerHeight;
+        const margin = viewportWidth <= 640 ? 12 : 16;
+        const gap = 6;
+
+        downloadMenuWidth = Math.max(208, rect.width);
+        downloadMenuLeft = Math.min(
+            Math.max(margin, rect.right - downloadMenuWidth),
+            Math.max(margin, viewportWidth - downloadMenuWidth - margin),
+        );
+
+        const fitsBelow =
+            rect.bottom + gap + panelHeight <= viewportHeight - margin;
+        if (fitsBelow || rect.top < panelHeight + gap + margin) {
+            downloadMenuTop = rect.bottom + gap;
+            downloadMenuBottom = null;
+        } else {
+            downloadMenuTop = null;
+            downloadMenuBottom = viewportHeight - rect.top + gap;
+        }
+    }
+
+    function handleViewportChange() {
+        if (downloadOpen) {
+            void updateDownloadMenuPlacement();
+        }
+    }
+
+    $effect(() => {
+        if (downloadOpen) {
+            void updateDownloadMenuPlacement();
+        }
+    });
+
+    $effect(() => {
+        const viewport = window.visualViewport;
+        viewport?.addEventListener("resize", handleViewportChange);
+        viewport?.addEventListener("scroll", handleViewportChange);
+        document.addEventListener("scroll", handleViewportChange, true);
+
+        return () => {
+            viewport?.removeEventListener("resize", handleViewportChange);
+            viewport?.removeEventListener("scroll", handleViewportChange);
+            document.removeEventListener("scroll", handleViewportChange, true);
+        };
+    });
 </script>
+
+<svelte:window
+    onpointerdown={handleWindowPointerDown}
+    onresize={handleViewportChange}
+    onscroll={handleViewportChange}
+/>
 
 {#snippet body()}
     <div class="admin-score-header">
@@ -119,6 +207,7 @@
         <div
             class="download-menu admin-score-download-menu"
             class:open={downloadOpen}
+            bind:this={downloadMenuRoot}
         >
             <button
                 class="download-menu-btn admin-score-download-btn"
@@ -129,11 +218,19 @@
                 title="Downloads"
                 aria-haspopup="true"
                 aria-expanded={downloadOpen}
+                bind:this={downloadMenuButton}
             >
                 <Download size={15} strokeWidth={2.2} />
             </button>
             {#if downloadOpen}
-                <div class="download-dropdown">
+                <div
+                    class="download-dropdown admin-score-download-dropdown"
+                    bind:this={downloadMenuPanel}
+                    use:portal
+                    style={`position: fixed; left: ${downloadMenuLeft}px; width: ${downloadMenuWidth}px; ${
+                        downloadMenuTop === null ? "" : `top: ${downloadMenuTop}px;`
+                    } ${downloadMenuBottom === null ? "" : `bottom: ${downloadMenuBottom}px;`}`}
+                >
                     <a
                         class="download-item"
                         href={music.download_url}

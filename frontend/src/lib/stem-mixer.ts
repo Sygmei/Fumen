@@ -54,7 +54,7 @@ export class StemMixerPlayer {
     await this.dispose()
 
     this.context = new AudioContext()
-    this._duration = stems.reduce((max, s) => Math.max(max, s.durationSeconds), 0)
+    this._duration = 0
     this._isReadyToPlay = false
 
     // Per-stem byte counters for progress reporting.
@@ -136,6 +136,11 @@ export class StemMixerPlayer {
         muted: false,
       })
     }))
+
+    this._duration = Math.max(
+      0,
+      ...[...this.tracks.values()].map((track) => track.buffer.duration),
+    )
 
     this._isReadyToPlay = true
 

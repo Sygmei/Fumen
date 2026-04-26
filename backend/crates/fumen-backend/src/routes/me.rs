@@ -270,6 +270,13 @@ pub(crate) async fn current_user_library(
     };
 
     for (music_record, ensemble_id, ensemble_name) in music_entries {
+        let is_ready = crate::processing::processing_statuses(&music_record)
+            .iter()
+            .all(|status| *status == "ready");
+        if !is_ready {
+            continue;
+        }
+
         let public_id_url = music_record
             .public_id
             .as_ref()
@@ -308,6 +315,8 @@ pub(crate) async fn current_user_library(
             });
         }
     }
+
+    ensembles.retain(|ensemble| !ensemble.scores.is_empty());
 
     Ok(Json(UserLibraryResponse { ensembles }))
 }

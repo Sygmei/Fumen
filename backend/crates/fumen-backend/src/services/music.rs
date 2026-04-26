@@ -20,7 +20,6 @@ use crate::storage::Storage;
 use crate::{
     AppError, AppRole, AppState, AuthContext, sanitize_content_disposition, utc_now_string,
 };
-use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use diesel::OptionalExtension;
 use diesel::QueryableByName;
@@ -30,8 +29,6 @@ use diesel::upsert::excluded;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 pub(crate) use fumen_core::music::{find_public_stems, processing_log_key};
 use std::collections::{HashMap, HashSet};
-use tokio::fs;
-use tokio::process::Command;
 use tracing::warn;
 
 #[derive(QueryableByName)]
@@ -795,33 +792,6 @@ pub(crate) async fn build_admin_user_metadata_playtime_response(
     Ok((total_seconds, score_playtimes))
 }
 
-pub(crate) async fn probe_audio_duration_seconds(path: &std::path::Path) -> Result<f64, AppError> {
-    let output = Command::new("ffprobe")
-        .arg("-v")
-        .arg("error")
-        .arg("-show_entries")
-        .arg("format=duration")
-        .arg("-of")
-        .arg("default=noprint_wrappers=1:nokey=1")
-        .arg(path)
-        .output()
-        .await
-        .map_err(AppError::from)?;
-
-    if !output.status.success() {
-        return Err(AppError::from(anyhow!(
-            "ffprobe failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    let duration = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<f64>()
-        .map_err(|error| AppError::from(anyhow!("invalid ffprobe duration: {error}")))?;
-    Ok(duration)
-}
-
 pub(crate) async fn build_public_stem_infos(
     state: &AppState,
     access_key: &str,
@@ -838,23 +808,13 @@ pub(crate) async fn build_public_stem_infos(
                 .unwrap_or_else(|| format!("/api/public/{access_key}/stems/{}", stem.track_index)),
             &stem_version,
         );
-        let duration_seconds =
-            if let Some(path) = state.storage.local_path_for_key(&stem.storage_key) {
-                probe_audio_duration_seconds(&path).await?
-            } else {
-                let (stem_bytes, _, _) = state.storage.get_bytes(&stem.storage_key).await?;
-                let temp_dir = tempfile::tempdir()?;
-                let full_stem_path = temp_dir.path().join("stem.ogg");
-                fs::write(&full_stem_path, stem_bytes).await?;
-                probe_audio_duration_seconds(&full_stem_path).await?
-            };
 
         resolved_infos.push(StemInfo {
             track_index: stem.track_index,
             track_name: stem.track_name,
             instrument_name: stem.instrument_name,
             full_stem_url,
-            duration_seconds,
+            duration_seconds: 0.0,
             drum_map: stem
                 .drum_map_json
                 .as_deref()
