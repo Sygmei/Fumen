@@ -9,9 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
-#[cfg(test)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
@@ -196,6 +194,112 @@ fn musescore_part_name_aliases(part: Node<'_, '_>, instrument: Node<'_, '_>) -> 
     aliases
 }
 
+fn extract_musescore_part_infos(score_path: &Path) -> Result<Vec<ScorePartInfo>> {
+    if !score_path
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mscz"))
+    {
+        return Ok(Vec::new());
+    }
+
+    let file = File::open(score_path)
+        .with_context(|| format!("opening MuseScore archive {}", score_path.display()))?;
+    let mut archive =
+        ZipArchive::new(file).with_context(|| format!("reading {}", score_path.display()))?;
+
+    let mscx_name = (0..archive.len())
+        .filter_map(|idx| {
+            archive
+                .by_index(idx)
+                .ok()
+                .map(|entry| entry.name().to_owned())
+        })
+        .find(|name| name.ends_with(".mscx") && !name.contains('/'))
+        .or_else(|| {
+            (0..archive.len())
+                .filter_map(|idx| {
+                    archive
+                        .by_index(idx)
+                        .ok()
+                        .map(|entry| entry.name().to_owned())
+                })
+                .find(|name| name.ends_with(".mscx") && !name.starts_with("Excerpts/"))
+        });
+
+    let Some(mscx_name) = mscx_name else {
+        return Ok(Vec::new());
+    };
+
+    let mut entry = archive
+        .by_name(&mscx_name)
+        .with_context(|| format!("opening '{mscx_name}' in {}", score_path.display()))?;
+    let mut xml = String::new();
+    entry
+        .read_to_string(&mut xml)
+        .with_context(|| format!("reading '{mscx_name}' in {}", score_path.display()))?;
+
+    let document = Document::parse(&xml)
+        .with_context(|| format!("parsing '{mscx_name}' in {}", score_path.display()))?;
+
+    let mut parts = Vec::new();
+    for part in document
+        .descendants()
+        .filter(|node| node.has_tag_name("Part"))
+    {
+        let Some(instrument) = part
+            .children()
+            .find(|child| child.is_element() && child.has_tag_name("Instrument"))
+        else {
+            continue;
+        };
+
+        let candidate_names = [
+            element_text(part, "trackName"),
+            element_text(instrument, "trackName"),
+            element_text(instrument, "longName"),
+            element_text(instrument, "shortName"),
+        ];
+        let Some(part_name) = candidate_names.into_iter().flatten().next() else {
+            continue;
+        };
+        let instrument_name = element_text(instrument, "longName")
+            .or_else(|| element_text(instrument, "trackName"))
+            .or_else(|| element_text(instrument, "shortName"))
+            .unwrap_or_else(|| part_name.clone());
+        let drum_map = instrument
+            .children()
+            .find(|child| child.is_element() && child.has_tag_name("useDrumset"))
+            .and_then(|node| node.text())
+            .is_some_and(|value| value.trim() == "1")
+            .then(|| {
+                instrument
+                    .children()
+                    .filter(|child| child.is_element() && child.has_tag_name("Drum"))
+                    .filter_map(parse_musescore_drum_entry)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|entries| !entries.is_empty());
+
+        parts.push(ScorePartInfo {
+            part_name,
+            instrument_name,
+            drum_map,
+        });
+    }
+
+    Ok(parts)
+}
+
+fn element_text(node: Node<'_, '_>, tag_name: &str) -> Option<String> {
+    node.children()
+        .find(|child| child.is_element() && child.has_tag_name(tag_name))
+        .and_then(|child| child.text())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
 pub enum ConversionOutcome {
     Ready {
         bytes: Bytes,
@@ -233,6 +337,21 @@ struct TrackInfo {
     track_name: String,
     program: u8,
     is_percussion: bool,
+}
+
+#[derive(Clone)]
+struct ScorePartInfo {
+    part_name: String,
+    instrument_name: String,
+    drum_map: Option<Vec<DrumMapEntry>>,
+}
+
+struct BatchRenderedStemSource {
+    track_name: String,
+    instrument_name: String,
+    drum_map: Option<Vec<DrumMapEntry>>,
+    mp3_path: PathBuf,
+    ogg_path: PathBuf,
 }
 
 fn emit_progress(progress_log: Option<&ProgressLogSender>, message: impl Into<String>) {
@@ -379,6 +498,33 @@ async fn generate_stems_with_musescore(
     progress_log: Option<&ProgressLogSender>,
     progress: Option<&processing::ProcessingProgressReporter>,
 ) -> Result<(Vec<StemResult>, String, Option<String>)> {
+    match try_generate_stems_with_musescore_batch_parts(
+        config,
+        input_path,
+        output_dir,
+        quality_profile,
+        progress_log,
+        progress,
+    )
+    .await
+    {
+        Ok(Some(result)) => return Ok(result),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                "stems: MuseScore batch part export path failed for '{}': {error}",
+                input_path.display()
+            );
+            emit_progress(
+                progress_log,
+                format!(
+                    "stems: MuseScore batch part export failed for '{}': {error}. Falling back to MIDI-based stem rendering.",
+                    input_path.display()
+                ),
+            );
+        }
+    }
+
     if find_musescore_command(config).await.is_none() {
         return Ok((
             Vec::new(),
@@ -562,7 +708,7 @@ async fn generate_stems_with_musescore(
             {
                 ConversionOutcome::Ready { bytes, .. } => {
                     let bytes = if let Some(ffmpeg_binary) = ffmpeg.as_deref() {
-                        recompress_ogg_stem(
+                        transcode_stem_audio_to_ogg(
                             ffmpeg_binary,
                             &stem_ogg_path,
                             &stem_compressed_path,
@@ -1115,6 +1261,367 @@ fn file_name(path: &Path) -> Result<&str> {
         .with_context(|| format!("path '{}' has no valid UTF-8 file name", path.display()))
 }
 
+async fn try_generate_stems_with_musescore_batch_parts(
+    config: &AppConfig,
+    input_path: &Path,
+    output_dir: &Path,
+    quality_profile: StemQualityProfile,
+    progress_log: Option<&ProgressLogSender>,
+    progress: Option<&processing::ProcessingProgressReporter>,
+) -> Result<Option<(Vec<StemResult>, String, Option<String>)>> {
+    let Some(command_kind) = find_musescore_command(config).await else {
+        tracing::info!(
+            "stems: MuseScore batch part export unavailable for '{}': no MuseScore command configured",
+            input_path.display()
+        );
+        return Ok(None);
+    };
+    let Some(ffmpeg_binary) = find_ffmpeg_binary().await else {
+        tracing::info!(
+            "stems: MuseScore batch part export unavailable for '{}': ffmpeg not found",
+            input_path.display()
+        );
+        emit_progress(
+            progress_log,
+            "stems: ffmpeg not found, falling back to MIDI-based stem rendering.",
+        );
+        return Ok(None);
+    };
+
+    let part_infos = extract_musescore_part_infos(input_path)?;
+    if part_infos.is_empty() {
+        tracing::info!(
+            "stems: MuseScore batch part export unavailable for '{}': no part metadata found in score archive",
+            input_path.display()
+        );
+        emit_progress(
+            progress_log,
+            "stems: no MuseScore part metadata found, falling back to MIDI-based stem rendering.",
+        );
+        return Ok(None);
+    }
+
+    let render_dir = output_dir.join("musescore-batch-parts");
+    tokio::fs::create_dir_all(&render_dir)
+        .await
+        .with_context(|| format!("creating {}", render_dir.display()))?;
+
+    let source_score_path = render_dir.join("score.mscz");
+    tokio::fs::copy(input_path, &source_score_path)
+        .await
+        .with_context(|| {
+            format!(
+                "copying {} to {}",
+                input_path.display(),
+                source_score_path.display()
+            )
+        })?;
+
+    emit_progress(
+        progress_log,
+        "stems: exporting score parts to MP3 via MuseScore batch job.",
+    );
+    if let Some(progress) = progress {
+        progress
+            .update_step(
+                processing::LOG_STEP_STEMS,
+                Some("active"),
+                None,
+                Some("Rendering stems via MuseScore batch export.".to_owned()),
+            )
+            .await?;
+    }
+
+    export_part_scores_to_mp3_batch(config, &command_kind, &render_dir, &source_score_path)
+        .await?;
+
+    let batch_sources =
+        collect_batch_rendered_stem_sources(&render_dir, &source_score_path, &part_infos).await?;
+    if batch_sources.is_empty() {
+        tracing::info!(
+            "stems: MuseScore batch part export unavailable for '{}': batch job produced no part MP3 files",
+            input_path.display()
+        );
+        emit_progress(
+            progress_log,
+            "stems: MuseScore batch job produced no part MP3 files, falling back to MIDI-based stem rendering.",
+        );
+        return Ok(None);
+    }
+
+    emit_progress(
+        progress_log,
+        format!(
+            "stems: MuseScore batch render finished with {} MP3 stem file(s).",
+            batch_sources.len()
+        ),
+    );
+    if let Some(progress) = progress {
+        progress
+            .begin_compression_step(batch_sources.len() as u64)
+            .await?;
+        progress
+            .update_step(
+                processing::LOG_STEP_STEMS,
+                Some("done"),
+                None,
+                Some(format!(
+                    "Rendered {} stems via MuseScore batch export.",
+                    batch_sources.len()
+                )),
+            )
+            .await?;
+    }
+
+    let total = batch_sources.len();
+    let max_parallel_stem_renders = config.processor_max_parallel_stem_renders.max(1);
+    let transcode_semaphore = Arc::new(Semaphore::new(max_parallel_stem_renders));
+    let mut jobs = JoinSet::new();
+
+    for (index, source) in batch_sources.into_iter().enumerate() {
+        let progress_log = progress_log.cloned();
+        let progress = progress.cloned();
+        let ffmpeg_binary = ffmpeg_binary.clone();
+        let transcode_semaphore = transcode_semaphore.clone();
+        jobs.spawn(async move {
+            let _permit = transcode_semaphore
+                .acquire_owned()
+                .await
+                .context("stem transcode semaphore closed")?;
+
+            let bytes = transcode_stem_audio_to_ogg(
+                &ffmpeg_binary,
+                &source.mp3_path,
+                &source.ogg_path,
+                quality_profile,
+                index,
+                total,
+                &source.track_name,
+                progress_log.as_ref(),
+                progress.as_ref(),
+            )
+            .await?;
+
+            Ok::<_, anyhow::Error>(StemResult {
+                track_index: index,
+                track_name: source.track_name,
+                instrument_name: source.instrument_name,
+                bytes,
+                drum_map: source.drum_map,
+            })
+        });
+    }
+
+    let mut stems = Vec::with_capacity(total);
+    while let Some(job) = jobs.join_next().await {
+        stems.push(job??);
+    }
+    stems.sort_by_key(|stem| stem.track_index);
+
+    Ok(Some((stems, "ready".to_owned(), None)))
+}
+
+async fn collect_batch_rendered_stem_sources(
+    work_dir: &Path,
+    source_score_path: &Path,
+    part_infos: &[ScorePartInfo],
+) -> Result<Vec<BatchRenderedStemSource>> {
+    let source_score_stem = source_score_path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("score");
+    let mut part_score_paths = Vec::new();
+    let mut entries = tokio::fs::read_dir(work_dir)
+        .await
+        .with_context(|| format!("reading {}", work_dir.display()))?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path == source_score_path {
+            continue;
+        }
+        if path
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"))
+        {
+            part_score_paths.push(path);
+        }
+    }
+
+    let info_by_key: HashMap<String, ScorePartInfo> = part_infos
+        .iter()
+        .cloned()
+        .map(|info| (normalize_track_lookup_key(&info.part_name), info))
+        .collect();
+    let order_by_key: HashMap<String, usize> = part_infos
+        .iter()
+        .enumerate()
+        .map(|(index, info)| (normalize_track_lookup_key(&info.part_name), index))
+        .collect();
+
+    part_score_paths.sort_by(|left, right| {
+        let left_name = infer_part_name_from_generated_batch_output(source_score_stem, left);
+        let right_name = infer_part_name_from_generated_batch_output(source_score_stem, right);
+        let left_key = normalize_track_lookup_key(&left_name);
+        let right_key = normalize_track_lookup_key(&right_name);
+        let left_order = order_by_key.get(&left_key).copied().unwrap_or(usize::MAX);
+        let right_order = order_by_key.get(&right_key).copied().unwrap_or(usize::MAX);
+        left_order
+            .cmp(&right_order)
+            .then_with(|| left_name.cmp(&right_name))
+    });
+
+    Ok(part_score_paths
+        .into_iter()
+        .map(|mp3_path| {
+            let part_name = infer_part_name_from_generated_batch_output(source_score_stem, &mp3_path);
+            let info = info_by_key
+                .get(&normalize_track_lookup_key(&part_name))
+                .cloned()
+                .unwrap_or(ScorePartInfo {
+                    part_name: part_name.clone(),
+                    instrument_name: part_name.clone(),
+                    drum_map: None,
+                });
+            let ogg_path = mp3_path.with_extension("ogg");
+            BatchRenderedStemSource {
+                track_name: info.part_name,
+                instrument_name: info.instrument_name,
+                drum_map: info.drum_map,
+                mp3_path,
+                ogg_path,
+            }
+        })
+        .collect())
+}
+
+async fn export_part_scores_to_mp3_batch(
+    config: &AppConfig,
+    command_kind: &MuseScoreCommand,
+    work_dir: &Path,
+    score_path: &Path,
+) -> Result<()> {
+    let xdg_runtime_dir =
+        tempfile::tempdir().context("failed to create MuseScore runtime directory")?;
+    let source_score_stem = score_path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("score");
+    let output_prefix = work_dir.join(format!("{source_score_stem} ("));
+    let output_suffix = ").mp3";
+
+    let (runner_label, mut command) = match command_kind {
+        MuseScoreCommand::Native { binary } => {
+            let job_path = work_dir.join("stem-render-job.json");
+            let job = serde_json::to_string_pretty(&vec![serde_json::json!({
+                "in": score_path,
+                "out": [[output_prefix, output_suffix]],
+            })])?;
+            tokio::fs::write(&job_path, job)
+                .await
+                .with_context(|| format!("writing {}", job_path.display()))?;
+
+            let mut command = native_musescore_command(binary, config, xdg_runtime_dir.path());
+            command.arg("-j").arg(&job_path);
+            (binary.as_str().to_owned(), command)
+        }
+        MuseScoreCommand::Docker { image } => {
+            let job_path = work_dir.join("stem-render-job.json");
+            let job = serde_json::to_string_pretty(&vec![serde_json::json!({
+                "in": format!("/work/{}", file_name(score_path)?),
+                "out": [[format!("/work/{source_score_stem} ("), output_suffix]],
+            })])?;
+            tokio::fs::write(&job_path, job)
+                .await
+                .with_context(|| format!("writing {}", job_path.display()))?;
+
+            (
+                format!("{} run {}", config.docker_bin, image),
+                docker_musescore_job_command(config, image, work_dir, &job_path)?,
+            )
+        }
+    };
+
+    tracing::info!(
+        "stems: invoking MuseScore batch job '{}' with -j automatic part export for '{}'",
+        runner_label,
+        score_path.display()
+    );
+
+    let output = command
+        .output()
+        .await
+        .with_context(|| format!("failed to start MuseScore batch job '{runner_label}'"))?;
+    if !output.status.success() {
+        let stderr = sanitize_musescore_output(String::from_utf8_lossy(&output.stderr).as_ref());
+        let stdout = sanitize_musescore_output(String::from_utf8_lossy(&output.stdout).as_ref());
+        let status = output
+            .status
+            .code()
+            .map(|code| format!("exit code {code}"))
+            .unwrap_or_else(|| "terminated by signal".to_owned());
+        let detail = match (stdout.is_empty(), stderr.is_empty()) {
+            (false, false) => format!("stdout:\n{stdout}\nstderr:\n{stderr}"),
+            (false, true) => stdout,
+            (true, false) => stderr,
+            (true, true) => String::new(),
+        };
+        anyhow::bail!(
+            "MuseScore batch job '{runner_label}' failed with {status}.{}{}",
+            if detail.is_empty() { "" } else { "\n" },
+            detail
+        );
+    }
+    Ok(())
+}
+
+fn docker_musescore_job_command(
+    config: &AppConfig,
+    image: &str,
+    work_dir: &Path,
+    job_path: &Path,
+) -> Result<Command> {
+    let work_dir = work_dir
+        .canonicalize()
+        .with_context(|| format!("failed to resolve work directory {}", work_dir.display()))?;
+    let job_file_name = file_name(job_path)?;
+    let mut command = Command::new(&config.docker_bin);
+    command
+        .arg("run")
+        .arg("--rm")
+        .arg("--mount")
+        .arg(bind_mount_arg(&work_dir, "/work", false))
+        .arg(image)
+        .arg("-j")
+        .arg(format!("/work/{job_file_name}"));
+    Ok(command)
+}
+
+fn infer_part_name_from_generated_batch_output(source_score_stem: &str, path: &Path) -> String {
+    let file_stem = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+
+    let part_prefix = format!("{source_score_stem} (");
+    if let Some(value) = file_stem.strip_prefix(&part_prefix) {
+        let value = value
+            .strip_suffix(" part)")
+            .or_else(|| value.strip_suffix(')'))
+            .unwrap_or(value);
+        return value.trim().to_owned();
+    }
+
+    for prefix in [format!("{source_score_stem}-"), format!("{source_score_stem} - ")] {
+        if let Some(value) = file_stem.strip_prefix(&prefix) {
+            return value.trim().to_owned();
+        }
+    }
+    file_stem
+}
+
 // ---------------------------------------------------------------------------
 // MuseScore conversion helper
 // ---------------------------------------------------------------------------
@@ -1269,7 +1776,7 @@ fn sanitize_musescore_output(output: &str) -> String {
         quality_profile = %quality_profile.as_str()
     )
 )]
-async fn recompress_ogg_stem(
+async fn transcode_stem_audio_to_ogg(
     ffmpeg_binary: &str,
     input_path: &Path,
     output_path: &Path,
@@ -1280,15 +1787,21 @@ async fn recompress_ogg_stem(
     progress_log: Option<&ProgressLogSender>,
     progress: Option<&processing::ProcessingProgressReporter>,
 ) -> Result<Bytes> {
-    let Some(bitrate) = quality_profile.opus_bitrate() else {
+    let passthrough_source_ogg = quality_profile.opus_bitrate().is_none()
+        && input_path
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ogg"));
+    if passthrough_source_ogg {
         return tokio::fs::read(input_path)
             .await
             .map(Bytes::from)
             .with_context(|| format!("failed to read {}", input_path.display()));
-    };
+    }
+    let bitrate = quality_profile.opus_bitrate().unwrap_or("128k");
 
     tracing::info!(
-        "stems: [{}/{}] '{}' - compressing with Opus {}",
+        "stems: [{}/{}] '{}' - transcoding to OGG Opus {}",
         stem_idx + 1,
         total,
         track_label,
@@ -1594,6 +2107,24 @@ mod tests {
         assert_eq!(
             normalize_track_lookup_key("Trompette en Si♭"),
             normalize_track_lookup_key("Trompette en Sib")
+        );
+    }
+
+    #[test]
+    fn infers_part_name_from_batch_output_filename() {
+        assert_eq!(
+            infer_part_name_from_generated_batch_output(
+                "San",
+                Path::new("San (Flute part).mp3")
+            ),
+            "Flute"
+        );
+        assert_eq!(
+            infer_part_name_from_generated_batch_output(
+                "San",
+                Path::new("San (Clarinette en Si♭ 1).mp3")
+            ),
+            "Clarinette en Si♭ 1"
         );
     }
 }

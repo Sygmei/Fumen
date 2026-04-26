@@ -1210,9 +1210,10 @@ pub(crate) fn build_admin_music_processing_progress_response(
         false,
         stalled && job_step.as_deref() == Some("generating_stems"),
     );
+    let upload_done = upload_status_would_be_done(record, complete);
     let compression_enabled = stem_profile_uses_compression(&record.quality_profile);
     let compression_status = if !compression_enabled {
-        if stems_status == "done" || upload_status_would_be_done(record, complete) {
+        if stems_status == "done" || upload_done {
             "done"
         } else {
             "pending"
@@ -1230,13 +1231,23 @@ pub(crate) fn build_admin_music_processing_progress_response(
             stalled && job_step.as_deref() == Some("generating_stems"),
         )
     };
-    let upload_status = structured_step_status(
-        progress.as_ref(),
-        "upload_assets",
-        if complete { "ready" } else { "processing" },
-        false,
-        stalled && job_step.as_deref() == Some("uploading_assets"),
-    );
+    let upload_status = if upload_done {
+        "done"
+    } else {
+        structured_step_status(
+            progress.as_ref(),
+            "upload_assets",
+            if complete { "ready" } else { "processing" },
+            false,
+            stalled && job_step.as_deref() == Some("uploading_assets"),
+        )
+    };
+    let upload_detail = if upload_done {
+        complete_progress_ratio(progress_step_detail(progress.as_ref(), "upload_assets"))
+    } else {
+        progress_step_detail(progress.as_ref(), "upload_assets")
+    };
+    let upload_last_updated_at = progress_step_last_updated_at(progress.as_ref(), "upload_assets");
     let done_status = structured_step_status(
         progress.as_ref(),
         "done",
@@ -1374,15 +1385,23 @@ pub(crate) fn build_admin_music_processing_progress_response(
             "upload_assets",
             "Upload",
             upload_status,
-            progress_step_detail(progress.as_ref(), "upload_assets"),
-            progress_step_last_updated_at(progress.as_ref(), "upload_assets"),
-            progress_step_tooltip(progress.as_ref(), "upload_assets").or_else(|| {
+            upload_detail.clone(),
+            upload_last_updated_at.clone(),
+            if upload_done {
                 build_processing_tooltip(
-                    progress_step_detail(progress.as_ref(), "upload_assets"),
-                    progress_step_last_updated_at(progress.as_ref(), "upload_assets"),
-                    None,
+                    upload_detail.clone(),
+                    upload_last_updated_at.clone(),
+                    Some("All derived assets uploaded.".to_owned()),
                 )
-            }),
+            } else {
+                progress_step_tooltip(progress.as_ref(), "upload_assets").or_else(|| {
+                    build_processing_tooltip(
+                        upload_detail.clone(),
+                        upload_last_updated_at.clone(),
+                        None,
+                    )
+                })
+            },
             None,
         ),
         build_processing_step(
@@ -1608,6 +1627,17 @@ fn stem_profile_uses_compression(profile: &str) -> bool {
         profile.trim().to_ascii_lowercase().as_str(),
         "" | "standard"
     )
+}
+
+fn complete_progress_ratio(detail: Option<String>) -> Option<String> {
+    detail.map(|detail| {
+        if let Some((_, total)) = detail.split_once('/') {
+            let total = total.trim();
+            format!("{total} / {total}")
+        } else {
+            detail
+        }
+    })
 }
 
 fn upload_status_would_be_done(record: &MusicRecord, complete: bool) -> bool {

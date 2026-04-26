@@ -41,8 +41,8 @@ const LOG_STEP_INPUT: &str = "input";
 const LOG_STEP_MUSICXML: &str = "musicxml";
 const LOG_STEP_MIDI: &str = "midi";
 const LOG_STEP_PREVIEW_MP3: &str = "preview_mp3";
-const LOG_STEP_STEMS: &str = "stems";
-const LOG_STEP_COMPRESS_STEMS: &str = "compress_stems";
+pub(crate) const LOG_STEP_STEMS: &str = "stems";
+pub(crate) const LOG_STEP_COMPRESS_STEMS: &str = "compress_stems";
 pub(crate) const LOG_STEP_UPLOAD: &str = "upload_assets";
 const LOG_STEP_DONE: &str = "done";
 
