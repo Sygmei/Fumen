@@ -119,34 +119,6 @@
         return item.processing_job_step ?? null;
     }
 
-    function parseTimestampMs(value?: string | null) {
-        if (!value) return null;
-        const timestamp = Date.parse(value);
-        return Number.isFinite(timestamp) ? timestamp : null;
-    }
-
-    function processingJobLeaseExpired(item: AdminMusic) {
-        if (processingJobStatus(item) !== "running") {
-            return false;
-        }
-
-        const leaseExpiresAt = parseTimestampMs(
-            item.processing_job_lease_expires_at,
-        );
-        return leaseExpiresAt !== null && leaseExpiresAt <= Date.now();
-    }
-
-    function processingJobStallMessage(item: AdminMusic) {
-        if (!processingJobLeaseExpired(item) || hasProcessingFailure(item)) {
-            return "";
-        }
-
-        const heartbeatAt = item.processing_job_heartbeat_at;
-        return heartbeatAt
-            ? `Processor worker heartbeat stopped after ${prettyDate(heartbeatAt)}. Waiting for another worker to reclaim the job.`
-            : "Processor worker lease expired. Waiting for another worker to reclaim the job.";
-    }
-
     function isReadyMusic(item: AdminMusic) {
         return processingStatuses(item).every((status) => status === "ready");
     }
@@ -155,364 +127,17 @@
         return !isReadyMusic(item);
     }
 
-    function hasProcessingFailure(item: AdminMusic) {
-        return processingStatuses(item).includes("failed");
-    }
-
-    function logHasLine(logText: string, matcher: (line: string) => boolean) {
-        return logText.split(/\r?\n/).some((line) => matcher(line.toLowerCase()));
-    }
-
-    function deriveProcessingSteps(item: AdminMusic, logText: string): ProcessingStep[] {
-        const lower = logText.toLowerCase();
-        const storageLabel = lower.includes(" s3") ? "S3" : "Storage";
-        const jobStatus = processingJobStatus(item);
-        const jobStep = processingJobStep(item);
-        const failed =
-            jobStatus === "failed" ||
-            hasProcessingFailure(item) ||
-            lower.includes("processing failed") ||
-            lower.includes(" failed.");
-
-        if (jobStatus === "queued") {
-            return [
-                {
-                    key: "queue",
-                    label: "Queue",
-                    detail: "waiting worker",
-                    status: "active",
-                },
-                {
-                    key: "input",
-                    label: "Input",
-                    detail: "staged",
-                    status: "pending",
-                },
-                {
-                    key: "musicxml",
-                    label: "MusicXML",
-                    detail: "notation export",
-                    status: "pending",
-                    group: "core_exports",
-                },
-                {
-                    key: "midi",
-                    label: "MIDI",
-                    status: "pending",
-                    group: "core_exports",
-                },
-                {
-                    key: "preview_mp3",
-                    label: "Audio",
-                    status: "pending",
-                    group: "core_exports",
-                },
-                {
-                    key: "stems",
-                    label: "Stems",
-                    detail: "track render",
-                    status: "pending",
-                },
-                {
-                    key: "compress_stems",
-                    label: "Compress",
-                    status: "pending",
-                },
-                {
-                    key: "storage",
-                    label: storageLabel,
-                    detail: "asset upload",
-                    status: "pending",
-                },
-                {
-                    key: "ready",
-                    label: "Ready",
-                    detail: "published",
-                    status: "pending",
-                },
-            ];
-        }
-
-        const hasInputActivity =
-            lower.includes("processing restart requested") ||
-            lower.includes("processor worker") ||
-            lower.includes("fetching source score") ||
-            lower.includes("writing temporary input file") ||
-            lower.includes("temporary input file written") ||
-            lower.includes("score upload");
-        const hasMusicxmlCompletion =
-            lower.includes("audio, midi, and musicxml conversion finished");
-        const hasMusicxmlDoneLine =
-            logHasLine(
-                logText,
-                (line) =>
-                    line.includes("score.musicxml") &&
-                    line.includes("musescore: done"),
-            ) ||
-            logHasLine(
-                logText,
-                (line) =>
-                    line.includes("application/xml") &&
-                    line.includes("musescore: done"),
-            );
-        const hasMidiDoneLine =
-            logHasLine(
-                logText,
-                (line) =>
-                    line.includes("preview.mid") &&
-                    line.includes("musescore: done"),
-            ) ||
-            logHasLine(
-                logText,
-                (line) =>
-                    line.includes("audio/midi") &&
-                    line.includes("musescore: done"),
-            );
-        const hasPreviewDoneLine =
-            logHasLine(
-                logText,
-                (line) =>
-                    line.includes("preview.mp3") &&
-                    line.includes("musescore: done"),
-            ) ||
-            logHasLine(
-                logText,
-                (line) =>
-                    line.includes("audio/mpeg") &&
-                    line.includes("musescore: done"),
-            );
-        const hasStemRenderActivity =
-            lower.includes("stems: exporting midi from score") ||
-            lower.includes("stems: found ") ||
-            lower.includes("stems: [") ||
-            lower.includes("rendering via musescore") ||
-            lower.includes("stem generation finished");
-        const hasStorageActivity =
-            lower.includes("uploading ") ||
-            lower.includes(" uploaded ") ||
-            lower.includes("upload to s3") ||
-            lower.includes("upload to storage") ||
-            lower.includes("database state updated");
-        const hasCompressionActivity =
-            lower.includes("stems: compressing [") ||
-            lower.includes("stems: compressed [");
-        const isReady = isReadyMusic(item);
-        const isComplete =
-            lower.includes("processing completed. database state updated.") ||
-            (isReady &&
-                !hasProcessingFailure(item) &&
-                processingStatuses(item).every((status) => status === "ready"));
-
-        const inputDone =
-            hasInputActivity ||
-            logText.trim().length > 0 ||
-            processingStatuses(item).some((status) => status !== "processing");
-        const musicxmlDone =
-            item.musicxml_status !== "processing" ||
-            hasMusicxmlCompletion ||
-            hasMusicxmlDoneLine;
-        const midiDone =
-            item.midi_status !== "processing" ||
-            hasMusicxmlCompletion ||
-            hasMidiDoneLine;
-        const previewDone =
-            item.audio_status !== "processing" ||
-            hasMusicxmlCompletion ||
-            hasPreviewDoneLine;
-        const stemsStarted = jobStep === "generating_stems" || hasStemRenderActivity;
-        const stemsDone =
-            item.stems_status !== "processing" ||
-            lower.includes("stem generation finished") ||
-            lower.includes("stems: upload") ||
-            lower.includes("stems status:");
-        const compressionDone =
-            item.stems_status !== "processing" ||
-            (hasCompressionActivity && lower.includes("stem generation finished"));
-        const storageStarted = hasStorageActivity || (stemsDone && !isComplete);
-        const storageDone = isComplete;
-        const leaseExpired = processingJobLeaseExpired(item) && !isComplete && !failed;
-
-        let failedIndex: number | null = null;
-        if (failed) {
-            if (item.musicxml_status === "failed") {
-                failedIndex = 2;
-            } else if (item.midi_status === "failed") {
-                failedIndex = 3;
-            } else if (item.audio_status === "failed") {
-                failedIndex = 4;
-            } else if (item.stems_status === "failed") {
-                failedIndex = hasCompressionActivity ? 6 : 5;
-            } else if (!musicxmlDone) {
-                failedIndex = 2;
-            } else if (!midiDone) {
-                failedIndex = 3;
-            } else if (!previewDone) {
-                failedIndex = 4;
-            } else if (!stemsDone) {
-                failedIndex = 5;
-            } else if (hasCompressionActivity && !compressionDone) {
-                failedIndex = 6;
-            } else {
-                failedIndex = 7;
-            }
-        }
-
-        const steps = [
-            {
-                key: "queue",
-                label: "Queue",
-                detail: "claimed",
-            },
-            {
-                key: "input",
-                label: "Input",
-                detail: "staged",
-            },
-            {
-                key: "musicxml",
-                label: "MusicXML",
-                group: "core_exports",
-            },
-            {
-                key: "midi",
-                label: "MIDI",
-                group: "core_exports",
-            },
-            {
-                key: "preview_mp3",
-                label: "Audio",
-                group: "core_exports",
-            },
-            {
-                key: "stems",
-                label: "Stems",
-                detail: "track render",
-            },
-            {
-                key: "compress_stems",
-                label: "Compress",
-            },
-            {
-                key: "storage",
-                label: storageLabel,
-                detail: "asset upload",
-            },
-            {
-                key: "ready",
-                label: "Ready",
-                detail: "published",
-            },
-        ];
-
-        const stalledDetails = [
-            "worker lost",
-            "worker lease expired",
-            "worker lease expired",
-            "worker lease expired",
-            "worker lease expired",
-            "worker lease expired",
-            "worker lease expired",
-            "worker lease expired",
-            "worker lease expired",
-        ];
-
-        const statuses: ProcessingStepStatus[] = [
-            jobStatus === "running" || isComplete || failed ? "done" : "active",
-            inputDone
-                ? "done"
-                : jobStep === "fetching_input" || jobStep === "generating_core"
-                  ? "active"
-                  : "pending",
-            musicxmlDone
-                ? "done"
-                : jobStep === "generating_core" || inputDone
-                  ? "active"
-                  : "pending",
-            midiDone
-                ? "done"
-                : jobStep === "generating_core" || inputDone
-                  ? "active"
-                  : "pending",
-            previewDone
-                ? "done"
-                : jobStep === "generating_core" || inputDone
-                  ? "active"
-                  : "pending",
-            stemsDone
-                ? "done"
-                : stemsStarted
-                  ? "active"
-                  : "pending",
-            compressionDone
-                ? "done"
-                : hasCompressionActivity || (jobStep === "generating_stems" && stemsDone)
-                  ? "active"
-                  : "pending",
-            storageDone
-                ? "done"
-                : jobStep === "uploading_assets" || storageStarted
-                  ? "active"
-                  : "pending",
-            isComplete || jobStatus === "completed"
-                ? "done"
-                : jobStep === "finalizing"
-                  ? "active"
-                  : "pending",
-        ];
-
-        if (failedIndex !== null) {
-            for (let index = 0; index < statuses.length; index++) {
-                if (index < failedIndex) {
-                    statuses[index] = "done";
-                } else if (index === failedIndex) {
-                    statuses[index] = "failed";
-                } else {
-                    statuses[index] = "pending";
-                }
-            }
-        } else if (leaseExpired) {
-            const stalledIndex =
-                jobStep === "finalizing"
-                    ? 8
-                    : jobStep === "uploading_assets"
-                      ? 7
-                      : jobStep === "generating_stems"
-                        ? hasCompressionActivity
-                            ? 6
-                            : 5
-                        : jobStep === "generating_core"
-                          ? 2
-                          : 1;
-
-            for (let index = 0; index < statuses.length; index++) {
-                if (index < stalledIndex) {
-                    statuses[index] = "done";
-                } else if (index === stalledIndex) {
-                    statuses[index] = "stalled";
-                    steps[index].detail = stalledDetails[index];
-                } else {
-                    statuses[index] = "pending";
-                }
-            }
-        }
-
-        return steps.map((step, index) => ({
-            ...step,
-            status: statuses[index],
-        }));
-    }
-
     const processingSteps = $derived(
         processingProgress?.steps?.length
             ? processingProgress.steps.map((step) => ({
                   ...step,
                   status: step.status as ProcessingStepStatus,
                 }))
-            : deriveProcessingSteps(currentMusic, processingLog),
+            : [],
     );
     const processingGridSteps = $derived(buildProcessingGrid(processingSteps));
     const processingStallMessage = $derived(
-        processingProgress?.state_message || processingJobStallMessage(currentMusic),
+        processingProgress?.state_message || "",
     );
 
     function stepTooltip(step: ProcessingStep) {
@@ -852,27 +477,29 @@
             {/if}
 
             {#if !processingProgressError && !processingLogError && !retryError && processingLogLoading}
-                <p class="hint">Loading processing log...</p>
+                <p class="hint">Loading processing data...</p>
             {:else if !processingProgressError && !processingLogError && !retryError && (processingLog || processingSteps.length)}
                 <div class="processing-journey-shell">
-                    <div class="processing-journey" aria-label="Processing progress">
-                        {#each processingGridSteps as cell (cell.step.key)}
-                            {@const step = cell.step}
-                        <article
-                            class={`processing-stop is-${step.status} processing-cell row-${cell.row} ${stepTooltip(step) ? "has-tooltip" : ""}`}
-                            title={stepTooltip(step)}
-                            style={`grid-column: ${cell.column}; grid-row: ${cell.row};`}
-                        >
-                            <span class="processing-stop-node" aria-hidden="true"></span>
-                            <div class="processing-stop-copy">
-                                <strong>{step.label}</strong>
-                                {#if step.detail}
-                                    <span>{step.detail}</span>
-                                {/if}
-                            </div>
-                        </article>
-                        {/each}
-                    </div>
+                    {#if processingSteps.length}
+                        <div class="processing-journey" aria-label="Processing progress">
+                            {#each processingGridSteps as cell (cell.step.key)}
+                                {@const step = cell.step}
+                            <article
+                                class={`processing-stop is-${step.status} processing-cell row-${cell.row} ${stepTooltip(step) ? "has-tooltip" : ""}`}
+                                title={stepTooltip(step)}
+                                style={`grid-column: ${cell.column}; grid-row: ${cell.row};`}
+                            >
+                                <span class="processing-stop-node" aria-hidden="true"></span>
+                                <div class="processing-stop-copy">
+                                    <strong>{step.label}</strong>
+                                    {#if step.detail}
+                                        <span>{step.detail}</span>
+                                    {/if}
+                                </div>
+                            </article>
+                            {/each}
+                        </div>
+                    {/if}
                 </div>
                 <LogBlock
                     logs={processingLog}
@@ -882,7 +509,7 @@
                     showDownloadButton={false}
                 />
             {:else if !processingProgressError && !processingLogError && !retryError}
-                <p class="hint">No processing log has been recorded for this score yet.</p>
+                <p class="hint">No processing data has been recorded for this score yet.</p>
             {/if}
         </section>
     {/if}

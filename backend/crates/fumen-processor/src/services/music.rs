@@ -10,16 +10,17 @@ use std::io::Write;
 use tracing::warn;
 
 #[tracing::instrument(
-    skip(state, stems, error),
+    skip(state, stems, error, progress_log, progress),
     fields(music_id = %music_id, stem_count = stems.len(), stems_status = status)
 )]
-pub async fn store_stems(
+pub(crate) async fn store_stems(
     state: &AppState,
     music_id: &str,
     stems: Vec<StemResult>,
     status: String,
     error: Option<String>,
     progress_log: Option<&ProgressLogSender>,
+    progress: Option<&processing::ProcessingProgressReporter>,
 ) -> Result<(String, Option<String>), AppError> {
     let mut conn = state.db_rw.get().await?;
     let storage_target = if state.storage.is_s3() {
@@ -60,6 +61,9 @@ pub async fn store_stems(
             .storage
             .upload_bytes(&storage_key, stem.bytes.clone(), "audio/ogg")
             .await?;
+        if let Some(progress) = progress {
+            progress.advance_upload_step(size_bytes as u64).await?;
+        }
         emit_storage_progress(
             progress_log,
             processing::LOG_STEP_UPLOAD,
@@ -94,13 +98,17 @@ pub async fn store_stems(
     Ok((status, error))
 }
 
-#[tracing::instrument(skip(state, outcome), fields(music_id = %music_id, kind = kind))]
-pub async fn store_conversion(
+#[tracing::instrument(
+    skip(state, outcome, progress_log, progress),
+    fields(music_id = %music_id, kind = kind)
+)]
+pub(crate) async fn store_conversion(
     state: &AppState,
     music_id: &str,
     kind: &str,
     outcome: ConversionOutcome,
     progress_log: Option<&ProgressLogSender>,
+    progress: Option<&processing::ProcessingProgressReporter>,
 ) -> Result<(Option<String>, String, Option<String>), AppError> {
     match outcome {
         ConversionOutcome::Ready {
@@ -119,6 +127,7 @@ pub async fn store_conversion(
             } else {
                 (bytes, None)
             };
+            let stored_bytes_len = stored_bytes.len() as u64;
             emit_storage_progress(
                 progress_log,
                 processing::LOG_STEP_UPLOAD,
@@ -137,6 +146,9 @@ pub async fn store_conversion(
                     content_encoding,
                 )
                 .await?;
+            if let Some(progress) = progress {
+                progress.advance_upload_step(stored_bytes_len).await?;
+            }
             emit_storage_progress(
                 progress_log,
                 processing::LOG_STEP_UPLOAD,

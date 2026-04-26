@@ -3,7 +3,7 @@ use anyhow::Result;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{
     Client,
-    config::{BehaviorVersion, Region},
+    config::{BehaviorVersion, Region, StalledStreamProtectionConfig},
     primitives::ByteStream,
     types::ObjectCannedAcl,
 };
@@ -210,6 +210,7 @@ fn build_s3_client(config: &S3Config) -> Client {
     let mut s3_config = aws_sdk_s3::config::Builder::new()
         .behavior_version(BehaviorVersion::latest())
         .region(Region::new(config.region.clone()))
+        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .credentials_provider(Credentials::new(
             &config.access_key_id,
             &config.secret_access_key,

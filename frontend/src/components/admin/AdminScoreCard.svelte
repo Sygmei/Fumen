@@ -69,6 +69,15 @@
                   : "",
     );
     const actionsDisabled = $derived(creating || saving || restarting || deleting);
+    const failed = $derived(
+        music.processing_job_status === "failed" ||
+            [
+                music.audio_status,
+                music.midi_status,
+                music.musicxml_status,
+                music.stems_status,
+            ].includes("failed"),
+    );
 
     let downloadMenuRoot = $state<HTMLElement | null>(null);
     let downloadMenuButton = $state<HTMLButtonElement | null>(null);
@@ -187,7 +196,7 @@
                     </a>
                 {/if}
             </h3>
-            {#if creating || saving || restarting || deleting || processing}
+            {#if creating || saving || restarting || deleting || processing || failed}
                 <div class="admin-score-badges">
                     {#if creating}
                         <span class="status-pill admin-user-creating-pill">CREATING</span>
@@ -198,7 +207,9 @@
                     {:else if deleting}
                         <span class="status-pill admin-user-deleting-pill">DELETING</span>
                     {/if}
-                    {#if processing}
+                    {#if failed}
+                        <span class="status-pill admin-score-failed-pill">Failed</span>
+                    {:else if processing}
                         <span class="status-pill admin-score-processing-pill">Processing</span>
                     {/if}
                 </div>
@@ -330,7 +341,7 @@
         {/if}
         {#if canDelete}
             <button
-                class="button ghost danger admin-user-action"
+                class="button secondary danger admin-user-action"
                 type="button"
                 aria-label={`Delete ${music.title}`}
                 title="Delete score"
@@ -344,7 +355,7 @@
 {/snippet}
 
 <AdminCard
-    cardClass={`admin-score-card${downloadOpen ? " download-open" : ""}${processing ? " processing" : ""}${cardState ? ` is-${cardState}` : ""}`}
+    cardClass={`admin-score-card${downloadOpen ? " download-open" : ""}${processing ? " processing" : ""}${failed ? " is-failed" : ""}${cardState ? ` is-${cardState}` : ""}`}
     {body}
     {footer}
     footerClass="admin-score-footer"

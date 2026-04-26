@@ -158,8 +158,12 @@
     transform: translateX(-140%) skewX(-18deg);
   }
 
+  28% {
+    transform: translateX(430%) skewX(-18deg);
+  }
+
   100% {
-    transform: translateX(320%) skewX(-18deg);
+    transform: translateX(430%) skewX(-18deg);
   }
 }
 
@@ -1319,6 +1323,19 @@ h3 {
   filter: saturate(0.55) grayscale(0.2);
 }
 
+.admin-score-card.processing:not(.is-failed):not(.is-creating):not(.is-saving):not(.is-restarting):not(.is-deleting) {
+  --admin-user-state-color: var(--accent);
+  border-color: color-mix(in srgb, var(--border-strong) 64%, var(--accent));
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%);
+}
+
+.admin-score-card.is-failed {
+  --admin-user-state-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 62%, #2a0b0b);
+  background: color-mix(in srgb, #190707 78%, var(--danger) 22%);
+  color: color-mix(in srgb, var(--text) 94%, #fff 6%);
+}
+
 .admin-user-card.is-creating::after,
 .admin-user-card.is-saving::after,
 .admin-user-card.is-restarting::after,
@@ -1330,7 +1347,8 @@ h3 {
 .admin-score-card.is-creating::after,
 .admin-score-card.is-saving::after,
 .admin-score-card.is-restarting::after,
-.admin-score-card.is-deleting::after {
+.admin-score-card.is-deleting::after,
+.admin-score-card.processing:not(.is-failed):not(.is-creating):not(.is-saving):not(.is-restarting):not(.is-deleting)::after {
   content: '';
   position: absolute;
   inset: -22% auto -22% -35%;
@@ -1345,7 +1363,7 @@ h3 {
   );
   pointer-events: none;
   z-index: 0;
-  animation: admin-card-sheen 1.4s linear infinite;
+  animation: admin-card-sheen 3.8s linear infinite;
 }
 
 .admin-user-card.is-creating .admin-card-accent,
@@ -1357,7 +1375,9 @@ h3 {
 .admin-score-card.is-creating .admin-card-accent,
 .admin-score-card.is-saving .admin-card-accent,
 .admin-score-card.is-restarting .admin-card-accent,
-.admin-score-card.is-deleting .admin-card-accent {
+.admin-score-card.is-deleting .admin-card-accent,
+.admin-score-card.processing:not(.is-failed):not(.is-creating):not(.is-saving):not(.is-restarting):not(.is-deleting) .admin-card-accent,
+.admin-score-card.is-failed .admin-card-accent {
   opacity: 0.34;
 }
 
@@ -1465,12 +1485,12 @@ h3 {
 .admin-score-card {
   display: grid;
   grid-template-rows: auto auto;
-  gap: 10px;
+  gap: 8px;
   align-content: start;
-  height: 132px;
-  min-height: 132px;
-  max-height: 132px;
-  padding: 12px 14px !important;
+  height: 120px;
+  min-height: 120px;
+  max-height: 120px;
+  padding: 10px 14px !important;
   overflow: hidden;
   position: relative;
 }
@@ -1491,7 +1511,7 @@ h3 {
 .admin-score-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 34px;
-  align-items: start;
+  align-items: center;
   gap: 10px;
   min-width: 0;
 }
@@ -1499,7 +1519,7 @@ h3 {
 .admin-score-main {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: center;
   gap: 10px;
   min-width: 0;
   overflow: hidden;
@@ -1526,7 +1546,7 @@ h3 {
   width: 34px;
   min-width: 34px;
   justify-self: end;
-  align-self: start;
+  align-self: center;
 }
 
 .admin-score-download-btn {
@@ -1584,9 +1604,35 @@ h3 {
 
 .admin-score-badges {
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
   justify-self: end;
-  align-self: start;
+  align-self: center;
   justify-content: flex-end;
+}
+
+.admin-score-processing-pill,
+.admin-score-failed-pill {
+  min-height: 22px;
+  padding-inline: 8px;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.admin-score-processing-pill {
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+.admin-score-failed-pill {
+  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
 }
 
 .admin-score-retry {

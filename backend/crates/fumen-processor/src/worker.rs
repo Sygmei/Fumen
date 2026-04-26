@@ -85,10 +85,27 @@ async fn run_claimed_job(
     let mut log = processing::MusicProcessingLog::new(state.clone(), job.music_id.clone());
     log.set_step(processing::LOG_STEP_QUEUE).await;
     log.append(format!(
-        "Processor worker {worker_id} claimed attempt {}.",
-        job.attempt
+        "Processor worker {worker_id} claimed score {} (attempt {}).",
+        job.music_id, job.attempt
     ))
     .await;
+    let progress = processing::ProcessingProgressReporter::new(
+        state.db_rw.clone(),
+        job.music_id.clone(),
+        Some(worker_id.to_owned()),
+        job.progress_json.as_deref(),
+    );
+    progress
+        .update_step(
+            processing::LOG_STEP_QUEUE,
+            Some("done"),
+            None,
+            Some(format!(
+                "Queue claimed by {worker_id}.\nScore ID: {}\nAttempt: {}",
+                job.music_id, job.attempt
+            )),
+        )
+        .await?;
     debug_marker("after-claim-log-append");
 
     let (step_sender, step_receiver) = tokio::sync::watch::channel(job.current_step.clone());
@@ -124,8 +141,14 @@ async fn run_claimed_job(
     debug_marker("after-heartbeat-spawn");
 
     debug_marker("before-execute-processing-job");
-    let result =
-        processing::execute_processing_job(state, &job, &mut log, Some(&step_sender)).await;
+    let result = processing::execute_processing_job(
+        state,
+        &job,
+        &mut log,
+        Some(&step_sender),
+        progress.clone(),
+    )
+    .await;
     debug_marker("after-execute-processing-job");
 
     heartbeat_handle.abort();

@@ -5,6 +5,7 @@ use crate::schema::{
 use diesel::QueryableByName;
 use diesel::sql_types::{BigInt, Bool, Double, Nullable, Text};
 use diesel::{AsChangeset, Associations, Identifiable, Insertable, Queryable, Selectable};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Queryable, QueryableByName, Selectable, Identifiable)]
 #[diesel(table_name = musics)]
@@ -95,7 +96,22 @@ pub struct ProcessingJobRecord {
     #[diesel(sql_type = Nullable<Text>)]
     pub finished_at: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
+    pub progress_json: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
     pub error_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProcessingJobProgress {
+    pub steps: std::collections::HashMap<String, ProcessingJobProgressStep>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProcessingJobProgressStep {
+    pub status: Option<String>,
+    pub detail: Option<String>,
+    pub last_updated_at: Option<String>,
+    pub tooltip: Option<String>,
 }
 
 #[derive(Clone, Debug, Queryable, QueryableByName, Selectable, Identifiable, Associations)]
@@ -356,6 +372,7 @@ pub struct NewProcessingJob<'a> {
     pub queued_at: &'a str,
     pub started_at: Option<&'a str>,
     pub finished_at: Option<&'a str>,
+    pub progress_json: Option<&'a str>,
     pub error_message: Option<&'a str>,
 }
 
@@ -454,5 +471,6 @@ pub struct UpdateProcessingJobState<'a> {
     pub heartbeat_at: Option<&'a str>,
     pub started_at: Option<&'a str>,
     pub finished_at: Option<&'a str>,
+    pub progress_json: Option<&'a str>,
     pub error_message: Option<&'a str>,
 }

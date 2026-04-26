@@ -1,4 +1,5 @@
 use crate::config::AppConfig;
+use crate::processing;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use fumen_core::drums::DrumMapEntry;
@@ -325,15 +326,16 @@ pub async fn generate_audio(
 /// Returns `(stems, status, error_message)`.
 /// `status` is one of `"unavailable"`, `"ready"`, or `"failed"`.
 #[tracing::instrument(
-    skip(config, output_dir),
+    skip(config, output_dir, progress),
     fields(input_path = %input_path.display(), quality_profile = %quality_profile.as_str())
 )]
-pub async fn generate_stems(
+pub(crate) async fn generate_stems(
     config: &AppConfig,
     input_path: &Path,
     output_dir: &Path,
     quality_profile: StemQualityProfile,
     progress_log: Option<&ProgressLogSender>,
+    progress: Option<&processing::ProcessingProgressReporter>,
 ) -> Result<(Vec<StemResult>, String, Option<String>)> {
     let profile_bitrate = quality_profile.opus_bitrate().unwrap_or("source");
     tracing::info!(
@@ -360,12 +362,13 @@ pub async fn generate_stems(
         output_dir,
         quality_profile,
         progress_log,
+        progress,
     )
     .await
 }
 
 #[tracing::instrument(
-    skip(config, output_dir),
+    skip(config, output_dir, progress),
     fields(input_path = %input_path.display(), quality_profile = %quality_profile.as_str())
 )]
 async fn generate_stems_with_musescore(
@@ -374,6 +377,7 @@ async fn generate_stems_with_musescore(
     output_dir: &Path,
     quality_profile: StemQualityProfile,
     progress_log: Option<&ProgressLogSender>,
+    progress: Option<&processing::ProcessingProgressReporter>,
 ) -> Result<(Vec<StemResult>, String, Option<String>)> {
     if find_musescore_command(config).await.is_none() {
         return Ok((
@@ -466,6 +470,12 @@ async fn generate_stems_with_musescore(
             "stems: found {total} instrument tracks, starting direct MuseScore render with max {max_parallel_stem_renders} concurrent render(s)"
         ),
     );
+    if let Some(progress) = progress {
+        progress.begin_stems_step(total as u64).await?;
+        if quality_profile.opus_bitrate().is_some() {
+            progress.begin_compression_step(total as u64).await?;
+        }
+    }
 
     let render_dir = output_dir.join("musescore-direct-stems");
     tokio::fs::create_dir_all(&render_dir)
@@ -506,6 +516,7 @@ async fn generate_stems_with_musescore(
         let quality_profile = quality_profile;
         let config = config.clone();
         let progress_log = progress_log.cloned();
+        let progress = progress.cloned();
         let render_semaphore = render_semaphore.clone();
 
         jobs.spawn(async move {
@@ -560,6 +571,7 @@ async fn generate_stems_with_musescore(
                             total,
                             &track_label,
                             progress_log.as_ref(),
+                            progress.as_ref(),
                         )
                         .await?
                     } else {
@@ -607,7 +619,12 @@ async fn generate_stems_with_musescore(
 
     while let Some(job) = jobs.join_next().await {
         match job {
-            Ok(Ok(StemJobOutcome::Ready(stem))) => stems.push(stem),
+            Ok(Ok(StemJobOutcome::Ready(stem))) => {
+                stems.push(stem);
+                if let Some(progress) = progress {
+                    progress.advance_stems_step().await?;
+                }
+            }
             Ok(Ok(StemJobOutcome::Unavailable(reason))) => {
                 if unavailable_reason.is_none() {
                     unavailable_reason = Some(reason);
@@ -638,6 +655,14 @@ async fn generate_stems_with_musescore(
             })),
         ))
     } else {
+        if let Some(progress) = progress {
+            progress.complete_stems_step(stems.len() as u64).await?;
+            if quality_profile.opus_bitrate().is_some() {
+                progress
+                    .complete_compression_step(stems.len() as u64)
+                    .await?;
+            }
+        }
         Ok((stems, "ready".to_owned(), None))
     }
 }
@@ -1236,6 +1261,7 @@ fn sanitize_musescore_output(output: &str) -> String {
 }
 
 #[tracing::instrument(
+    skip(progress_log, progress),
     fields(
         ffmpeg_binary = ffmpeg_binary,
         input_path = %input_path.display(),
@@ -1252,6 +1278,7 @@ async fn recompress_ogg_stem(
     total: usize,
     track_label: &str,
     progress_log: Option<&ProgressLogSender>,
+    progress: Option<&processing::ProcessingProgressReporter>,
 ) -> Result<Bytes> {
     let Some(bitrate) = quality_profile.opus_bitrate() else {
         return tokio::fs::read(input_path)
@@ -1339,6 +1366,9 @@ async fn recompress_ogg_stem(
             bytes.len() / 1024
         ),
     );
+    if let Some(progress) = progress {
+        progress.advance_compression_step().await?;
+    }
 
     Ok(bytes)
 }

@@ -61,6 +61,7 @@ diesel::table! {
         queued_at -> Text,
         started_at -> Nullable<Text>,
         finished_at -> Nullable<Text>,
+        progress_json -> Nullable<Text>,
         error_message -> Nullable<Text>,
     }
 }

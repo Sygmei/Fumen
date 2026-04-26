@@ -1,6 +1,9 @@
 use crate::audio::{self, ProgressLogEvent, StemQualityProfile};
 use crate::db::DbPool;
-use crate::models::{MusicRecord, ProcessingJobRecord, UpdateMusicProcessing};
+use crate::models::{
+    MusicRecord, ProcessingJobProgress, ProcessingJobProgressStep, ProcessingJobRecord,
+    UpdateMusicProcessing,
+};
 use crate::schema::{musics, processing_jobs, stems};
 use crate::services::music;
 use crate::{AppError, AppState, format_timestamp, sanitize_filename};
@@ -48,6 +51,25 @@ pub struct QueueProcessingJobRequest<'a> {
     pub source_object_key: &'a str,
     pub source_filename: &'a str,
     pub quality_profile: &'a str,
+}
+
+#[derive(Default)]
+struct ProcessingProgressRuntime {
+    snapshot: ProcessingJobProgress,
+    stems_total: Option<u64>,
+    stems_rendered: u64,
+    compression_total: Option<u64>,
+    compression_done: u64,
+    upload_total_bytes: Option<u64>,
+    upload_uploaded_bytes: u64,
+}
+
+#[derive(Clone)]
+pub(crate) struct ProcessingProgressReporter {
+    db: DbPool,
+    music_id: String,
+    worker_id: Option<String>,
+    runtime: Arc<Mutex<ProcessingProgressRuntime>>,
 }
 
 #[derive(Clone)]
@@ -195,16 +217,394 @@ impl MusicProcessingLog {
     }
 }
 
+impl ProcessingProgressReporter {
+    pub(crate) fn new(
+        db: DbPool,
+        music_id: impl Into<String>,
+        worker_id: Option<String>,
+        initial_json: Option<&str>,
+    ) -> Self {
+        let snapshot = initial_json
+            .and_then(|value| serde_json::from_str::<ProcessingJobProgress>(value).ok())
+            .unwrap_or_default();
+        Self {
+            db,
+            music_id: music_id.into(),
+            worker_id,
+            runtime: Arc::new(Mutex::new(ProcessingProgressRuntime {
+                snapshot,
+                ..ProcessingProgressRuntime::default()
+            })),
+        }
+    }
+
+    pub(crate) async fn update_step(
+        &self,
+        key: &str,
+        status: Option<&str>,
+        detail: Option<String>,
+        tooltip: Option<String>,
+    ) -> Result<(), AppError> {
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            let step = runtime.snapshot.steps.entry(key.to_owned()).or_default();
+            if let Some(status) = status {
+                step.status = Some(status.to_owned());
+            }
+            if let Some(detail) = detail {
+                step.detail = Some(detail);
+            }
+            if let Some(tooltip) = tooltip {
+                step.tooltip = Some(tooltip);
+            }
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn begin_upload_step(
+        &self,
+        asset_count: usize,
+        total_bytes: u64,
+    ) -> Result<(), AppError> {
+        let detail = format!(
+            "{} / {}",
+            format_bytes_compact(0),
+            format_bytes_compact(total_bytes)
+        );
+        let tooltip = if asset_count == 0 {
+            "No derived assets to upload.".to_owned()
+        } else {
+            format!(
+                "Uploading {asset_count} asset(s): {} / {}",
+                format_bytes_compact(0),
+                format_bytes_compact(total_bytes)
+            )
+        };
+        let status = if asset_count == 0 { "done" } else { "active" };
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            runtime.upload_total_bytes = Some(total_bytes);
+            runtime.upload_uploaded_bytes = 0;
+            let step = runtime
+                .snapshot
+                .steps
+                .entry(LOG_STEP_UPLOAD.to_owned())
+                .or_default();
+            step.status = Some(status.to_owned());
+            step.detail = Some(detail);
+            step.tooltip = Some(tooltip);
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn begin_stems_step(&self, total: u64) -> Result<(), AppError> {
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            runtime.stems_total = Some(total);
+            runtime.stems_rendered = 0;
+            let step = runtime
+                .snapshot
+                .steps
+                .entry(LOG_STEP_STEMS.to_owned())
+                .or_default();
+            step.status = Some("active".to_owned());
+            step.detail = Some(format!("0 / {total}"));
+            step.tooltip = Some(format!("0 of {total} stems rendered"));
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn advance_stems_step(&self) -> Result<(), AppError> {
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            runtime.stems_rendered = runtime.stems_rendered.saturating_add(1);
+            let total = runtime.stems_total.unwrap_or(runtime.stems_rendered);
+            let rendered = runtime.stems_rendered.min(total);
+            let step = runtime
+                .snapshot
+                .steps
+                .entry(LOG_STEP_STEMS.to_owned())
+                .or_default();
+            step.status = Some(if rendered >= total { "done" } else { "active" }.to_owned());
+            step.detail = Some(format!("{rendered} / {total}"));
+            step.tooltip = Some(format!("{rendered} of {total} stems rendered"));
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn complete_stems_step(&self, rendered: u64) -> Result<(), AppError> {
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            runtime.stems_total = Some(rendered);
+            runtime.stems_rendered = rendered;
+            let step = runtime
+                .snapshot
+                .steps
+                .entry(LOG_STEP_STEMS.to_owned())
+                .or_default();
+            step.status = Some("done".to_owned());
+            step.detail = Some(format!("{rendered} / {rendered}"));
+            step.tooltip = Some(format!("{rendered} of {rendered} stems rendered"));
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn begin_compression_step(&self, total: u64) -> Result<(), AppError> {
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            runtime.compression_total = Some(total);
+            runtime.compression_done = 0;
+            let step = runtime
+                .snapshot
+                .steps
+                .entry(LOG_STEP_COMPRESS_STEMS.to_owned())
+                .or_default();
+            step.status = Some("active".to_owned());
+            step.detail = Some(format!("0 / {total}"));
+            step.tooltip = Some(format!("0 of {total} stems compressed"));
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn advance_compression_step(&self) -> Result<(), AppError> {
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            runtime.compression_done = runtime.compression_done.saturating_add(1);
+            let total = runtime
+                .compression_total
+                .unwrap_or(runtime.compression_done);
+            let done = runtime.compression_done.min(total);
+            let step = runtime
+                .snapshot
+                .steps
+                .entry(LOG_STEP_COMPRESS_STEMS.to_owned())
+                .or_default();
+            step.status = Some(if done >= total { "done" } else { "active" }.to_owned());
+            step.detail = Some(format!("{done} / {total}"));
+            step.tooltip = Some(format!("{done} of {total} stems compressed"));
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn complete_compression_step(&self, total: u64) -> Result<(), AppError> {
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            runtime.compression_total = Some(total);
+            runtime.compression_done = total;
+            let step = runtime
+                .snapshot
+                .steps
+                .entry(LOG_STEP_COMPRESS_STEMS.to_owned())
+                .or_default();
+            step.status = Some("done".to_owned());
+            step.detail = Some(format!("{total} / {total}"));
+            step.tooltip = Some(format!("{total} of {total} stems compressed"));
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn advance_upload_step(&self, uploaded_bytes: u64) -> Result<(), AppError> {
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            runtime.upload_uploaded_bytes =
+                runtime.upload_uploaded_bytes.saturating_add(uploaded_bytes);
+            let total = runtime
+                .upload_total_bytes
+                .unwrap_or(runtime.upload_uploaded_bytes);
+            let uploaded = runtime.upload_uploaded_bytes.min(total);
+            let step = runtime
+                .snapshot
+                .steps
+                .entry(LOG_STEP_UPLOAD.to_owned())
+                .or_default();
+            step.status = Some(if uploaded >= total { "done" } else { "active" }.to_owned());
+            step.detail = Some(format!(
+                "{} / {}",
+                format_bytes_compact(uploaded),
+                format_bytes_compact(total)
+            ));
+            step.tooltip = Some(format!(
+                "Uploaded {} / {}",
+                format_bytes_compact(uploaded),
+                format_bytes_compact(total)
+            ));
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn complete_upload_step(&self) -> Result<(), AppError> {
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            let total = runtime
+                .upload_total_bytes
+                .unwrap_or(runtime.upload_uploaded_bytes);
+            runtime.upload_uploaded_bytes = total;
+            let step = runtime
+                .snapshot
+                .steps
+                .entry(LOG_STEP_UPLOAD.to_owned())
+                .or_default();
+            step.status = Some("done".to_owned());
+            step.detail = Some(format!(
+                "{} / {}",
+                format_bytes_compact(total),
+                format_bytes_compact(total)
+            ));
+            step.tooltip = Some(format!(
+                "Uploaded {} / {}",
+                format_bytes_compact(total),
+                format_bytes_compact(total)
+            ));
+            step.last_updated_at = Some(crate::utc_now_string());
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+        self.persist_json(&json).await
+    }
+
+    pub(crate) async fn ingest_event(
+        &self,
+        event: &ProgressLogEvent,
+        inferred_step: Option<&str>,
+    ) -> Result<(), AppError> {
+        let step = event.step.or(inferred_step);
+        let Some(step) = step else {
+            return Ok(());
+        };
+
+        let message = event.message.trim();
+        let message_lower = message.to_ascii_lowercase();
+        let now = crate::utc_now_string();
+
+        let json = {
+            let mut runtime = self.runtime.lock().await;
+            let mut next_status: Option<String> = None;
+            let next_detail: Option<String> = None;
+            let mut next_tooltip: Option<String> = None;
+
+            match step {
+                LOG_STEP_MUSICXML | LOG_STEP_MIDI | LOG_STEP_PREVIEW_MP3 => {
+                    if message_lower.contains("musescore: converting") {
+                        next_status = Some("active".to_owned());
+                    } else if message_lower.contains("musescore: done") {
+                        next_status = Some("done".to_owned());
+                    }
+                }
+                LOG_STEP_STEMS => {}
+                LOG_STEP_COMPRESS_STEMS => {}
+                LOG_STEP_UPLOAD => {}
+                LOG_STEP_DONE => {
+                    if message_lower.contains("processing completed") {
+                        next_status = Some("done".to_owned());
+                        next_tooltip = Some("Processing completed successfully.".to_owned());
+                    }
+                }
+                _ => {}
+            }
+
+            let step_state = runtime.snapshot.steps.entry(step.to_owned()).or_default();
+            step_state.last_updated_at = Some(now);
+            if let Some(status) = next_status {
+                step_state.status = Some(status);
+            }
+            if let Some(detail) = next_detail {
+                step_state.detail = Some(detail);
+            }
+            if let Some(tooltip) = next_tooltip {
+                step_state.tooltip = Some(tooltip);
+            }
+
+            serde_json::to_string(&runtime.snapshot)
+                .map_err(|error| AppError::new(error.to_string()))?
+        };
+
+        self.persist_json(&json).await
+    }
+
+    async fn persist_json(&self, json: &str) -> Result<(), AppError> {
+        let mut conn = self.db.get().await?;
+        if let Some(worker_id) = self.worker_id.as_deref() {
+            diesel::update(
+                processing_jobs::table
+                    .filter(processing_jobs::music_id.eq(&self.music_id))
+                    .filter(processing_jobs::worker_id.eq(Some(worker_id))),
+            )
+            .set(processing_jobs::progress_json.eq(Some(json.to_owned())))
+            .execute(&mut conn)
+            .await?;
+        } else {
+            diesel::update(
+                processing_jobs::table.filter(processing_jobs::music_id.eq(&self.music_id)),
+            )
+            .set(processing_jobs::progress_json.eq(Some(json.to_owned())))
+            .execute(&mut conn)
+            .await?;
+        }
+        Ok(())
+    }
+}
+
 pub(crate) fn spawn_processing_log_bridge(
     log: MusicProcessingLog,
+    progress: ProcessingProgressReporter,
 ) -> (audio::ProgressLogSender, tokio::task::JoinHandle<()>) {
     let (sender, mut receiver) = mpsc::unbounded_channel::<ProgressLogEvent>();
+    let (log_sender, mut log_receiver) = mpsc::unbounded_channel::<(String, Option<String>)>();
     let handle = tokio::spawn(async move {
-        let mut log = log;
+        let log_handle = tokio::spawn(async move {
+            let mut log = log;
+            while let Some((message, step)) = log_receiver.recv().await {
+                log.append_progress_with_step(message, step.as_deref())
+                    .await;
+            }
+        });
+
         while let Some(event) = receiver.recv().await {
-            log.append_progress_with_step(event.message, event.step)
-                .await;
+            let inferred_step = event
+                .step
+                .map(ToOwned::to_owned)
+                .or_else(|| infer_log_step(&event.message, None));
+            if let Err(error) = progress
+                .ingest_event(&event, inferred_step.as_deref())
+                .await
+            {
+                tracing::warn!(
+                    music_id = %progress.music_id,
+                    error = ?error,
+                    "failed to persist structured processing progress update"
+                );
+            }
+            let _ = log_sender.send((event.message, inferred_step));
         }
+        drop(log_sender);
+        let _ = log_handle.await;
     });
     (sender, handle)
 }
@@ -288,6 +688,25 @@ pub fn build_processing_log_header(
     ]
 }
 
+fn build_initial_processing_progress_json(
+    music_id: &str,
+    queued_at: &str,
+) -> Result<String, AppError> {
+    let mut progress = ProcessingJobProgress::default();
+    progress.steps.insert(
+        LOG_STEP_QUEUE.to_owned(),
+        ProcessingJobProgressStep {
+            status: Some("active".to_owned()),
+            detail: None,
+            last_updated_at: Some(queued_at.to_owned()),
+            tooltip: Some(format!(
+                "Queued for processing.\nScore ID: {music_id}\nLast update: {queued_at}"
+            )),
+        },
+    );
+    serde_json::to_string(&progress).map_err(|error| AppError::new(error.to_string()))
+}
+
 pub async fn reset_music_processing_state(
     state: &AppState,
     record: &MusicRecord,
@@ -356,6 +775,7 @@ pub async fn enqueue_music_processing_job(
     request: QueueProcessingJobRequest<'_>,
 ) -> Result<(), AppError> {
     let queued_at = crate::utc_now_string();
+    let progress_json = build_initial_processing_progress_json(request.music_id, &queued_at)?;
     let mut conn = db.get().await?;
     sql_query(
         "INSERT INTO processing_jobs (
@@ -373,9 +793,10 @@ pub async fn enqueue_music_processing_job(
             queued_at,
             started_at,
             finished_at,
+            progress_json,
             error_message
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, 1, $7, NULL, NULL, NULL, $8, NULL, NULL, NULL
+            $1, $2, $3, $4, $5, $6, 1, $7, NULL, NULL, NULL, $8, NULL, NULL, $9, NULL
         )
         ON CONFLICT (music_id) DO UPDATE
         SET source_object_key = EXCLUDED.source_object_key,
@@ -391,6 +812,7 @@ pub async fn enqueue_music_processing_job(
             queued_at = EXCLUDED.queued_at,
             started_at = NULL,
             finished_at = NULL,
+            progress_json = EXCLUDED.progress_json,
             error_message = NULL",
     )
     .bind::<Text, _>(request.music_id)
@@ -401,6 +823,7 @@ pub async fn enqueue_music_processing_job(
     .bind::<Text, _>(JOB_STEP_QUEUED)
     .bind::<BigInt, _>(DEFAULT_MAX_ATTEMPTS)
     .bind::<Text, _>(&queued_at)
+    .bind::<Text, _>(&progress_json)
     .execute(&mut conn)
     .await?;
 
@@ -453,6 +876,7 @@ pub(crate) async fn claim_next_processing_job(
             jobs.queued_at,
             jobs.started_at,
             jobs.finished_at,
+            jobs.progress_json,
             jobs.error_message",
     )
     .bind::<Text, _>(JOB_STATUS_QUEUED)
@@ -593,6 +1017,7 @@ async fn run_core_conversions(
     input_path: &Path,
     output_dir: &Path,
     progress_sender: &audio::ProgressLogSender,
+    progress: ProcessingProgressReporter,
 ) -> Result<CoreConversionOutputs, AppError> {
     let max_parallel = state.config.processor_max_parallel_core_conversions.max(1);
     let semaphore = Arc::new(Semaphore::new(max_parallel));
@@ -610,6 +1035,7 @@ async fn run_core_conversions(
         let output_dir = output_dir.clone();
         let progress_sender = progress_sender.clone();
         let semaphore = semaphore.clone();
+        let progress = progress.clone();
 
         jobs.spawn(async move {
             let _permit = semaphore
@@ -617,26 +1043,100 @@ async fn run_core_conversions(
                 .await
                 .map_err(|_| AppError::new("core conversion semaphore closed"))?;
 
-            let outcome = match kind {
+            let (step_key, outcome) = match kind {
                 CoreConversionKind::Audio => {
-                    audio::generate_audio(&config, &input_path, &output_dir, Some(&progress_sender))
+                    progress
+                        .update_step(
+                            LOG_STEP_PREVIEW_MP3,
+                            Some("active"),
+                            None,
+                            Some("Audio rendering started.".to_owned()),
+                        )
+                        .await?;
+                    (
+                        LOG_STEP_PREVIEW_MP3,
+                        audio::generate_audio(
+                            &config,
+                            &input_path,
+                            &output_dir,
+                            Some(&progress_sender),
+                        )
                         .await
-                        .map_err(AppError::from)?
+                        .map_err(AppError::from)?,
+                    )
                 }
                 CoreConversionKind::Midi => {
-                    audio::generate_midi(&config, &input_path, &output_dir, Some(&progress_sender))
+                    progress
+                        .update_step(
+                            LOG_STEP_MIDI,
+                            Some("active"),
+                            None,
+                            Some("MIDI export started.".to_owned()),
+                        )
+                        .await?;
+                    (
+                        LOG_STEP_MIDI,
+                        audio::generate_midi(
+                            &config,
+                            &input_path,
+                            &output_dir,
+                            Some(&progress_sender),
+                        )
                         .await
-                        .map_err(AppError::from)?
+                        .map_err(AppError::from)?,
+                    )
                 }
-                CoreConversionKind::MusicXml => audio::generate_musicxml(
-                    &config,
-                    &input_path,
-                    &output_dir,
-                    Some(&progress_sender),
-                )
-                .await
-                .map_err(AppError::from)?,
+                CoreConversionKind::MusicXml => {
+                    progress
+                        .update_step(
+                            LOG_STEP_MUSICXML,
+                            Some("active"),
+                            None,
+                            Some("MusicXML export started.".to_owned()),
+                        )
+                        .await?;
+                    (
+                        LOG_STEP_MUSICXML,
+                        audio::generate_musicxml(
+                            &config,
+                            &input_path,
+                            &output_dir,
+                            Some(&progress_sender),
+                        )
+                        .await
+                        .map_err(AppError::from)?,
+                    )
+                }
             };
+
+            match &outcome {
+                audio::ConversionOutcome::Ready { .. } => {
+                    let tooltip = match step_key {
+                        LOG_STEP_PREVIEW_MP3 => "Audio rendering completed.",
+                        LOG_STEP_MIDI => "MIDI export completed.",
+                        LOG_STEP_MUSICXML => "MusicXML export completed.",
+                        _ => "Processing step completed.",
+                    };
+                    progress
+                        .update_step(step_key, Some("done"), None, Some(tooltip.to_owned()))
+                        .await?;
+                }
+                audio::ConversionOutcome::Unavailable { reason } => {
+                    progress
+                        .update_step(step_key, Some("done"), None, Some(reason.clone()))
+                        .await?;
+                }
+                audio::ConversionOutcome::Failed { reason } => {
+                    progress
+                        .update_step(
+                            step_key,
+                            Some("failed"),
+                            Some(reason.clone()),
+                            Some(reason.clone()),
+                        )
+                        .await?;
+                }
+            }
 
             Ok::<_, AppError>((kind, outcome))
         });
@@ -673,6 +1173,7 @@ pub(crate) async fn execute_processing_job(
     job: &ProcessingJobRecord,
     log: &mut MusicProcessingLog,
     step_sender: Option<&watch::Sender<String>>,
+    progress: ProcessingProgressReporter,
 ) -> Result<(), AppError> {
     debug_marker("execute-processing-job-enter");
     tracing::info!(
@@ -697,7 +1198,8 @@ pub(crate) async fn execute_processing_job(
     let (bytes, _, _) = state.storage.get_bytes(&job.source_object_key).await?;
     debug_marker("execute-processing-job-after-get-bytes");
 
-    let (progress_sender, progress_handle) = spawn_processing_log_bridge(log.clone());
+    let (progress_sender, progress_handle) =
+        spawn_processing_log_bridge(log.clone(), progress.clone());
     let processing_result = async {
         let temp_dir = tempfile::tempdir()?;
         let safe_filename = sanitize_filename(&job.source_filename);
@@ -718,21 +1220,78 @@ pub(crate) async fn execute_processing_job(
             audio: audio_outcome,
             midi: midi_outcome,
             musicxml: musicxml_outcome,
-        } = run_core_conversions(state, &temp_input_path, temp_dir.path(), &progress_sender)
-            .await?;
+        } = run_core_conversions(
+            state,
+            &temp_input_path,
+            temp_dir.path(),
+            &progress_sender,
+            progress.clone(),
+        )
+        .await?;
         log.append("Audio, MIDI, and MusicXML conversion finished. Storing generated files.")
             .await;
 
         log.set_step(LOG_STEP_STEMS).await;
         publish_step(step_sender, JOB_STEP_GENERATING_STEMS);
+        progress
+            .update_step(
+                LOG_STEP_STEMS,
+                Some("active"),
+                None,
+                Some(format!(
+                    "Stem rendering started with {} profile.",
+                    quality_profile.as_str()
+                )),
+            )
+            .await?;
         let (stem_results, stems_status, stems_error) = audio::generate_stems(
             &state.config,
             &temp_input_path,
             temp_dir.path(),
             quality_profile,
             Some(&progress_sender),
+            Some(&progress),
         )
         .await?;
+        if stems_status == "failed" {
+            progress
+                .update_step(
+                    LOG_STEP_STEMS,
+                    Some("failed"),
+                    stems_error.clone(),
+                    stems_error.clone(),
+                )
+                .await?;
+            if quality_profile.opus_bitrate().is_some() {
+                progress
+                    .update_step(
+                        LOG_STEP_COMPRESS_STEMS,
+                        Some("failed"),
+                        stems_error.clone(),
+                        stems_error.clone(),
+                    )
+                    .await?;
+            }
+        } else if stems_status == "unavailable" {
+            progress
+                .update_step(
+                    LOG_STEP_STEMS,
+                    Some("done"),
+                    None,
+                    stems_error.clone(),
+                )
+                .await?;
+            if quality_profile.opus_bitrate().is_some() {
+                progress
+                    .update_step(
+                        LOG_STEP_COMPRESS_STEMS,
+                        Some("done"),
+                        None,
+                        stems_error.clone(),
+                    )
+                    .await?;
+            }
+        }
         log.append(format!(
             "Stem generation finished with {} rendered stem file(s).",
             stem_results.len()
@@ -772,16 +1331,20 @@ pub(crate) async fn execute_processing_job(
             ),
             step: Some(LOG_STEP_UPLOAD),
         });
+        progress
+            .begin_upload_step(upload_asset_count, upload_total_bytes as u64)
+            .await?;
 
         log.set_step(LOG_STEP_UPLOAD).await;
         publish_step(step_sender, JOB_STEP_UPLOADING_ASSETS);
-        tokio::try_join!(
+        let upload_result = tokio::try_join!(
             music::store_conversion(
                 state,
                 &job.music_id,
                 "audio",
                 audio_outcome,
                 Some(&progress_sender),
+                Some(&progress),
             ),
             music::store_conversion(
                 state,
@@ -789,6 +1352,7 @@ pub(crate) async fn execute_processing_job(
                 "midi",
                 midi_outcome,
                 Some(&progress_sender),
+                Some(&progress),
             ),
             music::store_conversion(
                 state,
@@ -796,6 +1360,7 @@ pub(crate) async fn execute_processing_job(
                 "musicxml",
                 musicxml_outcome,
                 Some(&progress_sender),
+                Some(&progress),
             ),
             music::store_stems(
                 state,
@@ -804,8 +1369,13 @@ pub(crate) async fn execute_processing_job(
                 stems_status,
                 stems_error,
                 Some(&progress_sender),
+                Some(&progress),
             ),
-        )
+        );
+        if upload_result.is_ok() {
+            progress.complete_upload_step().await?;
+        }
+        upload_result
     }
     .await;
 
@@ -819,6 +1389,14 @@ pub(crate) async fn execute_processing_job(
         (stems_status, stems_error),
     ) = processing_result?;
 
+    progress
+        .update_step(
+            LOG_STEP_DONE,
+            Some("active"),
+            None,
+            Some("Finalizing database updates.".to_owned()),
+        )
+        .await?;
     log.set_step(LOG_STEP_DONE).await;
     log.append(format!("Audio status: {audio_status}.")).await;
     if let Some(error) = audio_error.as_deref() {
@@ -857,6 +1435,14 @@ pub(crate) async fn execute_processing_job(
         .execute(&mut conn)
         .await?;
 
+    progress
+        .update_step(
+            LOG_STEP_DONE,
+            Some("done"),
+            None,
+            Some("Processing completed successfully.".to_owned()),
+        )
+        .await?;
     log.append("Processing completed. Database state updated.")
         .await;
     Ok(())
@@ -868,5 +1454,21 @@ fn debug_marker(message: &str) {
         .is_some_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
     {
         eprintln!("[processor-debug] {message}");
+    }
+}
+
+fn format_bytes_compact(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes_f >= GB {
+        format!("{:.1} GB", bytes_f / GB)
+    } else if bytes_f >= MB {
+        format!("{:.1} MB", bytes_f / MB)
+    } else if bytes_f >= KB {
+        format!("{:.1} KB", bytes_f / KB)
+    } else {
+        format!("{bytes} B")
     }
 }

@@ -2,8 +2,8 @@ use crate::config::AppConfig;
 use crate::db::DbPool;
 use crate::models::{
     BigIntValueRow, EnsembleRecord, MusicEnsembleLinkRecord, MusicRecord, NewScoreAnnotation,
-    NewUserMusicTrackPlaytime, ProcessingJobRecord, StemRecord, UserEnsembleMembershipRecord,
-    UserRecord,
+    NewUserMusicTrackPlaytime, ProcessingJobProgress, ProcessingJobRecord, StemRecord,
+    UserEnsembleMembershipRecord, UserRecord,
 };
 use crate::schema::{
     ensembles, music_ensemble_links, musics, processing_jobs, score_annotations, stems,
@@ -28,7 +28,7 @@ use diesel::sql_types::{BigInt, Double, Nullable, Text};
 use diesel::upsert::excluded;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 pub(crate) use fumen_core::music::{find_public_stems, processing_log_key};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tracing::warn;
 
 #[derive(QueryableByName)]
@@ -1148,7 +1148,7 @@ pub(crate) fn record_to_admin_response(
 pub(crate) fn build_admin_music_processing_progress_response(
     record: &MusicRecord,
     processing_job: Option<&ProcessingJobRecord>,
-    processing_log: &str,
+    _processing_log: &str,
 ) -> AdminMusicProcessingProgressResponse {
     let job_status = processing_job.map(|job| job.status.clone());
     let job_step = processing_job.map(|job| job.current_step.clone());
@@ -1166,39 +1166,48 @@ pub(crate) fn build_admin_music_processing_progress_response(
         .iter()
         .all(|status| *status == "ready")
         || job_status.as_deref() == Some("completed");
-    let parsed_log = parse_processing_log(processing_log);
+    let progress = processing_job
+        .and_then(|job| job.progress_json.as_deref())
+        .and_then(parse_processing_job_progress);
 
     let queue_status = if job_status.as_deref() == Some("queued") {
-        "active"
-    } else if processing_job.is_some() {
+        step_status_with_stall(
+            progress_step_status(progress.as_ref(), "queue").unwrap_or("active"),
+            false,
+        )
+    } else if processing_job.is_some() || job_started_at.is_some() {
         "done"
     } else {
         "pending"
     };
-    let queue_detail = if job_status.as_deref() == Some("queued") {
-        Some("Waiting for worker".to_owned())
-    } else {
-        None
-    };
+    let queue_detail = progress_step_detail(progress.as_ref(), "queue");
 
-    let musicxml_status = step_status_from_signal(
+    let musicxml_status = structured_step_status(
+        progress.as_ref(),
+        "musicxml",
         record.musicxml_status.as_str(),
-        job_step.as_deref() == Some("generating_core"),
+        false,
         stalled && job_step.as_deref() == Some("generating_core"),
     );
-    let midi_status = step_status_from_signal(
+    let midi_status = structured_step_status(
+        progress.as_ref(),
+        "midi",
         record.midi_status.as_str(),
-        job_step.as_deref() == Some("generating_core"),
+        false,
         stalled && job_step.as_deref() == Some("generating_core"),
     );
-    let preview_status = step_status_from_signal(
+    let preview_status = structured_step_status(
+        progress.as_ref(),
+        "preview_mp3",
         record.audio_status.as_str(),
-        job_step.as_deref() == Some("generating_core"),
+        false,
         stalled && job_step.as_deref() == Some("generating_core"),
     );
-    let stems_status = step_status_from_signal(
+    let stems_status = structured_step_status(
+        progress.as_ref(),
+        "stems",
         record.stems_status.as_str(),
-        job_step.as_deref() == Some("generating_stems"),
+        false,
         stalled && job_step.as_deref() == Some("generating_stems"),
     );
     let compression_enabled = stem_profile_uses_compression(&record.quality_profile);
@@ -1208,35 +1217,39 @@ pub(crate) fn build_admin_music_processing_progress_response(
         } else {
             "pending"
         }
-    } else if record.stems_status == "ready" || complete {
-        "done"
-    } else if record.stems_status == "failed" {
-        "failed"
-    } else if job_step.as_deref() == Some("generating_stems") {
-        if stalled { "stalled" } else { "active" }
     } else {
-        "pending"
+        structured_step_status(
+            progress.as_ref(),
+            "compress_stems",
+            if record.stems_status == "ready" || complete {
+                "ready"
+            } else {
+                record.stems_status.as_str()
+            },
+            false,
+            stalled && job_step.as_deref() == Some("generating_stems"),
+        )
     };
-    let upload_status = if complete {
-        "done"
-    } else if job_step.as_deref() == Some("uploading_assets") {
-        if stalled { "stalled" } else { "active" }
-    } else if record.audio_status != "processing"
-        && record.midi_status != "processing"
-        && record.musicxml_status != "processing"
-        && record.stems_status != "processing"
-    {
-        "done"
-    } else {
-        "pending"
-    };
-    let done_status = if complete {
-        "done"
-    } else if job_step.as_deref() == Some("finalizing") {
-        if stalled { "stalled" } else { "active" }
-    } else {
-        "pending"
-    };
+    let upload_status = structured_step_status(
+        progress.as_ref(),
+        "upload_assets",
+        if complete { "ready" } else { "processing" },
+        false,
+        stalled && job_step.as_deref() == Some("uploading_assets"),
+    );
+    let done_status = structured_step_status(
+        progress.as_ref(),
+        "done",
+        if complete {
+            "ready"
+        } else if job_status.as_deref() == Some("failed") {
+            "failed"
+        } else {
+            "processing"
+        },
+        false,
+        stalled && job_step.as_deref() == Some("finalizing"),
+    );
 
     let mut steps = vec![
         build_processing_step(
@@ -1253,66 +1266,82 @@ pub(crate) fn build_admin_music_processing_progress_response(
             "Queue",
             queue_status,
             queue_detail.clone(),
-            job_started_at.clone().or(job_queued_at.clone()),
-            build_processing_tooltip(
-                queue_detail,
-                job_started_at.clone().or(job_queued_at.clone()),
-                None,
-            ),
+            progress_step_last_updated_at(progress.as_ref(), "queue")
+                .or(job_started_at.clone())
+                .or(job_queued_at.clone()),
+            progress_step_tooltip(progress.as_ref(), "queue").or_else(|| {
+                build_processing_tooltip(
+                    queue_detail,
+                    progress_step_last_updated_at(progress.as_ref(), "queue")
+                        .or(job_started_at.clone())
+                        .or(job_queued_at.clone()),
+                    Some(format!("Score ID: {}", record.id)),
+                )
+            }),
             None,
         ),
         build_processing_step(
             "musicxml",
             "MusicXML",
             musicxml_status,
-            failure_detail(record.musicxml_error.as_deref(), musicxml_status),
-            parsed_log.musicxml_last_updated_at.clone(),
-            build_processing_tooltip(
-                failure_detail(record.musicxml_error.as_deref(), musicxml_status),
-                parsed_log.musicxml_last_updated_at.clone(),
-                None,
-            ),
+            progress_step_detail(progress.as_ref(), "musicxml")
+                .or_else(|| failure_detail(record.musicxml_error.as_deref(), musicxml_status)),
+            progress_step_last_updated_at(progress.as_ref(), "musicxml"),
+            progress_step_tooltip(progress.as_ref(), "musicxml").or_else(|| {
+                build_processing_tooltip(
+                    failure_detail(record.musicxml_error.as_deref(), musicxml_status),
+                    progress_step_last_updated_at(progress.as_ref(), "musicxml"),
+                    Some("MusicXML export".to_owned()),
+                )
+            }),
             Some("core_exports"),
         ),
         build_processing_step(
             "midi",
             "MIDI",
             midi_status,
-            failure_detail(record.midi_error.as_deref(), midi_status),
-            parsed_log.midi_last_updated_at.clone(),
-            build_processing_tooltip(
-                failure_detail(record.midi_error.as_deref(), midi_status),
-                parsed_log.midi_last_updated_at.clone(),
-                None,
-            ),
+            progress_step_detail(progress.as_ref(), "midi")
+                .or_else(|| failure_detail(record.midi_error.as_deref(), midi_status)),
+            progress_step_last_updated_at(progress.as_ref(), "midi"),
+            progress_step_tooltip(progress.as_ref(), "midi").or_else(|| {
+                build_processing_tooltip(
+                    failure_detail(record.midi_error.as_deref(), midi_status),
+                    progress_step_last_updated_at(progress.as_ref(), "midi"),
+                    Some("MIDI export".to_owned()),
+                )
+            }),
             Some("core_exports"),
         ),
         build_processing_step(
             "preview_mp3",
             "Audio",
             preview_status,
-            failure_detail(record.audio_error.as_deref(), preview_status),
-            parsed_log.preview_last_updated_at.clone(),
-            build_processing_tooltip(
-                failure_detail(record.audio_error.as_deref(), preview_status),
-                parsed_log.preview_last_updated_at.clone(),
-                Some("Audio rendering".to_owned()),
-            ),
+            progress_step_detail(progress.as_ref(), "preview_mp3")
+                .or_else(|| failure_detail(record.audio_error.as_deref(), preview_status)),
+            progress_step_last_updated_at(progress.as_ref(), "preview_mp3"),
+            progress_step_tooltip(progress.as_ref(), "preview_mp3").or_else(|| {
+                build_processing_tooltip(
+                    failure_detail(record.audio_error.as_deref(), preview_status),
+                    progress_step_last_updated_at(progress.as_ref(), "preview_mp3"),
+                    Some("Audio rendering".to_owned()),
+                )
+            }),
             Some("core_exports"),
         ),
         build_processing_step(
             "stems",
             "Stems",
             stems_status,
-            parsed_log.stems_detail(),
-            parsed_log.stems_last_updated_at.clone(),
-            build_processing_tooltip(
-                parsed_log
-                    .stems_tooltip(record.stems_error.as_deref())
-                    .or_else(|| failure_detail(record.stems_error.as_deref(), stems_status)),
-                parsed_log.stems_last_updated_at.clone(),
-                None,
-            ),
+            progress_step_detail(progress.as_ref(), "stems")
+                .or_else(|| failure_detail(record.stems_error.as_deref(), stems_status)),
+            progress_step_last_updated_at(progress.as_ref(), "stems"),
+            progress_step_tooltip(progress.as_ref(), "stems").or_else(|| {
+                build_processing_tooltip(
+                    failure_detail(record.stems_error.as_deref(), stems_status),
+                    progress_step_last_updated_at(progress.as_ref(), "stems"),
+                    None,
+                )
+            }),
             None,
         ),
         build_processing_step(
@@ -1320,63 +1349,63 @@ pub(crate) fn build_admin_music_processing_progress_response(
             "Compress",
             compression_status,
             if compression_enabled {
-                parsed_log.compression_detail()
+                progress_step_detail(progress.as_ref(), "compress_stems")
             } else {
                 None
             },
-            parsed_log.compression_last_updated_at.clone(),
-            build_processing_tooltip(
-                if compression_enabled {
-                    parsed_log.compression_tooltip().or_else(|| {
-                        failure_detail(record.stems_error.as_deref(), compression_status)
-                    })
-                } else {
-                    None
-                },
-                parsed_log.compression_last_updated_at.clone(),
-                if compression_enabled {
-                    Some(format!(
-                        "Stem compression profile: {}",
-                        record.quality_profile
-                    ))
-                } else {
-                    Some("No extra stem compression for this profile.".to_owned())
-                },
-            ),
+            progress_step_last_updated_at(progress.as_ref(), "compress_stems"),
+            if compression_enabled {
+                progress_step_tooltip(progress.as_ref(), "compress_stems").or_else(|| {
+                    build_processing_tooltip(
+                        failure_detail(record.stems_error.as_deref(), compression_status),
+                        progress_step_last_updated_at(progress.as_ref(), "compress_stems"),
+                        Some(format!(
+                            "Stem compression profile: {}",
+                            record.quality_profile
+                        )),
+                    )
+                })
+            } else {
+                Some("No extra stem compression for this profile.".to_owned())
+            },
             None,
         ),
         build_processing_step(
             "upload_assets",
             "Upload",
             upload_status,
-            parsed_log.upload_detail(),
-            parsed_log.upload_last_updated_at.clone(),
-            build_processing_tooltip(
-                parsed_log.upload_tooltip(),
-                parsed_log.upload_last_updated_at.clone(),
-                None,
-            ),
+            progress_step_detail(progress.as_ref(), "upload_assets"),
+            progress_step_last_updated_at(progress.as_ref(), "upload_assets"),
+            progress_step_tooltip(progress.as_ref(), "upload_assets").or_else(|| {
+                build_processing_tooltip(
+                    progress_step_detail(progress.as_ref(), "upload_assets"),
+                    progress_step_last_updated_at(progress.as_ref(), "upload_assets"),
+                    None,
+                )
+            }),
             None,
         ),
         build_processing_step(
             "done",
             "Done",
             done_status,
-            None,
+            progress_step_detail(progress.as_ref(), "done"),
             job_finished_at
                 .clone()
-                .or(parsed_log.done_last_updated_at.clone()),
-            build_processing_tooltip(
-                None,
-                job_finished_at
-                    .clone()
-                    .or(parsed_log.done_last_updated_at.clone()),
-                if complete {
-                    Some("Processing completed successfully.".to_owned())
-                } else {
-                    None
-                },
-            ),
+                .or(progress_step_last_updated_at(progress.as_ref(), "done")),
+            progress_step_tooltip(progress.as_ref(), "done").or_else(|| {
+                build_processing_tooltip(
+                    progress_step_detail(progress.as_ref(), "done"),
+                    job_finished_at
+                        .clone()
+                        .or(progress_step_last_updated_at(progress.as_ref(), "done")),
+                    if complete {
+                        Some("Processing completed successfully.".to_owned())
+                    } else {
+                        None
+                    },
+                )
+            }),
             None,
         ),
     ];
@@ -1385,11 +1414,11 @@ pub(crate) fn build_admin_music_processing_progress_response(
         match job_step.as_deref() {
             Some("fetching_input") => steps[1].status = "failed".to_owned(),
             Some("generating_core") => {
-                if record.musicxml_status == "failed" {
+                if steps[2].status == "failed" || record.musicxml_status == "failed" {
                     steps[2].status = "failed".to_owned();
-                } else if record.midi_status == "failed" {
+                } else if steps[3].status == "failed" || record.midi_status == "failed" {
                     steps[3].status = "failed".to_owned();
-                } else if record.audio_status == "failed" {
+                } else if steps[4].status == "failed" || record.audio_status == "failed" {
                     steps[4].status = "failed".to_owned();
                 } else {
                     steps[2].status = "failed".to_owned();
@@ -1398,7 +1427,7 @@ pub(crate) fn build_admin_music_processing_progress_response(
                 }
             }
             Some("generating_stems") => {
-                if compression_enabled && parsed_log.compression_started {
+                if compression_enabled && steps[6].last_updated_at.is_some() {
                     steps[6].status = "failed".to_owned();
                 } else {
                     steps[5].status = "failed".to_owned();
@@ -1444,239 +1473,6 @@ pub(crate) fn build_admin_music_processing_progress_response(
     }
 }
 
-#[derive(Clone)]
-struct ParsedProcessingLogLine {
-    timestamp: String,
-    message: String,
-}
-
-#[derive(Default)]
-struct ParsedProcessingLog {
-    musicxml_last_updated_at: Option<String>,
-    midi_last_updated_at: Option<String>,
-    preview_last_updated_at: Option<String>,
-    stems_last_updated_at: Option<String>,
-    compression_last_updated_at: Option<String>,
-    compression_total: Option<u64>,
-    compression_done: u64,
-    compression_started: bool,
-    upload_last_updated_at: Option<String>,
-    done_last_updated_at: Option<String>,
-    stems_total: Option<u64>,
-    stems_rendered: u64,
-    upload_total_bytes: Option<u64>,
-    upload_uploaded_bytes: u64,
-    upload_known_bytes: u64,
-}
-
-impl ParsedProcessingLog {
-    fn stems_detail(&self) -> Option<String> {
-        self.stems_total
-            .map(|total| format!("{} / {}", self.stems_rendered.min(total), total))
-    }
-
-    fn stems_tooltip(&self, stems_error: Option<&str>) -> Option<String> {
-        if let Some(error) = stems_error {
-            return Some(error.to_owned());
-        }
-        self.stems_total.map(|total| {
-            format!(
-                "{} of {} stems rendered",
-                self.stems_rendered.min(total),
-                total
-            )
-        })
-    }
-
-    fn upload_detail(&self) -> Option<String> {
-        let total = self
-            .upload_total_bytes
-            .unwrap_or(self.upload_known_bytes.max(self.upload_uploaded_bytes));
-        if total == 0 && self.upload_uploaded_bytes == 0 {
-            return None;
-        }
-        Some(format!(
-            "{} / {}",
-            format_bytes_compact(self.upload_uploaded_bytes),
-            format_bytes_compact(total.max(self.upload_uploaded_bytes))
-        ))
-    }
-
-    fn upload_tooltip(&self) -> Option<String> {
-        self.upload_detail()
-            .map(|detail| format!("Uploaded {detail}"))
-    }
-
-    fn compression_detail(&self) -> Option<String> {
-        self.compression_total
-            .map(|total| format!("{} / {}", self.compression_done.min(total), total))
-    }
-
-    fn compression_tooltip(&self) -> Option<String> {
-        self.compression_total.map(|total| {
-            format!(
-                "{} of {} stems compressed",
-                self.compression_done.min(total),
-                total
-            )
-        })
-    }
-}
-
-fn parse_processing_log(content: &str) -> ParsedProcessingLog {
-    let lines = content
-        .lines()
-        .filter_map(parse_processing_log_line)
-        .collect::<Vec<_>>();
-
-    let mut parsed = ParsedProcessingLog::default();
-    let mut rendered_stem_outputs = HashSet::new();
-    let mut pending_upload_bytes = HashMap::new();
-
-    for line in lines {
-        let message_lower = line.message.to_lowercase();
-
-        if message_lower.contains("score.musicxml") || message_lower.contains("application/xml") {
-            parsed.musicxml_last_updated_at = Some(line.timestamp.clone());
-        }
-        if message_lower.contains("preview.mid") || message_lower.contains("audio/midi") {
-            parsed.midi_last_updated_at = Some(line.timestamp.clone());
-        }
-        if message_lower.contains("preview.mp3") || message_lower.starts_with("audio: ") {
-            parsed.preview_last_updated_at = Some(line.timestamp.clone());
-        }
-        if message_lower.starts_with("stems: ")
-            || (message_lower.contains("musescore-direct-stems")
-                && message_lower.contains("musescore: done"))
-        {
-            parsed.stems_last_updated_at = Some(line.timestamp.clone());
-        }
-        if message_lower.starts_with("stems: compressing [")
-            || message_lower.starts_with("stems: compressed [")
-        {
-            parsed.compression_started = true;
-            parsed.compression_last_updated_at = Some(line.timestamp.clone());
-            parsed.compression_total = parse_bracket_progress_total(&line.message);
-        }
-        if message_lower.contains("upload") {
-            parsed.upload_last_updated_at = Some(line.timestamp.clone());
-        }
-        if message_lower.contains("processing completed. database state updated.") {
-            parsed.done_last_updated_at = Some(line.timestamp.clone());
-        }
-
-        if message_lower.starts_with("stems: found ") {
-            parsed.stems_total = parse_number_after_prefix(&line.message, "stems: found ");
-        }
-        if message_lower.starts_with("stem generation finished with ") {
-            if let Some(value) =
-                parse_number_after_prefix(&line.message, "Stem generation finished with ")
-            {
-                parsed.stems_rendered = value;
-            }
-        }
-
-        if message_lower.contains("musescore-direct-stems")
-            && message_lower.contains("musescore: done")
-            && let Some(stem_key) = extract_stem_output_key(&line.message)
-            && rendered_stem_outputs.insert(stem_key)
-        {
-            parsed.stems_rendered += 1;
-        }
-        if message_lower.starts_with("stems: compressed [")
-            && let Some(index) = parse_bracket_progress_index(&line.message)
-        {
-            parsed.compression_done = parsed.compression_done.max(index);
-        }
-
-        if message_lower.starts_with("upload: prepared ")
-            && let Some(total_bytes) =
-                parse_number_after_suffix(&line.message, "totaling ", " bytes.")
-        {
-            parsed.upload_total_bytes = Some(total_bytes);
-        }
-
-        if message_lower.starts_with("audio: uploading ")
-            && let Some(bytes) = parse_kb_bytes_after_prefix(&line.message, "audio: uploading ")
-        {
-            pending_upload_bytes.insert("audio".to_owned(), bytes);
-            parsed.upload_known_bytes += bytes;
-        }
-        if message_lower.starts_with("midi: uploading ")
-            && let Some(bytes) = parse_kb_bytes_after_prefix(&line.message, "midi: uploading ")
-        {
-            pending_upload_bytes.insert("midi".to_owned(), bytes);
-            parsed.upload_known_bytes += bytes;
-        }
-        if message_lower.starts_with("musicxml: uploading ")
-            && let Some(bytes) = parse_kb_bytes_after_prefix(&line.message, "musicxml: uploading ")
-        {
-            pending_upload_bytes.insert("musicxml".to_owned(), bytes);
-            parsed.upload_known_bytes += bytes;
-        }
-        if message_lower.starts_with("stems: uploading [")
-            && let Some(index) = parse_bracket_progress_index(&line.message)
-            && let Some(bytes) = parse_parenthesized_kb(&line.message)
-        {
-            pending_upload_bytes.insert(format!("stem-{index}"), bytes);
-            parsed.upload_known_bytes += bytes;
-        }
-
-        if message_lower.starts_with("audio: upload to ")
-            && let Some(bytes) = pending_upload_bytes.remove("audio")
-        {
-            parsed.upload_uploaded_bytes += bytes;
-        }
-        if message_lower.starts_with("midi: upload to ")
-            && let Some(bytes) = pending_upload_bytes.remove("midi")
-        {
-            parsed.upload_uploaded_bytes += bytes;
-        }
-        if message_lower.starts_with("musicxml: upload to ")
-            && let Some(bytes) = pending_upload_bytes.remove("musicxml")
-        {
-            parsed.upload_uploaded_bytes += bytes;
-        }
-        if message_lower.starts_with("stems: uploaded [")
-            && let Some(index) = parse_bracket_progress_index(&line.message)
-        {
-            if let Some(bytes) = pending_upload_bytes.remove(&format!("stem-{index}")) {
-                parsed.upload_uploaded_bytes += bytes;
-            } else if let Some(bytes) = parse_parenthesized_kb(&line.message) {
-                parsed.upload_uploaded_bytes += bytes;
-            }
-        }
-    }
-
-    parsed
-}
-
-fn parse_processing_log_line(line: &str) -> Option<ParsedProcessingLogLine> {
-    let line = line.trim();
-    if !line.starts_with('[') {
-        return None;
-    }
-
-    let close = line.find(']')?;
-    let timestamp = line[1..close].to_owned();
-    let mut message = line[close + 1..].trim().to_owned();
-    for level in [
-        "TRACE ",
-        "DEBUG ",
-        "INFO ",
-        "WARNING ",
-        "ERROR ",
-        "CRITICAL ",
-    ] {
-        if let Some(rest) = message.strip_prefix(level) {
-            message = rest.to_owned();
-            break;
-        }
-    }
-
-    Some(ParsedProcessingLogLine { timestamp, message })
-}
-
 fn build_processing_step(
     key: &str,
     label: &str,
@@ -1720,26 +1516,90 @@ fn build_processing_tooltip(
     }
 }
 
+fn parse_processing_job_progress(value: &str) -> Option<ProcessingJobProgress> {
+    serde_json::from_str(value).ok()
+}
+
+fn progress_step<'a>(
+    progress: Option<&'a ProcessingJobProgress>,
+    key: &str,
+) -> Option<&'a fumen_core::models::ProcessingJobProgressStep> {
+    progress.and_then(|progress| progress.steps.get(key))
+}
+
+fn progress_step_status<'a>(
+    progress: Option<&'a ProcessingJobProgress>,
+    key: &str,
+) -> Option<&'a str> {
+    progress_step(progress, key).and_then(|step| step.status.as_deref())
+}
+
+fn progress_step_detail(progress: Option<&ProcessingJobProgress>, key: &str) -> Option<String> {
+    progress_step(progress, key).and_then(|step| step.detail.clone())
+}
+
+fn progress_step_last_updated_at(
+    progress: Option<&ProcessingJobProgress>,
+    key: &str,
+) -> Option<String> {
+    progress_step(progress, key).and_then(|step| step.last_updated_at.clone())
+}
+
+fn progress_step_tooltip(progress: Option<&ProcessingJobProgress>, key: &str) -> Option<String> {
+    progress_step(progress, key).and_then(|step| step.tooltip.clone())
+}
+
+fn normalize_progress_step_status(status: &str) -> &'static str {
+    match status {
+        "done" | "ready" | "unavailable" => "done",
+        "failed" => "failed",
+        "stalled" => "stalled",
+        "active" | "processing" => "active",
+        _ => "pending",
+    }
+}
+
+fn step_status_with_stall(status: &str, stalled: bool) -> &'static str {
+    if stalled && status == "active" {
+        "stalled"
+    } else {
+        match status {
+            "done" => "done",
+            "failed" => "failed",
+            "stalled" => "stalled",
+            "active" => "active",
+            _ => "pending",
+        }
+    }
+}
+
+fn structured_step_status(
+    progress: Option<&ProcessingJobProgress>,
+    key: &str,
+    record_status: &str,
+    fallback_done: bool,
+    stalled: bool,
+) -> &'static str {
+    if let Some(status) = progress_step_status(progress, key) {
+        return step_status_with_stall(normalize_progress_step_status(status), stalled);
+    }
+
+    if fallback_done {
+        return "done";
+    }
+
+    match record_status {
+        "ready" | "unavailable" => "done",
+        "failed" => "failed",
+        _ => "pending",
+    }
+}
+
 fn failure_detail(error: Option<&str>, status: &str) -> Option<String> {
     if status == "failed" {
         error.map(ToOwned::to_owned)
     } else {
         None
-    }
-}
-
-fn step_status_from_signal(
-    record_status: &str,
-    is_running: bool,
-    is_stalled: bool,
-) -> &'static str {
-    match record_status {
-        "ready" | "unavailable" => "done",
-        "failed" => "failed",
-        "processing" if is_stalled => "stalled",
-        "processing" if is_running => "active",
-        "processing" => "pending",
-        _ => "pending",
     }
 }
 
@@ -1756,87 +1616,6 @@ fn upload_status_would_be_done(record: &MusicRecord, complete: bool) -> bool {
             && record.midi_status != "processing"
             && record.musicxml_status != "processing"
             && record.stems_status != "processing")
-}
-
-fn parse_number_after_prefix(message: &str, prefix: &str) -> Option<u64> {
-    let tail = message.strip_prefix(prefix)?;
-    let number = tail.split_whitespace().next()?;
-    number.replace(',', "").parse().ok()
-}
-
-fn parse_number_after_suffix(message: &str, prefix: &str, suffix: &str) -> Option<u64> {
-    let tail = message.split(prefix).nth(1)?;
-    let value = tail.split(suffix).next()?;
-    value.trim().replace(',', "").parse().ok()
-}
-
-fn parse_kb_bytes_after_prefix(message: &str, prefix: &str) -> Option<u64> {
-    let tail = message.strip_prefix(prefix)?;
-    let kb = tail
-        .split(" KB")
-        .next()?
-        .trim()
-        .replace(',', "")
-        .parse::<u64>()
-        .ok()?;
-    Some(kb * 1024)
-}
-
-fn parse_parenthesized_kb(message: &str) -> Option<u64> {
-    let start = message.rfind('(')? + 1;
-    let tail = &message[start..];
-    let kb = tail
-        .split(" KB")
-        .next()?
-        .trim()
-        .replace(',', "")
-        .parse::<u64>()
-        .ok()?;
-    Some(kb * 1024)
-}
-
-fn parse_bracket_progress_index(message: &str) -> Option<u64> {
-    let start = message.find('[')? + 1;
-    let tail = &message[start..];
-    let index = tail.split('/').next()?.trim().parse::<u64>().ok()?;
-    Some(index)
-}
-
-fn parse_bracket_progress_total(message: &str) -> Option<u64> {
-    let start = message.find('[')? + 1;
-    let tail = &message[start..];
-    let total = tail
-        .split('/')
-        .nth(1)?
-        .split(']')
-        .next()?
-        .trim()
-        .parse::<u64>()
-        .ok()?;
-    Some(total)
-}
-
-fn extract_stem_output_key(message: &str) -> Option<String> {
-    let start = message.find("stem_")?;
-    let tail = &message[start..];
-    let end = tail.find(".ogg")? + 4;
-    Some(tail[..end].to_owned())
-}
-
-fn format_bytes_compact(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-    let bytes_f = bytes as f64;
-    if bytes_f >= GB {
-        format!("{:.1} GB", bytes_f / GB)
-    } else if bytes_f >= MB {
-        format!("{:.1} MB", bytes_f / MB)
-    } else if bytes_f >= KB {
-        format!("{:.1} KB", bytes_f / KB)
-    } else {
-        format!("{bytes} B")
-    }
 }
 
 fn parse_rfc3339_utc(value: &str) -> Option<DateTime<Utc>> {
