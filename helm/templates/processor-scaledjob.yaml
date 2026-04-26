@@ -10,6 +10,8 @@ metadata:
 spec:
   pollingInterval: {{ .Values.processor.keda.pollingInterval }}
   maxReplicaCount: {{ .Values.processor.maxReplicas }}
+  scalingStrategy:
+    strategy: {{ .Values.processor.keda.scaledJobScalingStrategy | default "accurate" | quote }}
   successfulJobsHistoryLimit: {{ .Values.processor.keda.successfulJobsHistoryLimit }}
   failedJobsHistoryLimit: {{ .Values.processor.keda.failedJobsHistoryLimit }}
   jobTargetRef:
@@ -149,7 +151,6 @@ spec:
       metadata:
         connectionFromEnv: DATABASE_URL
         query: >
-          -- ScaledJob uses queue depth only. Each spawned pod claims one queued row itself.
           SELECT COUNT(*)
           FROM processing_jobs
           WHERE status = 'queued'
