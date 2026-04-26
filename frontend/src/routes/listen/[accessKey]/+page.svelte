@@ -56,6 +56,63 @@
         placement: "above" | "below";
     };
 
+    type PlaybackWakeLockSentinel = {
+        released: boolean;
+        release: () => Promise<void>;
+        addEventListener: (
+            type: "release",
+            listener: () => void,
+        ) => void;
+        removeEventListener: (
+            type: "release",
+            listener: () => void,
+        ) => void;
+    };
+
+    type WakeLockNavigator = Navigator & {
+        wakeLock?: {
+            request: (type: "screen") => Promise<PlaybackWakeLockSentinel>;
+        };
+    };
+
+    type MediaSessionActionName =
+        | "play"
+        | "pause"
+        | "stop"
+        | "seekbackward"
+        | "seekforward"
+        | "seekto";
+
+    type MediaSessionActionDetails = {
+        seekOffset?: number;
+        seekTime?: number;
+    };
+
+    type MediaSessionLike = {
+        metadata: unknown;
+        playbackState: "none" | "paused" | "playing";
+        setActionHandler: (
+            action: MediaSessionActionName,
+            handler: ((details?: MediaSessionActionDetails) => void) | null,
+        ) => void;
+        setPositionState?: (state?: {
+            duration: number;
+            playbackRate: number;
+            position: number;
+        }) => void;
+    };
+
+    type MediaSessionNavigator = Navigator & {
+        mediaSession?: MediaSessionLike;
+    };
+
+    type MediaMetadataConstructor = new (init: {
+        title?: string;
+        artist?: string;
+        album?: string;
+        artwork?: Array<{ src: string; sizes?: string; type?: string }>;
+    }) => MediaMetadata;
+
     let publicMusic = $state<PublicMusic | null>(null);
     let publicLoading = $state(false);
     let publicError = $state("");
@@ -97,6 +154,7 @@
     );
     let loadPct = $derived(stemLoadProgress * 100);
     let playbackFrame = $state<number | null>(null);
+    let wakeLock = $state<PlaybackWakeLockSentinel | null>(null);
     let globalVolume = $state(1.0);
     let trackLevels = $state<Record<string, number>>({});
     let soloedTrackIds = $state<Set<string>>(new Set());
@@ -107,6 +165,8 @@
     let playtimeLastFlushAt = 0;
     let playtimeInterval: number | null = null;
     let playtimeReportingDisabled = false;
+    let mediaSessionConfigured = false;
+    let lastMediaSessionPositionUpdateAt = 0;
     let canAnnotate = $derived(!!appShell.refreshToken);
     let annotationToggleLabel = $derived(
         showAnnotations ? "Hide annotations" : "Show annotations",
@@ -156,12 +216,30 @@
         const handlePageHide = () => {
             capturePlaytimeSlice();
             void flushPlaytime(true);
+            void releasePlaybackWakeLock();
+        };
+        const handleVisibilityChange = () => {
+            if (
+                document.visibilityState === "visible" &&
+                isPlaybackActive()
+            ) {
+                void requestPlaybackWakeLock();
+                updateMediaSessionState(true);
+            } else if (document.visibilityState !== "visible") {
+                void releasePlaybackWakeLock();
+            }
         };
         window.addEventListener("pagehide", handlePageHide);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        configureMediaSession();
         void loadPublicMusic(accessKey);
 
         return () => {
             window.removeEventListener("pagehide", handlePageHide);
+            document.removeEventListener(
+                "visibilitychange",
+                handleVisibilityChange,
+            );
         };
     });
 
@@ -170,6 +248,8 @@
         capturePlaytimeSlice();
         void flushPlaytime(true);
         void stopPlaytimeTracking(false);
+        void releasePlaybackWakeLock();
+        clearMediaSession();
         if (stemPlayer) {
             void stemPlayer.dispose();
             stemPlayer = null;
@@ -452,6 +532,207 @@
         }
     }
 
+    function isPlaybackActive() {
+        return playbackState === "playing" || playbackState === "counting-in";
+    }
+
+    function getMediaSession() {
+        return (navigator as MediaSessionNavigator).mediaSession ?? null;
+    }
+
+    function configureMediaSession() {
+        const mediaSession = getMediaSession();
+        if (!mediaSession || mediaSessionConfigured) {
+            return;
+        }
+
+        try {
+            mediaSession.setActionHandler("play", () => {
+                if (!isPlaybackActive()) {
+                    void togglePlayback();
+                }
+            });
+            mediaSession.setActionHandler("pause", () => {
+                void pausePlayback();
+            });
+            mediaSession.setActionHandler("stop", () => {
+                stopPlayback();
+            });
+            mediaSession.setActionHandler("seekbackward", (details) => {
+                seekFromMediaSession(
+                    playbackPosition - Math.max(1, details?.seekOffset ?? 10),
+                );
+            });
+            mediaSession.setActionHandler("seekforward", (details) => {
+                seekFromMediaSession(
+                    playbackPosition + Math.max(1, details?.seekOffset ?? 10),
+                );
+            });
+            mediaSession.setActionHandler("seekto", (details) => {
+                if (typeof details?.seekTime === "number") {
+                    seekFromMediaSession(details.seekTime);
+                }
+            });
+            mediaSessionConfigured = true;
+        } catch {
+            mediaSessionConfigured = false;
+        }
+    }
+
+    function clearMediaSession() {
+        const mediaSession = getMediaSession();
+        if (!mediaSession || !mediaSessionConfigured) {
+            return;
+        }
+
+        for (const action of [
+            "play",
+            "pause",
+            "stop",
+            "seekbackward",
+            "seekforward",
+            "seekto",
+        ] as MediaSessionActionName[]) {
+            try {
+                mediaSession.setActionHandler(action, null);
+            } catch {
+                /* ignore unsupported actions */
+            }
+        }
+        mediaSession.metadata = null;
+        mediaSession.playbackState = "none";
+        mediaSessionConfigured = false;
+    }
+
+    function updateMediaSessionMetadata() {
+        const mediaSession = getMediaSession();
+        const MetadataConstructor = (
+            window as unknown as {
+                MediaMetadata?: MediaMetadataConstructor;
+            }
+        ).MediaMetadata;
+        if (!mediaSession || !MetadataConstructor || !publicMusic) {
+            return;
+        }
+
+        mediaSession.metadata = new MetadataConstructor({
+            title: publicMusic.title,
+            artist: publicMusic.subtitle?.trim() || "Fumen",
+            album: "Fumen",
+            artwork: publicMusic.icon_image_url
+                ? [{ src: publicMusic.icon_image_url }]
+                : undefined,
+        });
+    }
+
+    function updateMediaSessionState(forcePosition = false) {
+        const mediaSession = getMediaSession();
+        if (!mediaSession) {
+            return;
+        }
+
+        mediaSession.playbackState = isPlaybackActive()
+            ? "playing"
+            : playbackState === "paused"
+              ? "paused"
+              : "none";
+        updateMediaSessionPosition(forcePosition);
+    }
+
+    function updateMediaSessionPosition(force = false) {
+        const mediaSession = getMediaSession();
+        if (!mediaSession?.setPositionState || playbackDuration <= 0) {
+            return;
+        }
+
+        const now = performance.now();
+        if (!force && now - lastMediaSessionPositionUpdateAt < 1000) {
+            return;
+        }
+
+        lastMediaSessionPositionUpdateAt = now;
+        try {
+            mediaSession.setPositionState({
+                duration: playbackDuration,
+                playbackRate: 1,
+                position: Math.max(
+                    0,
+                    Math.min(playbackPosition, playbackDuration),
+                ),
+            });
+        } catch {
+            /* Some browsers reject position state during loading/teardown. */
+        }
+    }
+
+    function seekFromMediaSession(seconds: number) {
+        if (!Number.isFinite(seconds)) {
+            return;
+        }
+
+        const clampedSeconds = Math.max(
+            0,
+            Math.min(seconds, playbackDuration || 0),
+        );
+        void handleScoreSeek(clampedSeconds);
+    }
+
+    function handleWakeLockRelease() {
+        if (wakeLock) {
+            wakeLock.removeEventListener("release", handleWakeLockRelease);
+            wakeLock = null;
+        }
+        if (isPlaybackActive() && document.visibilityState === "visible") {
+            void requestPlaybackWakeLock();
+        }
+    }
+
+    async function requestPlaybackWakeLock() {
+        if (
+            wakeLock ||
+            !isPlaybackActive() ||
+            document.visibilityState !== "visible"
+        ) {
+            return;
+        }
+
+        const wakeLockApi = (navigator as WakeLockNavigator).wakeLock;
+        if (!wakeLockApi) {
+            return;
+        }
+
+        try {
+            const lock = await wakeLockApi.request("screen");
+            lock.addEventListener("release", handleWakeLockRelease);
+            if (isPlaybackActive()) {
+                wakeLock = lock;
+            } else {
+                lock.removeEventListener("release", handleWakeLockRelease);
+                await lock.release();
+            }
+        } catch {
+            // Wake Lock is best-effort: unsupported browsers or battery-saver
+            // modes should not interrupt playback.
+        }
+    }
+
+    async function releasePlaybackWakeLock() {
+        const lock = wakeLock;
+        if (!lock) {
+            return;
+        }
+
+        wakeLock = null;
+        lock.removeEventListener("release", handleWakeLockRelease);
+        try {
+            if (!lock.released) {
+                await lock.release();
+            }
+        } catch {
+            /* ignore */
+        }
+    }
+
     async function loadPublicMusic(key: string) {
         publicLoading = true;
         publicError = "";
@@ -465,6 +746,9 @@
                 encodeURIComponent(key),
             );
             publicMusic = music;
+            configureMediaSession();
+            updateMediaSessionMetadata();
+            updateMediaSessionState(true);
             publicLoading = false;
             await tick();
             await resetMixers();
@@ -520,9 +804,11 @@
     async function resetMixers() {
         stopPlaybackLoop();
         void stopPlaytimeTracking(false);
+        void releasePlaybackWakeLock();
         playbackState = "stopped";
         playbackPosition = 0;
         playbackDuration = 0;
+        updateMediaSessionState(true);
         globalVolume = 1.0;
         mixerTracks = [];
         stemPlaybackReady = false;
@@ -579,6 +865,7 @@
             playbackDuration = loaded.duration;
             playbackPosition = 0;
             playbackState = "stopped";
+            updateMediaSessionState(true);
         } catch (error) {
             midiPlayerError =
                 error instanceof Error
@@ -606,12 +893,7 @@
                 playbackState === "playing" ||
                 playbackState === "counting-in"
             ) {
-                capturePlaytimeSlice();
-                player.pause();
-                playbackState = "paused";
-                playbackPosition = player.getCurrentTime();
-                await stopPlaytimeTracking();
-                stopPlaybackLoop();
+                await pausePlayback();
                 return;
             }
 
@@ -652,11 +934,14 @@
                     beatsPerBar: countInInfo.beatsPerBar,
                 });
                 playbackState = "counting-in";
+                void requestPlaybackWakeLock();
             } else {
                 await player.play();
                 playbackState = "playing";
+                void requestPlaybackWakeLock();
                 startPlaytimeTracking();
             }
+            updateMediaSessionState(true);
             startPlaybackLoop();
         } catch (error) {
             midiPlayerError =
@@ -664,6 +949,22 @@
                     ? error.message
                     : "Unable to start playback";
         }
+    }
+
+    async function pausePlayback() {
+        const player = stemPlayer;
+        if (!player || !isPlaybackActive()) {
+            return;
+        }
+
+        capturePlaytimeSlice();
+        player.pause();
+        playbackState = "paused";
+        playbackPosition = player.getCurrentTime();
+        await stopPlaytimeTracking();
+        stopPlaybackLoop();
+        void releasePlaybackWakeLock();
+        updateMediaSessionState(true);
     }
 
     function stopPlayback() {
@@ -677,7 +978,9 @@
         playbackState = "stopped";
         playbackPosition = 0;
         void stopPlaytimeTracking();
+        void releasePlaybackWakeLock();
         stopPlaybackLoop();
+        updateMediaSessionState(true);
     }
 
     function handleSeek(event: Event) {
@@ -708,11 +1011,14 @@
         if (wasPlaying) {
             await player.play();
             playbackState = "playing";
+            void requestPlaybackWakeLock();
             startPlaytimeTracking();
             startPlaybackLoop();
         } else if (wasCountingIn) {
             playbackState = "paused";
+            void releasePlaybackWakeLock();
         }
+        updateMediaSessionState(true);
     }
 
     function updateTrackVolume(trackId: string, volume: number) {
@@ -783,6 +1089,7 @@
             const player = stemPlayer;
             if (!player) return;
             playbackPosition = player.getCurrentTime();
+            updateMediaSessionPosition();
             scoreViewer?.seek(playbackPosition);
             if (stemPlayer) {
                 stemPlayer.synchronizePlayback();
@@ -794,6 +1101,8 @@
             }
             if (playbackState === "counting-in" && playbackPosition > 0.01) {
                 playbackState = "playing";
+                void requestPlaybackWakeLock();
+                updateMediaSessionState(true);
                 startPlaytimeTracking();
             }
             if (
@@ -811,6 +1120,8 @@
                     playbackState = "paused";
                     playbackPosition = playbackDuration;
                     void stopPlaytimeTracking();
+                    void releasePlaybackWakeLock();
+                    updateMediaSessionState(true);
                     stopPlaybackLoop();
                     return;
                 }
