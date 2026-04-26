@@ -50,6 +50,10 @@ interface MeasureMetadata {
   implicit: boolean
 }
 
+interface FermataAdjustment {
+  extraWholeNotes: number
+}
+
 export interface CountInInfo {
   bpm: number
   beatsPerBar: number
@@ -118,6 +122,7 @@ export class ScoreViewer {
   private measureTempoMap: Map<number, TempoInfo> = new Map([
     [0, { bpm: 120, beatUnitWholeNotes: 0.25 }],
   ])
+  private measureFermataAdjustments: Map<number, FermataAdjustment> = new Map()
   private initialTempo: TempoInfo = { bpm: 120, beatUnitWholeNotes: 0.25 }
 
   /** Called when the user clicks on the score. Argument is seconds into the piece. */
@@ -151,6 +156,7 @@ export class ScoreViewer {
     this.measureMetadata = this.extractMeasureMetadata(xmlText)
     this.meterInfo = this.measureMetadata[0]?.meter ?? this.extractMeterInfo(xmlText)
     this.measureTempoMap = this.buildMeasureTempoMap(xmlText)
+    this.measureFermataAdjustments = this.buildMeasureFermataAdjustmentMap(xmlText)
     this.countInInfo = {
       bpm: this.initialTempo.bpm,
       beatsPerBar: this.meterInfo.beatsPerBar,
@@ -344,6 +350,7 @@ export class ScoreViewer {
 
       if (!iterator.EndReached) {
         const nextEnrolledValue = this.getIteratorTimestamp(iterator)
+        const nextMeasureIdx: number = iterator.CurrentMeasureIndex ?? measureIdx
         const delta = nextEnrolledValue - enrolledValue
         if (delta > 0) {
           // Normal forward step: use the actual inter-step delta for accuracy.
@@ -354,6 +361,11 @@ export class ScoreViewer {
           // by exactly one beat.
           cumulativeSeconds += this.wholeNotesToSeconds(stepWholeNotes, tempo)
         }
+        cumulativeSeconds += this.getFermataAdjustmentSecondsForTransition(
+          measureIdx,
+          nextMeasureIdx,
+          tempo,
+        )
       }
     }
 
@@ -1224,6 +1236,60 @@ export class ScoreViewer {
     return result
   }
 
+  private buildMeasureFermataAdjustmentMap(xmlText: string): Map<number, FermataAdjustment> {
+    const result = new Map<number, FermataAdjustment>()
+
+    try {
+      const doc = new DOMParser().parseFromString(xmlText, 'application/xml')
+      if (doc.querySelector('parsererror')) {
+        return result
+      }
+
+      for (const part of Array.from(doc.getElementsByTagName('part'))) {
+        let divisions = 1
+        const measures = Array.from(part.children).filter((node) => node.tagName === 'measure')
+
+        for (let measureIndex = 0; measureIndex < measures.length; measureIndex += 1) {
+          const measure = measures[measureIndex] as Element
+          const parsedDivisions = Number(measure.querySelector('attributes > divisions')?.textContent?.trim())
+          if (Number.isFinite(parsedDivisions) && parsedDivisions > 0) {
+            divisions = parsedDivisions
+          }
+
+          let maxFermataNoteWholeNotes = 0
+          for (const note of Array.from(measure.children).filter((node) => node.tagName === 'note') as Element[]) {
+            if (!note.querySelector('notations fermata')) {
+              continue
+            }
+
+            const durationDivisions = Number(note.querySelector('duration')?.textContent?.trim())
+            if (!Number.isFinite(durationDivisions) || durationDivisions <= 0) {
+              continue
+            }
+
+            maxFermataNoteWholeNotes = Math.max(
+              maxFermataNoteWholeNotes,
+              durationDivisions / (divisions * 4),
+            )
+          }
+
+          if (maxFermataNoteWholeNotes > 0) {
+            const existing = result.get(measureIndex)?.extraWholeNotes ?? 0
+            result.set(measureIndex, {
+              // MuseScore's normal fermata playback approximately doubles the
+              // held note/rest. Add only the extra hold time to the OSMD map.
+              extraWholeNotes: Math.max(existing, maxFermataNoteWholeNotes),
+            })
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return result
+  }
+
   getCountInInfo(): CountInInfo {
     return this.countInInfo
   }
@@ -1407,6 +1473,27 @@ export class ScoreViewer {
     }
 
     return (wholeNotes * 60) / (tempo.bpm * tempo.beatUnitWholeNotes)
+  }
+
+  private getFermataAdjustmentSecondsForTransition(
+    measureIndex: number,
+    nextMeasureIndex: number,
+    tempo: TempoInfo,
+  ): number {
+    if (this.measureFermataAdjustments.size === 0 || nextMeasureIndex === measureIndex) {
+      return 0
+    }
+
+    let extraWholeNotes = 0
+    if (nextMeasureIndex > measureIndex) {
+      for (let index = measureIndex; index < nextMeasureIndex; index += 1) {
+        extraWholeNotes += this.measureFermataAdjustments.get(index)?.extraWholeNotes ?? 0
+      }
+    } else {
+      extraWholeNotes = this.measureFermataAdjustments.get(measureIndex)?.extraWholeNotes ?? 0
+    }
+
+    return this.wholeNotesToSeconds(extraWholeNotes, tempo)
   }
 
   private getMeasureDurationWholeNotes(measureIndex: number): number | null {

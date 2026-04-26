@@ -643,10 +643,7 @@
                 const totalCountInBeats =
                     Math.max(1, Math.floor(countInInfo.leadInBeats || 1)) +
                     Math.max(0, countInBars - 1) * countInInfo.beatsPerBar;
-                const startDelayBeats = Math.max(
-                    0,
-                    totalCountInBeats - Math.max(0, countInInfo.pickupBeats || 0),
-                );
+                const startDelayBeats = totalCountInBeats;
                 await player.play({
                     startDelaySeconds:
                         beatSeconds * startDelayBeats,

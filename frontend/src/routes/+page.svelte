@@ -89,10 +89,10 @@
                         </p>
                     {:else}
                         <div class="directory-stack library-accordion">
-                            {#each appShell.userLibrary as ensemble, index}
+                            {#each appShell.userLibrary as ensemble}
                                 <details
                                     class="directory-panel ensemble-accordion"
-                                    open={index === 0}
+                                    open
                                     style={ensembleAccent(ensemble.name)}
                                 >
                                     <summary class="ensemble-summary">
