@@ -50,6 +50,16 @@ impl Storage {
             .await
     }
 
+    pub async fn upload_bytes_quiet(
+        &self,
+        key: &str,
+        bytes: Bytes,
+        content_type: &str,
+    ) -> Result<()> {
+        self.upload_bytes_with_encoding_internal(key, bytes, content_type, None, false)
+            .await
+    }
+
     pub async fn upload_bytes_with_encoding(
         &self,
         key: &str,
@@ -57,17 +67,33 @@ impl Storage {
         content_type: &str,
         content_encoding: Option<&str>,
     ) -> Result<()> {
-        tracing::info!(
-            storage_key = key,
-            bytes = bytes.len(),
-            content_type,
-            content_encoding = content_encoding.unwrap_or(""),
-            backend = if self.is_s3() { "s3" } else { "local" },
-            "storage upload starting"
-        );
+        self.upload_bytes_with_encoding_internal(key, bytes, content_type, content_encoding, true)
+            .await
+    }
+
+    async fn upload_bytes_with_encoding_internal(
+        &self,
+        key: &str,
+        bytes: Bytes,
+        content_type: &str,
+        content_encoding: Option<&str>,
+        emit_logs: bool,
+    ) -> Result<()> {
+        debug_storage_marker("storage-upload-enter");
+        if emit_logs {
+            tracing::info!(
+                storage_key = key,
+                bytes = bytes.len(),
+                content_type,
+                content_encoding = content_encoding.unwrap_or(""),
+                backend = if self.is_s3() { "s3" } else { "local" },
+                "storage upload starting"
+            );
+        }
 
         match &self.backend {
             StorageBackend::Local { root } => {
+                debug_storage_marker("storage-upload-local-enter");
                 let path = path_for_key(root, key);
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent).await?;
@@ -75,14 +101,19 @@ impl Storage {
 
                 fs::write(path, bytes).await?;
                 let _ = (content_type, content_encoding);
-                tracing::info!(
-                    storage_key = key,
-                    backend = "local",
-                    "storage upload finished"
-                );
+                debug_storage_marker("storage-upload-local-after-write");
+                if emit_logs {
+                    tracing::info!(
+                        storage_key = key,
+                        backend = "local",
+                        "storage upload finished"
+                    );
+                }
+                debug_storage_marker("storage-upload-local-exit");
                 Ok(())
             }
             StorageBackend::S3 { bucket, client, .. } => {
+                debug_storage_marker("storage-upload-s3-enter");
                 let mut request = client
                     .put_object()
                     .bucket(bucket)
@@ -90,16 +121,22 @@ impl Storage {
                     .acl(ObjectCannedAcl::PublicRead)
                     .content_type(content_type)
                     .body(ByteStream::from(bytes.to_vec()));
+                debug_storage_marker("storage-upload-s3-after-request-build");
                 if let Some(content_encoding) = content_encoding {
                     request = request.content_encoding(content_encoding);
                 }
+                debug_storage_marker("storage-upload-s3-before-send");
                 request.send().await?;
-                tracing::info!(
-                    storage_key = key,
-                    bucket,
-                    backend = "s3",
-                    "storage upload finished"
-                );
+                debug_storage_marker("storage-upload-s3-after-send");
+                if emit_logs {
+                    tracing::info!(
+                        storage_key = key,
+                        bucket,
+                        backend = "s3",
+                        "storage upload finished"
+                    );
+                }
+                debug_storage_marker("storage-upload-s3-exit");
                 Ok(())
             }
         }
@@ -223,4 +260,13 @@ fn path_for_key(root: &Path, key: &str) -> PathBuf {
     key.split('/')
         .filter(|segment| !segment.is_empty())
         .fold(root.to_path_buf(), |path, segment| path.join(segment))
+}
+
+fn debug_storage_marker(message: &str) {
+    if std::env::var("PROCESSOR_DEBUG_MARKERS")
+        .ok()
+        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+    {
+        eprintln!("[processor-debug] {message}");
+    }
 }

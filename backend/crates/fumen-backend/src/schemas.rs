@@ -127,12 +127,20 @@ pub struct AdminMusicProcessingLogResponse {
     pub content: String,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AdminRetryMusicProcessingRequest {
+    pub quality_profile: Option<String>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AdminMusicProcessingStepResponse {
     pub key: String,
     pub label: String,
-    pub detail: String,
+    pub detail: Option<String>,
     pub status: String,
+    pub last_updated_at: Option<String>,
+    pub tooltip: Option<String>,
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

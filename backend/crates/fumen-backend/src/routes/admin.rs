@@ -6,12 +6,12 @@ use crate::models::{
 use crate::schema::{ensembles, music_ensemble_links, musics, user_ensemble_memberships, users};
 use crate::schemas::{
     AdminEnsembleResponse, AdminMusicPlaytimeResponse, AdminMusicProcessingLogResponse,
-    AdminMusicProcessingProgressResponse, AdminMusicResponse, AdminUpdateMusicMultipartRequest,
-    AdminUpdateUserMultipartRequest, AdminUploadMusicMultipartRequest, AdminUserMetadataResponse,
-    CreateEnsembleRequest, CreateUserRequest, EnsembleMemberResponse, ErrorResponse,
-    LoginLinkResponse, MoveMusicRequest, UpdateEnsembleMemberRequest,
-    UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest, UpdateMusicEnsemblesRequest,
-    UserResponse,
+    AdminMusicProcessingProgressResponse, AdminMusicResponse, AdminRetryMusicProcessingRequest,
+    AdminUpdateMusicMultipartRequest, AdminUpdateUserMultipartRequest,
+    AdminUploadMusicMultipartRequest, AdminUserMetadataResponse, CreateEnsembleRequest,
+    CreateUserRequest, EnsembleMemberResponse, ErrorResponse, LoginLinkResponse, MoveMusicRequest,
+    UpdateEnsembleMemberRequest, UpdateEnsembleMembersRequest, UpdateEnsembleScoresRequest,
+    UpdateMusicEnsemblesRequest, UserResponse,
 };
 use crate::services::{auth, music};
 use crate::{
@@ -1707,10 +1707,12 @@ pub(crate) async fn admin_music_processing_progress(
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     let processing_job = music::find_processing_job_by_music_id(&state.db_rw, &id).await?;
+    let processing_log = processing::load_music_processing_log(&state, &id).await;
 
     Ok(Json(music::build_admin_music_processing_progress_response(
         &record,
         processing_job.as_ref(),
+        &processing_log,
     )))
 }
 
@@ -1723,8 +1725,13 @@ pub(crate) async fn admin_music_processing_progress(
     params(
         ("id" = String, Path, description = "Music identifier")
     ),
+    request_body(
+        content = AdminRetryMusicProcessingRequest,
+        description = "Optional quality profile to use for the re-processing run"
+    ),
     responses(
         (status = 200, description = "Restarted score processing", body = AdminMusicResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 401, description = "Unauthorized", body = ErrorResponse),
         (status = 404, description = "Music not found", body = ErrorResponse),
         (status = 500, description = "Server error", body = ErrorResponse)
@@ -1734,6 +1741,7 @@ pub(crate) async fn admin_retry_render(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    payload: Option<Json<AdminRetryMusicProcessingRequest>>,
 ) -> Result<Json<AdminMusicResponse>, AppError> {
     let auth_context = auth::require_admin_context(&state, &headers).await?;
 
@@ -1741,8 +1749,17 @@ pub(crate) async fn admin_retry_render(
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
     music::ensure_can_manage_music(&state.db_rw, &auth_context, &id).await?;
-    let quality_profile =
-        audio::StemQualityProfile::from_stored_or_default(&record.quality_profile);
+    let requested_quality_profile = payload
+        .as_ref()
+        .and_then(|Json(payload)| payload.quality_profile.as_deref());
+    let quality_profile = requested_quality_profile.map_or_else(
+        || {
+            Ok(audio::StemQualityProfile::from_stored_or_default(
+                &record.quality_profile,
+            ))
+        },
+        |raw| parse_quality_profile(Some(raw)),
+    )?;
     let mut processing_log = processing::MusicProcessingLog::new(state.clone(), id.clone());
     processing_log
         .reset(&processing::build_processing_log_header(
@@ -1751,6 +1768,15 @@ pub(crate) async fn admin_retry_render(
             &quality_profile,
         ))
         .await;
+    if record.quality_profile != quality_profile.as_str() {
+        processing_log
+            .append(format!(
+                "Stem quality profile changed from {} to {} for re-processing.",
+                audio::StemQualityProfile::from_stored_or_default(&record.quality_profile).as_str(),
+                quality_profile.as_str(),
+            ))
+            .await;
+    }
     processing_log
         .append(format!(
             "Previous statuses: audio={}, midi={}, musicxml={}, stems={}.",
@@ -1760,6 +1786,12 @@ pub(crate) async fn admin_retry_render(
             processing::processing_statuses(&record)[3],
         ))
         .await;
+    let mut conn = state.db_rw.get().await?;
+    diesel::update(musics::table.find(&id))
+        .set(musics::quality_profile.eq(quality_profile.as_str()))
+        .execute(&mut conn)
+        .await?;
+    drop(conn);
     processing::reset_music_processing_state(&state, &record, &mut processing_log).await?;
     let safe_filename = sanitize_filename(&record.filename);
     processing::enqueue_music_processing_job(

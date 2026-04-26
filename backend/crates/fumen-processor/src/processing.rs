@@ -1,4 +1,4 @@
-use crate::audio::{self, StemQualityProfile};
+use crate::audio::{self, ProgressLogEvent, StemQualityProfile};
 use crate::db::DbPool;
 use crate::models::{MusicRecord, ProcessingJobRecord, UpdateMusicProcessing};
 use crate::schema::{musics, processing_jobs, stems};
@@ -31,6 +31,16 @@ pub(crate) const JOB_STEP_FINALIZING: &str = "finalizing";
 pub(crate) const JOB_STEP_COMPLETED: &str = "completed";
 pub(crate) const JOB_STEP_FAILED: &str = "failed";
 
+pub(crate) const LOG_STEP_QUEUE: &str = "queue";
+const LOG_STEP_INPUT: &str = "input";
+const LOG_STEP_MUSICXML: &str = "musicxml";
+const LOG_STEP_MIDI: &str = "midi";
+const LOG_STEP_PREVIEW_MP3: &str = "preview_mp3";
+const LOG_STEP_STEMS: &str = "stems";
+const LOG_STEP_COMPRESS_STEMS: &str = "compress_stems";
+pub(crate) const LOG_STEP_UPLOAD: &str = "upload_assets";
+const LOG_STEP_DONE: &str = "done";
+
 pub struct QueueProcessingJobRequest<'a> {
     pub music_id: &'a str,
     pub source_object_key: &'a str,
@@ -43,6 +53,7 @@ pub struct MusicProcessingLog {
     state: AppState,
     log_key: String,
     content: Arc<Mutex<String>>,
+    current_step: Arc<Mutex<Option<String>>>,
 }
 
 impl MusicProcessingLog {
@@ -52,37 +63,89 @@ impl MusicProcessingLog {
             state,
             log_key: music::processing_log_key(&music_id),
             content: Arc::new(Mutex::new(String::new())),
+            current_step: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub async fn set_step(&self, step: impl Into<String>) {
+        *self.current_step.lock().await = Some(step.into());
     }
 
     pub async fn reset(&mut self, lines: &[String]) {
         let mut content = self.content.lock().await;
         content.clear();
         for line in lines {
-            Self::push_line(&mut content, &format!("INFO {line}"));
+            Self::push_line(&mut content, None, &format!("INFO {line}"));
         }
         self.persist(content.clone()).await;
     }
 
     pub async fn append(&mut self, message: impl AsRef<str>) {
-        self.append_with_level("INFO", message).await;
+        self.append_with_level_and_step("INFO", message, None).await;
     }
 
     pub async fn append_warning(&mut self, message: impl AsRef<str>) {
-        self.append_with_level("WARNING", message).await;
+        self.append_with_level_and_step("WARNING", message, None)
+            .await;
     }
 
     pub async fn append_error(&mut self, message: impl AsRef<str>) {
-        self.append_with_level("ERROR", message).await;
+        self.append_with_level_and_step("ERROR", message, None)
+            .await;
     }
 
-    async fn append_with_level(&mut self, level: &str, message: impl AsRef<str>) {
-        let mut content = self.content.lock().await;
-        Self::push_line(&mut content, &format!("{level} {}", message.as_ref()));
-        self.persist(content.clone()).await;
+    pub async fn append_progress(&mut self, message: impl AsRef<str>) {
+        self.append_progress_with_step(message, None).await;
     }
 
-    fn push_line(content: &mut String, message: &str) {
+    pub async fn append_progress_with_step(
+        &mut self,
+        message: impl AsRef<str>,
+        explicit_step: Option<&str>,
+    ) {
+        if let Some(step) = explicit_step {
+            self.append_with_level_and_step("INFO", message, Some(step))
+                .await;
+            return;
+        }
+
+        let current_step = self.current_step.lock().await.clone();
+        let inferred_step = infer_log_step(message.as_ref(), current_step.as_deref());
+        self.append_with_level_and_step("INFO", message, inferred_step.as_deref())
+            .await;
+    }
+
+    async fn append_with_level_and_step(
+        &mut self,
+        level: &str,
+        message: impl AsRef<str>,
+        explicit_step: Option<&str>,
+    ) {
+        debug_marker("processing-log-append-enter");
+        let current_step = if explicit_step.is_some() {
+            None
+        } else {
+            self.current_step.lock().await.clone()
+        };
+        let step = explicit_step
+            .or(current_step.as_deref())
+            .map(ToOwned::to_owned);
+        let content_to_persist = {
+            let mut content = self.content.lock().await;
+            debug_marker("processing-log-append-after-lock");
+            Self::push_line(
+                &mut content,
+                step.as_deref(),
+                &format!("{level} {}", message.as_ref()),
+            );
+            content.clone()
+        };
+        debug_marker("processing-log-append-after-push-line");
+        self.persist(content_to_persist).await;
+        debug_marker("processing-log-append-after-persist");
+    }
+
+    fn push_line(content: &mut String, step: Option<&str>, message: &str) {
         let timestamp = chrono::Utc::now().to_rfc3339();
         for line in message.lines() {
             let line = line.trim_end();
@@ -92,42 +155,96 @@ impl MusicProcessingLog {
             content.push('[');
             content.push_str(&timestamp);
             content.push_str("] ");
+            if let Some(step) = step.filter(|value| !value.trim().is_empty()) {
+                content.push_str("[step=");
+                content.push_str(step);
+                content.push_str("] ");
+            }
             content.push_str(line);
             content.push('\n');
         }
     }
 
     async fn persist(&self, content: String) {
-        if let Err(error) = self
-            .state
-            .storage
-            .upload_bytes(
-                &self.log_key,
-                Bytes::from(content.into_bytes()),
-                PROCESSING_LOG_CONTENT_TYPE,
-            )
-            .await
-        {
+        debug_marker("processing-log-persist-enter");
+        let storage = self.state.storage.clone();
+        let log_key = self.log_key.clone();
+        let upload = tokio::spawn(async move {
+            storage
+                .upload_bytes_quiet(
+                    &log_key,
+                    Bytes::from(content.into_bytes()),
+                    PROCESSING_LOG_CONTENT_TYPE,
+                )
+                .await
+        });
+
+        if let Err(error) = match upload.await {
+            Ok(result) => result,
+            Err(error) => Err(error.into()),
+        } {
             tracing::warn!(
                 storage_key = %self.log_key,
                 error = ?error,
                 "failed to persist score processing log"
             );
         }
+        debug_marker("processing-log-persist-exit");
     }
 }
 
 pub(crate) fn spawn_processing_log_bridge(
     log: MusicProcessingLog,
 ) -> (audio::ProgressLogSender, tokio::task::JoinHandle<()>) {
-    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
+    let (sender, mut receiver) = mpsc::unbounded_channel::<ProgressLogEvent>();
     let handle = tokio::spawn(async move {
         let mut log = log;
-        while let Some(message) = receiver.recv().await {
-            log.append(message).await;
+        while let Some(event) = receiver.recv().await {
+            log.append_progress_with_step(event.message, event.step)
+                .await;
         }
     });
     (sender, handle)
+}
+
+fn infer_log_step(message: &str, current_step: Option<&str>) -> Option<String> {
+    let normalized = message.trim().to_ascii_lowercase();
+
+    if normalized.contains("score.musicxml") || normalized.contains("application/xml") {
+        return Some(LOG_STEP_MUSICXML.to_owned());
+    }
+
+    if normalized.contains("preview.mid") || normalized.contains("audio/midi") {
+        return Some(LOG_STEP_MIDI.to_owned());
+    }
+
+    if normalized.contains("preview.mp3")
+        || normalized.contains("audio/mpeg")
+        || normalized.starts_with("audio: ")
+    {
+        return Some(LOG_STEP_PREVIEW_MP3.to_owned());
+    }
+
+    if normalized.starts_with("stems: compressing [")
+        || normalized.starts_with("stems: compressed [")
+    {
+        return Some(LOG_STEP_COMPRESS_STEMS.to_owned());
+    }
+
+    if normalized.starts_with("upload: ")
+        || normalized.contains(" uploading ")
+        || normalized.contains(" uploaded ")
+        || normalized.contains("upload to s3")
+        || normalized.contains("upload to storage")
+    {
+        return Some(LOG_STEP_UPLOAD.to_owned());
+    }
+
+    if normalized.starts_with("stems: ") || normalized.contains("musescore-direct-stems") {
+        return Some(LOG_STEP_STEMS.to_owned());
+    }
+
+    current_step.map(ToOwned::to_owned)
 }
 
 pub async fn load_music_processing_log(state: &AppState, music_id: &str) -> String {
@@ -457,24 +574,34 @@ fn publish_step(step_sender: Option<&watch::Sender<String>>, step: &str) {
     }
 }
 
-#[tracing::instrument(
-    skip(state, log, step_sender),
-    fields(music_id = %job.music_id, quality_profile = %job.quality_profile, filename = %job.source_filename)
-)]
 pub(crate) async fn execute_processing_job(
     state: &AppState,
     job: &ProcessingJobRecord,
     log: &mut MusicProcessingLog,
     step_sender: Option<&watch::Sender<String>>,
 ) -> Result<(), AppError> {
+    debug_marker("execute-processing-job-enter");
+    tracing::info!(
+        music_id = %job.music_id,
+        quality_profile = %job.quality_profile,
+        filename = %job.source_filename,
+        "starting processing job execution"
+    );
     let quality_profile = StemQualityProfile::from_stored_or_default(&job.quality_profile);
+    debug_marker("execute-processing-job-after-quality-profile");
+    log.set_step(LOG_STEP_INPUT).await;
     publish_step(step_sender, JOB_STEP_FETCHING_INPUT);
-    log.append(format!(
+    debug_marker("execute-processing-job-after-publish-step");
+    debug_marker("execute-processing-job-before-fetch-log-format");
+    let fetch_log_message = format!(
         "Fetching source score from storage key {}.",
         job.source_object_key
-    ))
-    .await;
+    );
+    debug_marker("execute-processing-job-after-fetch-log-format");
+    log.append(fetch_log_message).await;
+    debug_marker("execute-processing-job-after-fetch-log");
     let (bytes, _, _) = state.storage.get_bytes(&job.source_object_key).await?;
+    debug_marker("execute-processing-job-after-get-bytes");
 
     let (progress_sender, progress_handle) = spawn_processing_log_bridge(log.clone());
     let processing_result = async {
@@ -491,6 +618,7 @@ pub(crate) async fn execute_processing_job(
         log.append("Temporary input file written. Starting conversion pipeline.")
             .await;
 
+        log.set_step(LOG_STEP_MUSICXML).await;
         publish_step(step_sender, JOB_STEP_GENERATING_CORE);
         let (audio_outcome, midi_outcome, musicxml_outcome) = tokio::try_join!(
             async {
@@ -527,6 +655,7 @@ pub(crate) async fn execute_processing_job(
         log.append("Audio, MIDI, and MusicXML conversion finished. Storing generated files.")
             .await;
 
+        log.set_step(LOG_STEP_STEMS).await;
         publish_step(step_sender, JOB_STEP_GENERATING_STEMS);
         let (stem_results, stems_status, stems_error) = audio::generate_stems(
             &state.config,
@@ -542,6 +671,41 @@ pub(crate) async fn execute_processing_job(
         ))
         .await;
 
+        let mut upload_asset_count = stem_results.len();
+        let mut upload_total_bytes = music::estimated_upload_bytes_for_stems(&stem_results);
+        if let Some(bytes) =
+            music::estimated_upload_bytes_for_conversion(state.storage.is_s3(), "audio", &audio_outcome)?
+        {
+            upload_asset_count += 1;
+            upload_total_bytes += bytes;
+        }
+        if let Some(bytes) =
+            music::estimated_upload_bytes_for_conversion(state.storage.is_s3(), "midi", &midi_outcome)?
+        {
+            upload_asset_count += 1;
+            upload_total_bytes += bytes;
+        }
+        if let Some(bytes) = music::estimated_upload_bytes_for_conversion(
+            state.storage.is_s3(),
+            "musicxml",
+            &musicxml_outcome,
+        )? {
+            upload_asset_count += 1;
+            upload_total_bytes += bytes;
+        }
+
+        log.append(format!(
+            "Upload phase prepared {upload_asset_count} asset(s) totaling {upload_total_bytes} bytes."
+        ))
+        .await;
+        let _ = progress_sender.send(ProgressLogEvent {
+            message: format!(
+                "upload: prepared {upload_asset_count} asset(s) totaling {upload_total_bytes} bytes."
+            ),
+            step: Some(LOG_STEP_UPLOAD),
+        });
+
+        log.set_step(LOG_STEP_UPLOAD).await;
         publish_step(step_sender, JOB_STEP_UPLOADING_ASSETS);
         tokio::try_join!(
             music::store_conversion(
@@ -587,6 +751,7 @@ pub(crate) async fn execute_processing_job(
         (stems_status, stems_error),
     ) = processing_result?;
 
+    log.set_step(LOG_STEP_DONE).await;
     log.append(format!("Audio status: {audio_status}.")).await;
     if let Some(error) = audio_error.as_deref() {
         log.append(format!("Audio detail: {error}")).await;
@@ -627,4 +792,13 @@ pub(crate) async fn execute_processing_job(
     log.append("Processing completed. Database state updated.")
         .await;
     Ok(())
+}
+
+fn debug_marker(message: &str) {
+    if std::env::var("PROCESSOR_DEBUG_MARKERS")
+        .ok()
+        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+    {
+        eprintln!("[processor-debug] {message}");
+    }
 }

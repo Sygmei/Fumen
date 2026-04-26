@@ -10,6 +10,7 @@ export interface ParsedLogLine {
     level?: string;
     message: string;
     metadata?: string;
+    group?: string;
 }
 
 export type LogProviderParseResult =
@@ -32,6 +33,7 @@ export type LogProviderParseResult =
 
 export interface LogProvider {
     parseLine(line: string, lineIndex: number): LogProviderParseResult;
+    groupEntries?(entries: LogEntry[]): LogEntry[];
     normalizeLevel?(level: string): string;
     linkify?(text: string, line: ParsedLogLine): LogTextPart[];
     levelOrder?: string[];
@@ -48,6 +50,7 @@ export interface LogLineEntry {
     normalizedLevel?: string;
     message: string;
     metadata?: string;
+    group?: string;
     messageParts: LogTextPart[];
 }
 

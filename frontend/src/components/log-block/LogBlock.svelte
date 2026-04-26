@@ -65,7 +65,6 @@
         const entries: LogEntry[] = [];
         const groupStack: LogGroupEntry[] = [];
         const levels: string[] = [];
-        const groupIds: string[] = [];
 
         const lines = splitInputLines(rawLogs);
 
@@ -98,7 +97,6 @@
 
                 appendEntry(groupEntry);
                 groupStack.push(groupEntry);
-                groupIds.push(groupEntry.id);
                 continue;
             }
 
@@ -128,13 +126,29 @@
                 normalizedLevel,
                 message: parsed.line.message,
                 metadata: parsed.line.metadata,
+                group: parsed.line.group,
                 messageParts: linkify(parsed.line.message, parsed.line),
             };
 
             appendEntry(lineEntry);
         }
 
-        return { entries, levels, groupIds };
+        const groupedEntries = logProvider.groupEntries?.(entries) ?? entries;
+
+        return { entries: groupedEntries, levels, groupIds: collectGroupIds(groupedEntries) };
+    }
+
+    function collectGroupIds(entries: LogEntry[]): string[] {
+        const groupIds: string[] = [];
+        for (const entry of entries) {
+            if (entry.kind !== "group") {
+                continue;
+            }
+
+            groupIds.push(entry.id);
+            groupIds.push(...collectGroupIds(entry.entries));
+        }
+        return groupIds;
     }
 
     const parsedData = $derived(parseEntries(logs, provider));

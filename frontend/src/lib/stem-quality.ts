@@ -1,10 +1,15 @@
-export type StemQualityProfile = 'standard' | 'small' | 'very-small' | 'tiny'
+export type StemQualityProfile = 'standard' | 'balanced' | 'small' | 'very-small' | 'tiny'
 
 export const STEM_QUALITY_PROFILES: Array<{
   value: StemQualityProfile
   label: string
   description: string
 }> = [
+  {
+    value: 'balanced',
+    label: 'Balanced',
+    description: 'Recompress stems with Opus 40k for a smaller size while keeping good quality.',
+  },
   {
     value: 'standard',
     label: 'Standard',

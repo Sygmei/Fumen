@@ -1,5 +1,5 @@
-use crate::audio::{ConversionOutcome, ProgressLogSender, StemResult};
-use crate::{AppError, AppState};
+use crate::audio::{ConversionOutcome, ProgressLogSender, StemResult, emit_progress_with_step};
+use crate::{AppError, AppState, processing};
 use bytes::Bytes;
 use diesel_async::RunQueryDsl;
 use flate2::{Compression, write::GzEncoder};
@@ -31,6 +31,7 @@ pub async fn store_stems(
 
     emit_storage_progress(
         progress_log,
+        processing::LOG_STEP_UPLOAD,
         format!("stems: uploading {total} rendered stem file(s) to {storage_target}."),
     );
 
@@ -45,11 +46,13 @@ pub async fn store_stems(
             .map_err(|error| AppError::from(anyhow::Error::from(error)))?;
         emit_storage_progress(
             progress_log,
+            processing::LOG_STEP_UPLOAD,
             format!(
-                "stems: uploading [{}/{}] '{}' to {storage_target} as {}.",
+                "stems: uploading [{}/{}] '{}' ({} KB) to {storage_target} as {}.",
                 index + 1,
                 total,
                 stem.track_name,
+                size_bytes / 1024,
                 storage_key,
             ),
         );
@@ -59,6 +62,7 @@ pub async fn store_stems(
             .await?;
         emit_storage_progress(
             progress_log,
+            processing::LOG_STEP_UPLOAD,
             format!(
                 "stems: uploaded [{}/{}] '{}' to {storage_target} ({} KB).",
                 index + 1,
@@ -84,6 +88,7 @@ pub async fn store_stems(
 
     emit_storage_progress(
         progress_log,
+        processing::LOG_STEP_UPLOAD,
         format!("stems: upload to {storage_target} completed."),
     );
     Ok((status, error))
@@ -116,6 +121,7 @@ pub async fn store_conversion(
             };
             emit_storage_progress(
                 progress_log,
+                processing::LOG_STEP_UPLOAD,
                 format!(
                     "{kind}: uploading {} KB to {storage_target} as {}.",
                     stored_bytes.len() / 1024,
@@ -133,6 +139,7 @@ pub async fn store_conversion(
                 .await?;
             emit_storage_progress(
                 progress_log,
+                processing::LOG_STEP_UPLOAD,
                 format!("{kind}: upload to {storage_target} completed."),
             );
             Ok((Some(object_key), "ready".to_owned(), None))
@@ -147,10 +154,33 @@ pub async fn store_conversion(
     }
 }
 
-fn emit_storage_progress(progress_log: Option<&ProgressLogSender>, message: impl Into<String>) {
-    if let Some(progress_log) = progress_log {
-        let _ = progress_log.send(message.into());
+pub fn estimated_upload_bytes_for_conversion(
+    storage_is_s3: bool,
+    kind: &str,
+    outcome: &ConversionOutcome,
+) -> Result<Option<usize>, AppError> {
+    match outcome {
+        ConversionOutcome::Ready { bytes, .. } => {
+            if kind == "musicxml" && storage_is_s3 {
+                Ok(Some(gzip_bytes(bytes)?.len()))
+            } else {
+                Ok(Some(bytes.len()))
+            }
+        }
+        ConversionOutcome::Unavailable { .. } | ConversionOutcome::Failed { .. } => Ok(None),
     }
+}
+
+pub fn estimated_upload_bytes_for_stems(stems: &[StemResult]) -> usize {
+    stems.iter().map(|stem| stem.bytes.len()).sum()
+}
+
+fn emit_storage_progress(
+    progress_log: Option<&ProgressLogSender>,
+    step: &'static str,
+    message: impl Into<String>,
+) {
+    emit_progress_with_step(progress_log, step, message);
 }
 
 fn gzip_bytes(bytes: &Bytes) -> Result<Bytes, AppError> {

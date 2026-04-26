@@ -18,11 +18,12 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
 use zip::ZipArchive;
 
-pub const DEFAULT_STEM_QUALITY_PROFILE: &str = "standard";
+pub const DEFAULT_STEM_QUALITY_PROFILE: &str = "balanced";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StemQualityProfile {
     Standard,
+    Balanced,
     Small,
     VerySmall,
     Tiny,
@@ -32,6 +33,7 @@ impl StemQualityProfile {
     pub fn from_slug(value: &str) -> Option<Self> {
         match value.trim().to_lowercase().as_str() {
             "standard" => Some(Self::Standard),
+            "balanced" | "balance" | "medium" | "40k" => Some(Self::Balanced),
             "small" | "compact" => Some(Self::Small),
             "very-small" | "very_small" | "verysmall" | "high" => Some(Self::VerySmall),
             "tiny" => Some(Self::Tiny),
@@ -46,6 +48,7 @@ impl StemQualityProfile {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Standard => "standard",
+            Self::Balanced => "balanced",
             Self::Small => "small",
             Self::VerySmall => "very-small",
             Self::Tiny => "tiny",
@@ -55,6 +58,7 @@ impl StemQualityProfile {
     pub fn opus_bitrate(self) -> Option<&'static str> {
         match self {
             Self::Standard => None,
+            Self::Balanced => Some("40k"),
             Self::Small => Some("24k"),
             Self::VerySmall => Some("16k"),
             Self::Tiny => Some("12k"),
@@ -214,7 +218,13 @@ pub struct StemResult {
 }
 
 type DrumsetMappingMap = HashMap<String, Vec<DrumMapEntry>>;
-pub type ProgressLogSender = UnboundedSender<String>;
+#[derive(Clone, Debug)]
+pub struct ProgressLogEvent {
+    pub message: String,
+    pub step: Option<&'static str>,
+}
+
+pub type ProgressLogSender = UnboundedSender<ProgressLogEvent>;
 
 struct TrackInfo {
     /// Index into the original MIDI track list / raw MTrk chunk list.
@@ -226,7 +236,23 @@ struct TrackInfo {
 
 fn emit_progress(progress_log: Option<&ProgressLogSender>, message: impl Into<String>) {
     if let Some(progress_log) = progress_log {
-        let _ = progress_log.send(message.into());
+        let _ = progress_log.send(ProgressLogEvent {
+            message: message.into(),
+            step: None,
+        });
+    }
+}
+
+pub(crate) fn emit_progress_with_step(
+    progress_log: Option<&ProgressLogSender>,
+    step: &'static str,
+    message: impl Into<String>,
+) {
+    if let Some(progress_log) = progress_log {
+        let _ = progress_log.send(ProgressLogEvent {
+            message: message.into(),
+            step: Some(step),
+        });
     }
 }
 
@@ -530,6 +556,10 @@ async fn generate_stems_with_musescore(
                             &stem_ogg_path,
                             &stem_compressed_path,
                             quality_profile,
+                            stem_idx,
+                            total,
+                            &track_label,
+                            progress_log.as_ref(),
                         )
                         .await?
                     } else {
@@ -1087,13 +1117,16 @@ async fn convert_with_musescore(
         });
     };
 
+    let input_label = input_path.file_name().unwrap_or_default().to_string_lossy();
+    let output_label = output_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+
     tracing::info!(
-        "musescore: converting '{}' → {}",
-        input_path.file_name().unwrap_or_default().to_string_lossy(),
-        output_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy(),
+        "musescore: converting '{}' -> {}",
+        input_label,
+        output_label,
     );
     emit_progress(
         progress_log,
@@ -1104,11 +1137,8 @@ async fn convert_with_musescore(
             input_path.display(),
             output_path.display(),
             extension,
-            input_path.file_name().unwrap_or_default().to_string_lossy(),
-            output_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy(),
+            input_label,
+            output_label,
         ),
     );
 
@@ -1162,16 +1192,21 @@ async fn convert_with_musescore(
         .await
         .with_context(|| format!("failed to read generated file at {}", output_path.display()))?;
 
-    tracing::info!("musescore: done ({} KB)", bytes.len() / 1024,);
+    tracing::info!(
+        "musescore: done {} ({} KB)",
+        output_label,
+        bytes.len() / 1024,
+    );
     emit_progress(
         progress_log,
         format!(
-            "convert_with_musescore{{content_type=\"{}\" extension=\"{}\" input_path={} output_path={} format=\"{}\"}}: musescore: done ({} KB)",
+            "convert_with_musescore{{content_type=\"{}\" extension=\"{}\" input_path={} output_path={} format=\"{}\"}}: musescore: done {} ({} KB)",
             content_type,
             extension,
             input_path.display(),
             output_path.display(),
             extension,
+            output_label,
             bytes.len() / 1024,
         ),
     );
@@ -1213,6 +1248,10 @@ async fn recompress_ogg_stem(
     input_path: &Path,
     output_path: &Path,
     quality_profile: StemQualityProfile,
+    stem_idx: usize,
+    total: usize,
+    track_label: &str,
+    progress_log: Option<&ProgressLogSender>,
 ) -> Result<Bytes> {
     let Some(bitrate) = quality_profile.opus_bitrate() else {
         return tokio::fs::read(input_path)
@@ -1220,6 +1259,24 @@ async fn recompress_ogg_stem(
             .map(Bytes::from)
             .with_context(|| format!("failed to read {}", input_path.display()));
     };
+
+    tracing::info!(
+        "stems: [{}/{}] '{}' - compressing with Opus {}",
+        stem_idx + 1,
+        total,
+        track_label,
+        bitrate
+    );
+    emit_progress(
+        progress_log,
+        format!(
+            "stems: compressing [{}/{}] '{}' with Opus {}.",
+            stem_idx + 1,
+            total,
+            track_label,
+            bitrate
+        ),
+    );
 
     let command_output = Command::new(ffmpeg_binary)
         .arg("-y")
@@ -1261,10 +1318,29 @@ async fn recompress_ogg_stem(
         );
     }
 
-    tokio::fs::read(output_path)
+    let bytes = tokio::fs::read(output_path)
         .await
         .map(Bytes::from)
-        .with_context(|| format!("failed to read {}", output_path.display()))
+        .with_context(|| format!("failed to read {}", output_path.display()))?;
+    tracing::info!(
+        "stems: [{}/{}] '{}' - compressed to {} KB",
+        stem_idx + 1,
+        total,
+        track_label,
+        bytes.len() / 1024
+    );
+    emit_progress(
+        progress_log,
+        format!(
+            "stems: compressed [{}/{}] '{}' to {} KB.",
+            stem_idx + 1,
+            total,
+            track_label,
+            bytes.len() / 1024
+        ),
+    );
+
+    Ok(bytes)
 }
 
 fn gm_instrument_name(program: u8, is_percussion: bool) -> &'static str {

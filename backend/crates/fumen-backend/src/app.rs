@@ -255,7 +255,7 @@ pub(crate) fn parse_quality_profile(
 
     audio::StemQualityProfile::from_slug(value).ok_or_else(|| {
         AppError::bad_request(
-            "Invalid quality profile. Use one of: standard, small, very-small, tiny.",
+            "Invalid quality profile. Use one of: standard, balanced, small, very-small, tiny.",
         )
     })
 }

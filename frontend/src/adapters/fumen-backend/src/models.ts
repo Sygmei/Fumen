@@ -29,6 +29,10 @@ export interface AdminMusicProcessingLogResponse {
   content: string;
 }
 
+export interface AdminRetryMusicProcessingRequest {
+  quality_profile?: string | null;
+}
+
 export interface AdminMusicProcessingProgressResponse {
   music_id: string;
   processing_job_attempt?: number | null;
@@ -43,10 +47,13 @@ export interface AdminMusicProcessingProgressResponse {
 }
 
 export interface AdminMusicProcessingStepResponse {
-  detail: string;
+  detail?: string | null;
+  group?: string | null;
   key: string;
   label: string;
+  last_updated_at?: string | null;
   status: string;
+  tooltip?: string | null;
 }
 
 

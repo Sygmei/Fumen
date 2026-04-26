@@ -14,6 +14,11 @@
         prettyDate,
         qualityProfileLabel,
     } from "$lib/utils";
+    import {
+        STEM_QUALITY_PROFILES,
+        type StemQualityProfile,
+    } from "$lib/stem-quality";
+    import CustomSelect from "$components/CustomSelect.svelte";
     import LogBlock from "$components/log-block/LogBlock.svelte";
     import BaseModal from "./BaseModal.svelte";
 
@@ -39,11 +44,30 @@
         ) => Promise<AdminMusicProcessingProgressResponse>;
         reloadMusic: (musicId: string) => Promise<AdminMusic>;
         canViewProcessingLog?: boolean;
-        onRetryRender: (musicId: string) => Promise<AdminMusic>;
+        onRetryRender: (
+            musicId: string,
+            qualityProfile?: StemQualityProfile,
+        ) => Promise<AdminMusic>;
         modalId?: string;
     } = $props();
 
+    const qualityOptions = STEM_QUALITY_PROFILES.map((profile) => ({
+        value: profile.value,
+        label: profile.label,
+        description: profile.description,
+    }));
+
+    function normalizeStemQualityProfile(value?: string | null): StemQualityProfile {
+        return (
+            STEM_QUALITY_PROFILES.find((profile) => profile.value === value)
+                ?.value ?? "balanced"
+        );
+    }
+
     let currentMusic = $state(music);
+    let retryQualityProfile = $state<StemQualityProfile>(
+        normalizeStemQualityProfile(music.quality_profile),
+    );
     let playtime = $state<AdminMusicPlaytime | null>(null);
     let playtimeLoading = $state(true);
     let playtimeError = $state("");
@@ -66,8 +90,16 @@
     type ProcessingStep = {
         key: string;
         label: string;
-        detail: string;
+        detail?: string | null;
+        last_updated_at?: string | null;
         status: ProcessingStepStatus;
+        tooltip?: string | null;
+        group?: string | null;
+    };
+    type ProcessingGridStep = {
+        step: ProcessingStep;
+        column: number;
+        row: number;
     };
 
     function processingStatuses(item: AdminMusic) {
@@ -161,11 +193,29 @@
                     label: "MusicXML",
                     detail: "notation export",
                     status: "pending",
+                    group: "core_exports",
+                },
+                {
+                    key: "midi",
+                    label: "MIDI",
+                    status: "pending",
+                    group: "core_exports",
+                },
+                {
+                    key: "preview_mp3",
+                    label: "Audio",
+                    status: "pending",
+                    group: "core_exports",
                 },
                 {
                     key: "stems",
                     label: "Stems",
                     detail: "track render",
+                    status: "pending",
+                },
+                {
+                    key: "compress_stems",
+                    label: "Compress",
                     status: "pending",
                 },
                 {
@@ -205,6 +255,32 @@
                     line.includes("application/xml") &&
                     line.includes("musescore: done"),
             );
+        const hasMidiDoneLine =
+            logHasLine(
+                logText,
+                (line) =>
+                    line.includes("preview.mid") &&
+                    line.includes("musescore: done"),
+            ) ||
+            logHasLine(
+                logText,
+                (line) =>
+                    line.includes("audio/midi") &&
+                    line.includes("musescore: done"),
+            );
+        const hasPreviewDoneLine =
+            logHasLine(
+                logText,
+                (line) =>
+                    line.includes("preview.mp3") &&
+                    line.includes("musescore: done"),
+            ) ||
+            logHasLine(
+                logText,
+                (line) =>
+                    line.includes("audio/mpeg") &&
+                    line.includes("musescore: done"),
+            );
         const hasStemRenderActivity =
             lower.includes("stems: exporting midi from score") ||
             lower.includes("stems: found ") ||
@@ -217,6 +293,9 @@
             lower.includes("upload to s3") ||
             lower.includes("upload to storage") ||
             lower.includes("database state updated");
+        const hasCompressionActivity =
+            lower.includes("stems: compressing [") ||
+            lower.includes("stems: compressed [");
         const isReady = isReadyMusic(item);
         const isComplete =
             lower.includes("processing completed. database state updated.") ||
@@ -232,12 +311,23 @@
             item.musicxml_status !== "processing" ||
             hasMusicxmlCompletion ||
             hasMusicxmlDoneLine;
+        const midiDone =
+            item.midi_status !== "processing" ||
+            hasMusicxmlCompletion ||
+            hasMidiDoneLine;
+        const previewDone =
+            item.audio_status !== "processing" ||
+            hasMusicxmlCompletion ||
+            hasPreviewDoneLine;
         const stemsStarted = jobStep === "generating_stems" || hasStemRenderActivity;
         const stemsDone =
             item.stems_status !== "processing" ||
             lower.includes("stem generation finished") ||
             lower.includes("stems: upload") ||
             lower.includes("stems status:");
+        const compressionDone =
+            item.stems_status !== "processing" ||
+            (hasCompressionActivity && lower.includes("stem generation finished"));
         const storageStarted = hasStorageActivity || (stemsDone && !isComplete);
         const storageDone = isComplete;
         const leaseExpired = processingJobLeaseExpired(item) && !isComplete && !failed;
@@ -246,16 +336,24 @@
         if (failed) {
             if (item.musicxml_status === "failed") {
                 failedIndex = 2;
-            } else if (item.stems_status === "failed") {
+            } else if (item.midi_status === "failed") {
                 failedIndex = 3;
-            } else if (item.audio_status === "failed" || item.midi_status === "failed") {
-                failedIndex = stemsDone ? 4 : 2;
+            } else if (item.audio_status === "failed") {
+                failedIndex = 4;
+            } else if (item.stems_status === "failed") {
+                failedIndex = hasCompressionActivity ? 6 : 5;
             } else if (!musicxmlDone) {
                 failedIndex = 2;
-            } else if (!stemsDone) {
+            } else if (!midiDone) {
                 failedIndex = 3;
-            } else {
+            } else if (!previewDone) {
                 failedIndex = 4;
+            } else if (!stemsDone) {
+                failedIndex = 5;
+            } else if (hasCompressionActivity && !compressionDone) {
+                failedIndex = 6;
+            } else {
+                failedIndex = 7;
             }
         }
 
@@ -273,12 +371,26 @@
             {
                 key: "musicxml",
                 label: "MusicXML",
-                detail: "notation export",
+                group: "core_exports",
+            },
+            {
+                key: "midi",
+                label: "MIDI",
+                group: "core_exports",
+            },
+            {
+                key: "preview_mp3",
+                label: "Audio",
+                group: "core_exports",
             },
             {
                 key: "stems",
                 label: "Stems",
                 detail: "track render",
+            },
+            {
+                key: "compress_stems",
+                label: "Compress",
             },
             {
                 key: "storage",
@@ -299,6 +411,9 @@
             "worker lease expired",
             "worker lease expired",
             "worker lease expired",
+            "worker lease expired",
+            "worker lease expired",
+            "worker lease expired",
         ];
 
         const statuses: ProcessingStepStatus[] = [
@@ -313,9 +428,24 @@
                 : jobStep === "generating_core" || inputDone
                   ? "active"
                   : "pending",
+            midiDone
+                ? "done"
+                : jobStep === "generating_core" || inputDone
+                  ? "active"
+                  : "pending",
+            previewDone
+                ? "done"
+                : jobStep === "generating_core" || inputDone
+                  ? "active"
+                  : "pending",
             stemsDone
                 ? "done"
                 : stemsStarted
+                  ? "active"
+                  : "pending",
+            compressionDone
+                ? "done"
+                : hasCompressionActivity || (jobStep === "generating_stems" && stemsDone)
                   ? "active"
                   : "pending",
             storageDone
@@ -343,11 +473,13 @@
         } else if (leaseExpired) {
             const stalledIndex =
                 jobStep === "finalizing"
-                    ? 5
+                    ? 8
                     : jobStep === "uploading_assets"
-                      ? 4
+                      ? 7
                       : jobStep === "generating_stems"
-                        ? 3
+                        ? hasCompressionActivity
+                            ? 6
+                            : 5
                         : jobStep === "generating_core"
                           ? 2
                           : 1;
@@ -375,12 +507,19 @@
             ? processingProgress.steps.map((step) => ({
                   ...step,
                   status: step.status as ProcessingStepStatus,
-              }))
+                }))
             : deriveProcessingSteps(currentMusic, processingLog),
     );
+    const processingGridSteps = $derived(buildProcessingGrid(processingSteps));
     const processingStallMessage = $derived(
         processingProgress?.state_message || processingJobStallMessage(currentMusic),
     );
+
+    function stepTooltip(step: ProcessingStep) {
+        return step.tooltip || (step.last_updated_at
+            ? `Last update: ${step.last_updated_at}`
+            : "");
+    }
 
     async function refreshCurrentMusic() {
         currentMusic = await reloadMusic(currentMusic.id);
@@ -490,7 +629,13 @@
         retrying = true;
         retryError = "";
         try {
-            currentMusic = await onRetryRender(currentMusic.id);
+            currentMusic = await onRetryRender(
+                currentMusic.id,
+                retryQualityProfile,
+            );
+            retryQualityProfile = normalizeStemQualityProfile(
+                currentMusic.quality_profile,
+            );
             await Promise.all([
                 refreshProcessingLog(),
                 refreshProcessingProgress(),
@@ -534,6 +679,46 @@
         anchor.remove();
 
         setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    }
+
+    function buildProcessingGrid(steps: ProcessingStep[]): ProcessingGridStep[] {
+        const slots: Array<{
+            column: number;
+            row: number;
+            keys: string[];
+        }> = [
+            { column: 1, row: 2, keys: ["upload", "input"] },
+            { column: 2, row: 2, keys: ["queue"] },
+            { column: 3, row: 1, keys: ["musicxml"] },
+            { column: 3, row: 2, keys: ["midi"] },
+            { column: 3, row: 3, keys: ["preview_mp3"] },
+            { column: 4, row: 2, keys: ["stems"] },
+            { column: 5, row: 2, keys: ["compress_stems"] },
+            { column: 6, row: 2, keys: ["storage", "upload_assets"] },
+            { column: 7, row: 2, keys: ["ready", "done"] },
+        ];
+
+        const used = new Set<string>();
+        const placed: ProcessingGridStep[] = [];
+
+        for (const slot of slots) {
+            const step = steps.find(
+                (candidate) =>
+                    !used.has(candidate.key) && slot.keys.includes(candidate.key),
+            );
+            if (!step) {
+                continue;
+            }
+
+            used.add(step.key);
+            placed.push({
+                step,
+                column: slot.column,
+                row: slot.row,
+            });
+        }
+
+        return placed;
     }
 </script>
 
@@ -628,14 +813,26 @@
                     >
                         Download log
                     </button>
-                    {#if currentMusic.stems_status !== "ready" && canEditOwnedScore(currentMusic, currentUser)}
+                    {#if canEditOwnedScore(currentMusic, currentUser)}
+                        <label class="processing-retry-controls">
+                            <span class="processing-retry-inline-label">Re-process as</span>
+                            <div class="processing-quality-select">
+                                <CustomSelect
+                                    bind:value={retryQualityProfile}
+                                    options={qualityOptions}
+                                    compact={true}
+                                    showDescriptionInTrigger={false}
+                                    disabled={retrying}
+                                />
+                            </div>
+                        </label>
                         <button
                             class="button ghost"
                             type="button"
                             disabled={retrying}
                             onclick={() => void handleRetryRender()}
                         >
-                            {retrying ? "Restarting processing..." : "Restart processing"}
+                            {retrying ? "Re-processing..." : "Re-process"}
                         </button>
                     {/if}
                 </div>
@@ -657,21 +854,25 @@
             {#if !processingProgressError && !processingLogError && !retryError && processingLogLoading}
                 <p class="hint">Loading processing log...</p>
             {:else if !processingProgressError && !processingLogError && !retryError && (processingLog || processingSteps.length)}
-                <div class="processing-journey" aria-label="Processing progress">
-                    {#each processingSteps as step, index (step.key)}
-                        <article class={`processing-stop is-${step.status}`}>
-                            <div class="processing-stop-rail" aria-hidden="true">
-                                <span class="processing-stop-node"></span>
-                                {#if index < processingSteps.length - 1}
-                                    <span class="processing-stop-connector"></span>
-                                {/if}
-                            </div>
+                <div class="processing-journey-shell">
+                    <div class="processing-journey" aria-label="Processing progress">
+                        {#each processingGridSteps as cell (cell.step.key)}
+                            {@const step = cell.step}
+                        <article
+                            class={`processing-stop is-${step.status} processing-cell row-${cell.row} ${stepTooltip(step) ? "has-tooltip" : ""}`}
+                            title={stepTooltip(step)}
+                            style={`grid-column: ${cell.column}; grid-row: ${cell.row};`}
+                        >
+                            <span class="processing-stop-node" aria-hidden="true"></span>
                             <div class="processing-stop-copy">
                                 <strong>{step.label}</strong>
-                                <span>{step.detail}</span>
+                                {#if step.detail}
+                                    <span>{step.detail}</span>
+                                {/if}
                             </div>
                         </article>
-                    {/each}
+                        {/each}
+                    </div>
                 </div>
                 <LogBlock
                     logs={processingLog}

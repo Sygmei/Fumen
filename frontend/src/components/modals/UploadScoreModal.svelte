@@ -30,7 +30,7 @@
     let title = $state("");
     let subtitle = $state("");
     let publicId = $state("");
-    let qualityProfile = $state<StemQualityProfile>("standard");
+    let qualityProfile = $state<StemQualityProfile>("balanced");
     let selectedFile = $state<File | null>(null);
     let selectedIconFile = $state<File | null>(null);
     let selectedEnsembleIds = $state(ensembles[0] ? [ensembles[0].id] : []);

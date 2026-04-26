@@ -314,12 +314,20 @@
         return authenticatedApiClient.adminMusicPlaytime(musicId);
     }
 
-    async function handleRestartProcessing(musicId: string) {
+    async function handleRestartProcessing(
+        musicId: string,
+        qualityProfile?: string,
+    ) {
         restartingMusicIds = [...restartingMusicIds, musicId];
         try {
-            const updated = await authenticatedApiClient.adminRetryRender(musicId);
+            const updated = await authenticatedApiClient.adminRetryRender(
+                musicId,
+                qualityProfile ? { quality_profile: qualityProfile } : undefined,
+            );
             adminState.updateMusic(updated);
-            adminState.setSuccess("Processing restarted.");
+            adminState.setSuccess(
+                `Processing restarted with ${qualityProfileLabel(updated.quality_profile)} quality.`,
+            );
             return updated;
         } catch (error) {
             const message =

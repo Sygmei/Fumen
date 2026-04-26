@@ -82,13 +82,16 @@ async fn run_claimed_job(
     );
 
     let mut log = processing::MusicProcessingLog::new(state.clone(), job.music_id.clone());
+    log.set_step(processing::LOG_STEP_QUEUE).await;
     log.append(format!(
         "Processor worker {worker_id} claimed attempt {}.",
         job.attempt
     ))
     .await;
+    debug_marker("after-claim-log-append");
 
     let (step_sender, step_receiver) = tokio::sync::watch::channel(job.current_step.clone());
+    debug_marker("after-step-channel");
     let heartbeat_state = state.clone();
     let heartbeat_music_id = job.music_id.clone();
     let heartbeat_worker_id = worker_id.to_owned();
@@ -117,9 +120,12 @@ async fn run_claimed_job(
             }
         }
     });
+    debug_marker("after-heartbeat-spawn");
 
+    debug_marker("before-execute-processing-job");
     let result =
         processing::execute_processing_job(state, &job, &mut log, Some(&step_sender)).await;
+    debug_marker("after-execute-processing-job");
 
     heartbeat_handle.abort();
     let _ = heartbeat_handle.await;
@@ -164,4 +170,13 @@ fn default_worker_id() -> String {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "processor".to_owned());
     format!("{hostname}-{}", Uuid::new_v4().simple())
+}
+
+fn debug_marker(message: &str) {
+    if std::env::var("PROCESSOR_DEBUG_MARKERS")
+        .ok()
+        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "on"))
+    {
+        eprintln!("[processor-debug] {message}");
+    }
 }

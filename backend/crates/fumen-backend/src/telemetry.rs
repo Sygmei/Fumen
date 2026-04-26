@@ -6,7 +6,7 @@ use axum::{
     extract::State,
     http::{
         HeaderValue, Request, Response,
-        header::{HeaderName, USER_AGENT},
+        header::{AUTHORIZATION, HeaderName, USER_AGENT},
     },
     middleware::Next,
     response::IntoResponse,
@@ -24,6 +24,14 @@ pub(crate) const TRACE_ID_HEADER_NAME: HeaderName = HeaderName::from_static("x-t
 #[derive(Clone, Debug)]
 pub(crate) struct ServerErrorContext {
     pub(crate) message: String,
+}
+
+#[derive(Clone, Debug)]
+struct HttpRequestLogContext {
+    operation_id: &'static str,
+    method: String,
+    path: String,
+    route: Option<String>,
 }
 
 pub(crate) use fumen_core::telemetry::TelemetryGuard;
@@ -92,42 +100,6 @@ pub(crate) fn make_operation_span(operation_id: &'static str, request: &Request<
     span
 }
 
-pub(crate) fn on_http_response(response: &Response<Body>, latency: Duration, span: &Span) {
-    span.record("http.response.status_code", response.status().as_u16());
-    let trace_id = span.context().span().span_context().trace_id().to_string();
-    tracing::info!(
-        parent: span,
-        latency_ms = latency.as_millis() as u64,
-        status = response.status().as_u16(),
-        trace_id = %trace_id,
-        "http response"
-    );
-}
-
-pub(crate) fn on_http_failure(response: &Response<Body>, latency: Duration, span: &Span) {
-    let failure = format!(
-        "{:?}",
-        ServerErrorsFailureClass::StatusCode(response.status())
-    );
-    let trace_id = span.context().span().span_context().trace_id().to_string();
-    let message = response
-        .extensions()
-        .get::<ServerErrorContext>()
-        .map(|details| details.message.as_str())
-        .unwrap_or("no AppError details attached");
-
-    span.record("error.type", failure.as_str());
-    tracing::error!(
-        parent: span,
-        latency_ms = latency.as_millis() as u64,
-        status = response.status().as_u16(),
-        trace_id = %trace_id,
-        error.type = %failure,
-        error.message = %message,
-        "http request failed"
-    );
-}
-
 fn attach_remote_parent(span: &Span, request: &Request<Body>) {
     let parent_context = global::get_text_map_propagator(|propagator| {
         propagator.extract(&HeaderExtractor(request.headers()))
@@ -147,6 +119,17 @@ pub(crate) async fn trace_operation_request(
     request: Request<Body>,
     next: Next,
 ) -> axum::response::Response {
+    let request_log = HttpRequestLogContext {
+        operation_id,
+        method: request.method().to_string(),
+        path: request.uri().path().to_owned(),
+        route: request
+            .extensions()
+            .get::<MatchedPath>()
+            .map(MatchedPath::as_str)
+            .map(ToOwned::to_owned),
+    };
+    let token_sub = extract_token_subject(request.headers(), &state);
     let span = make_operation_span(operation_id, &request);
     record_token_claims(&span, request.headers(), &state);
     let trace_id = span.context().span().span_context().trace_id().to_string();
@@ -156,9 +139,21 @@ pub(crate) async fn trace_operation_request(
     let status = response.status();
 
     if status.is_server_error() {
-        on_http_failure(&response, latency, &span);
+        on_http_failure_with_user(
+            &response,
+            latency,
+            &span,
+            &request_log,
+            token_sub.as_deref(),
+        );
     } else {
-        on_http_response(&response, latency, &span);
+        on_http_response_with_user(
+            &response,
+            latency,
+            &span,
+            &request_log,
+            token_sub.as_deref(),
+        );
     }
 
     let mut response = response.into_response();
@@ -173,24 +168,66 @@ pub(crate) async fn trace_operation_request(
     response
 }
 
+fn on_http_response_with_user(
+    response: &Response<Body>,
+    latency: Duration,
+    span: &Span,
+    request_log: &HttpRequestLogContext,
+    token_sub: Option<&str>,
+) {
+    span.record("http.response.status_code", response.status().as_u16());
+    let trace_id = span.context().span().span_context().trace_id().to_string();
+    tracing::info!(
+        parent: span,
+        operation_id = request_log.operation_id,
+        method = %request_log.method,
+        path = %request_log.path,
+        route = request_log.route.as_deref().unwrap_or("<unmatched>"),
+        latency_ms = latency.as_millis() as u64,
+        status = response.status().as_u16(),
+        trace_id = %trace_id,
+        user = token_sub.unwrap_or("anonymous"),
+        "http response"
+    );
+}
+
+fn on_http_failure_with_user(
+    response: &Response<Body>,
+    latency: Duration,
+    span: &Span,
+    request_log: &HttpRequestLogContext,
+    token_sub: Option<&str>,
+) {
+    let failure = format!(
+        "{:?}",
+        ServerErrorsFailureClass::StatusCode(response.status())
+    );
+    let trace_id = span.context().span().span_context().trace_id().to_string();
+    let message = response
+        .extensions()
+        .get::<ServerErrorContext>()
+        .map(|details| details.message.as_str())
+        .unwrap_or("no AppError details attached");
+
+    span.record("error.type", failure.as_str());
+    tracing::error!(
+        parent: span,
+        operation_id = request_log.operation_id,
+        method = %request_log.method,
+        path = %request_log.path,
+        route = request_log.route.as_deref().unwrap_or("<unmatched>"),
+        latency_ms = latency.as_millis() as u64,
+        status = response.status().as_u16(),
+        trace_id = %trace_id,
+        user = token_sub.unwrap_or("anonymous"),
+        error.type = %failure,
+        error.message = %message,
+        "http request failed"
+    );
+}
+
 fn record_token_claims(span: &Span, headers: &axum::http::HeaderMap, state: &AppState) {
-    let Some(header_value) = headers.get(axum::http::header::AUTHORIZATION) else {
-        return;
-    };
-
-    let Ok(authorization) = header_value.to_str() else {
-        return;
-    };
-
-    let Some(token) = authorization
-        .strip_prefix("Bearer ")
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-
-    let Ok(claims) = auth::decode_access_token_claims(token, &state.config.jwt_secret) else {
+    let Some(claims) = extract_token_claims(headers, state) else {
         return;
     };
 
@@ -198,6 +235,33 @@ fn record_token_claims(span: &Span, headers: &axum::http::HeaderMap, state: &App
     span.record("token.sid", claims.sid.as_str());
     span.record("token.exp", claims.exp);
     span.record("token.iat", claims.iat);
+}
+
+fn extract_token_subject(headers: &axum::http::HeaderMap, state: &AppState) -> Option<String> {
+    extract_token_claims(headers, state).map(|claims| claims.sub)
+}
+
+fn extract_token_claims(
+    headers: &axum::http::HeaderMap,
+    state: &AppState,
+) -> Option<auth::AccessTokenClaims> {
+    let Some(header_value) = headers.get(AUTHORIZATION) else {
+        return None;
+    };
+
+    let Ok(authorization) = header_value.to_str() else {
+        return None;
+    };
+
+    let Some(token) = authorization
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return None;
+    };
+
+    auth::decode_access_token_claims(token, &state.config.jwt_secret).ok()
 }
 
 #[macro_export]
