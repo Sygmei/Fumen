@@ -81,7 +81,9 @@
         | "stop"
         | "seekbackward"
         | "seekforward"
-        | "seekto";
+        | "seekto"
+        | "previoustrack"
+        | "nexttrack";
 
     type MediaSessionActionDetails = {
         seekOffset?: number;
@@ -546,36 +548,49 @@
             return;
         }
 
+        setMediaSessionAction("play", () => {
+            if (!isPlaybackActive()) {
+                void togglePlayback();
+            }
+        });
+        setMediaSessionAction("pause", () => {
+            void pausePlayback();
+        });
+        setMediaSessionAction("stop", () => {
+            stopPlayback();
+        });
+        setMediaSessionAction("seekbackward", (details) => {
+            seekFromMediaSession(
+                playbackPosition - Math.max(1, details?.seekOffset ?? 10),
+            );
+        });
+        setMediaSessionAction("seekforward", (details) => {
+            seekFromMediaSession(
+                playbackPosition + Math.max(1, details?.seekOffset ?? 10),
+            );
+        });
+        setMediaSessionAction("seekto", (details) => {
+            if (typeof details?.seekTime === "number") {
+                seekFromMediaSession(details.seekTime);
+            }
+        });
+        setMediaSessionAction("previoustrack", () => {
+            seekFromMediaSession(playbackPosition - 10);
+        });
+        setMediaSessionAction("nexttrack", () => {
+            seekFromMediaSession(playbackPosition + 10);
+        });
+        mediaSessionConfigured = true;
+    }
+
+    function setMediaSessionAction(
+        action: MediaSessionActionName,
+        handler: (details?: MediaSessionActionDetails) => void,
+    ) {
         try {
-            mediaSession.setActionHandler("play", () => {
-                if (!isPlaybackActive()) {
-                    void togglePlayback();
-                }
-            });
-            mediaSession.setActionHandler("pause", () => {
-                void pausePlayback();
-            });
-            mediaSession.setActionHandler("stop", () => {
-                stopPlayback();
-            });
-            mediaSession.setActionHandler("seekbackward", (details) => {
-                seekFromMediaSession(
-                    playbackPosition - Math.max(1, details?.seekOffset ?? 10),
-                );
-            });
-            mediaSession.setActionHandler("seekforward", (details) => {
-                seekFromMediaSession(
-                    playbackPosition + Math.max(1, details?.seekOffset ?? 10),
-                );
-            });
-            mediaSession.setActionHandler("seekto", (details) => {
-                if (typeof details?.seekTime === "number") {
-                    seekFromMediaSession(details.seekTime);
-                }
-            });
-            mediaSessionConfigured = true;
+            getMediaSession()?.setActionHandler(action, handler);
         } catch {
-            mediaSessionConfigured = false;
+            /* Ignore actions unsupported by the current browser. */
         }
     }
 
@@ -592,6 +607,8 @@
             "seekbackward",
             "seekforward",
             "seekto",
+            "previoustrack",
+            "nexttrack",
         ] as MediaSessionActionName[]) {
             try {
                 mediaSession.setActionHandler(action, null);
