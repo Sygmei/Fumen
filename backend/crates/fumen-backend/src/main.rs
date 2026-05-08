@@ -219,8 +219,7 @@ async fn async_main() -> Result<()> {
         .layer(CompressionLayer::new())
         .layer(cors_layer);
 
-    let frontend_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../frontend/dist");
-    if frontend_dist.exists() {
+    if let Some(frontend_dist) = routes::public::frontend_dist_path() {
         app = app.fallback_service(
             ServeDir::new(&frontend_dist)
                 .not_found_service(ServeFile::new(frontend_dist.join("index.html"))),

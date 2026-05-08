@@ -15,8 +15,8 @@ use bytes::Bytes;
 use flate2::{Compression, write::ZlibEncoder};
 use fumen_core::models::MusicRecord;
 use image::{GenericImageView, imageops::FilterType};
-use std::io::Write;
 use std::path::PathBuf;
+use std::{env, io::Write};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 pub(super) fn routes(state: AppState) -> Router<AppState> {
@@ -591,11 +591,17 @@ async fn render_listen_page_html(
     record: &MusicRecord,
 ) -> Result<String, AppError> {
     let meta_tags = build_listen_meta_tags(state, access_key, record);
-    let index_path = frontend_index_path();
-    let index_html = tokio::fs::read_to_string(&index_path).await.unwrap_or_else(|_| {
-        "<!doctype html><html lang=\"en\"><head></head><body><main id=\"app\"></main></body></html>"
-            .to_owned()
-    });
+    let index_path = frontend_dist_path()
+        .map(|path| path.join("index.html"))
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Frontend build is missing; cannot render listen page",
+            )
+        })?;
+    let index_html = tokio::fs::read_to_string(&index_path)
+        .await
+        .map_err(AppError::from)?;
 
     if let Some(head_end) = index_html.find("</head>") {
         let mut html = String::with_capacity(index_html.len() + meta_tags.len() + 1);
@@ -611,8 +617,27 @@ async fn render_listen_page_html(
     ))
 }
 
-fn frontend_index_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../frontend/dist/index.html")
+pub(crate) fn frontend_dist_path() -> Option<PathBuf> {
+    frontend_dist_candidates()
+        .into_iter()
+        .find(|path| path.join("index.html").exists())
+}
+
+fn frontend_dist_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(path) = env::var("FRONTEND_DIST_DIR")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    {
+        candidates.push(path);
+    }
+
+    candidates.push(PathBuf::from("/app/frontend/dist"));
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../frontend/dist"));
+    candidates
 }
 
 fn build_listen_meta_tags(state: &AppState, access_key: &str, record: &MusicRecord) -> String {
@@ -684,13 +709,9 @@ fn render_share_card_svg(state: &AppState, access_key: &str, record: &MusicRecor
         .map(|subtitle| wrap_svg_text(subtitle, 38, 1))
         .unwrap_or_default();
     let badge = score_badge(record);
-    let title_tspans = svg_tspans(&title_lines, 415, 255, 68);
-    let subtitle_tspans = svg_tspans(&subtitle_lines, 416, 398, 42);
-    let footer = if record.audio_object_key.is_some() {
-        "Interactive score + audio playback"
-    } else {
-        "Interactive score"
-    };
+    let title_start_y = if title_lines.len() > 1 { 224 } else { 260 };
+    let title_tspans = svg_tspans(&title_lines, 415, title_start_y, 68);
+    let subtitle_tspans = svg_tspans(&subtitle_lines, 416, 388, 42);
     let escaped_access_key = percent_encode_path_segment(access_key);
     let icon_markup = if record.icon_image_key.is_some() {
         format!(
@@ -709,6 +730,10 @@ fn render_share_card_svg(state: &AppState, access_key: &str, record: &MusicRecor
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="{aria_label}">
   <defs>
+    <style>
+      @import url('https://fonts.cdnfonts.com/css/a4-speed');
+      @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@500;700&amp;display=swap');
+    </style>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#101820"/>
       <stop offset="0.52" stop-color="#17352f"/>
@@ -736,21 +761,14 @@ fn render_share_card_svg(state: &AppState, access_key: &str, record: &MusicRecor
   </g>
   <g transform="translate(72 52)">
     <image href="{favicon_url}" x="0" y="0" width="52" height="54"/>
-    <text x="70" y="37" fill="#fff9e7" font-family="Verdana, Geneva, sans-serif" font-size="30" font-weight="800" letter-spacing="5">FUMEN</text>
+    <text x="70" y="39" fill="#fff9e7" font-family="'A4 SPEED', 'A4 Speed', sans-serif" font-size="39" font-weight="500" letter-spacing="0">Fumen</text>
   </g>
   <g transform="translate(112 112)" filter="url(#shadow)">
     <rect width="234" height="234" rx="42" fill="#f9f3df"/>
     {icon_markup}
   </g>
-  <text x="414" y="162" fill="#fff9e7" font-family="Verdana, Geneva, sans-serif" font-size="24" font-weight="700" letter-spacing="4">SHARED SCORE</text>
-  <text fill="#fffdf2" font-family="Georgia, 'Times New Roman', serif" font-size="64" font-weight="700">{title_tspans}</text>
-  <text fill="#d7f5e6" font-family="Verdana, Geneva, sans-serif" font-size="31" font-weight="600">{subtitle_tspans}</text>
-  <g transform="translate(416 486)">
-    <rect width="440" height="58" rx="29" fill="#fff9e7" opacity="0.14"/>
-    <circle cx="34" cy="29" r="10" fill="#f2c14e"/>
-    <path d="M68 29 H394" stroke="#fff9e7" stroke-width="5" stroke-linecap="round" opacity="0.62"/>
-    <text x="68" y="37" fill="#fff9e7" font-family="Verdana, Geneva, sans-serif" font-size="23" font-weight="700">{footer}</text>
-  </g>
+  <text fill="#fffdf2" font-family="'Fira Code', 'Cascadia Code', monospace" font-size="58" font-weight="700">{title_tspans}</text>
+  <text fill="#d7f5e6" font-family="'Fira Code', 'Cascadia Code', monospace" font-size="29" font-weight="500">{subtitle_tspans}</text>
 </svg>"##,
         aria_label = html_escape(&score_share_title(record)),
         favicon_url = html_escape(&format!(
@@ -758,7 +776,6 @@ fn render_share_card_svg(state: &AppState, access_key: &str, record: &MusicRecor
             state.config.app_base_url.trim_end_matches('/')
         )),
         icon_markup = icon_markup,
-        footer = svg_escape(footer),
         title_tspans = title_tspans,
         subtitle_tspans = subtitle_tspans,
     )
@@ -775,7 +792,6 @@ fn render_share_card_png(
     canvas.paint_brand();
     canvas.paint_score_tile(record, &badge, icon_bytes);
     canvas.paint_score_copy(record);
-    canvas.paint_playback_badge(record.audio_object_key.is_some());
     encode_png_rgb(canvas.width, canvas.height, &canvas.pixels)
 }
 
@@ -832,7 +848,7 @@ impl RgbCanvas {
         self.fill_circle(86, 85, 13, (16, 24, 32), 0.92);
         self.fill_rounded_rect(106, 48, 9, 54, 5, (16, 24, 32), 0.92);
         self.fill_rounded_rect(114, 48, 30, 8, 4, (16, 24, 32), 0.92);
-        self.draw_text("FUMEN", 156, 61, 6, (255, 249, 231), 0.98);
+        self.draw_a4_speed_wordmark(156, 54, 5, (255, 249, 231), 0.98);
     }
 
     fn paint_score_tile(&mut self, record: &MusicRecord, badge: &str, icon_bytes: Option<&[u8]>) {
@@ -841,8 +857,6 @@ impl RgbCanvas {
 
         if let Some(icon_bytes) = icon_bytes {
             if self.paint_uploaded_icon(icon_bytes, 136, 136, 186, 186, 30) {
-                self.fill_rect(136, 289, 186, 33, (16, 35, 31), 0.5);
-                self.draw_centered_text("SCORE ICON", 136, 296, 186, 3, (255, 249, 231), 0.85);
                 return;
             }
         }
@@ -864,7 +878,6 @@ impl RgbCanvas {
         );
         let icon_text = icon_text.chars().take(2).collect::<String>();
         self.draw_centered_text(&icon_text, 136, 210, 186, 15, (255, 249, 231), 1.0);
-        self.draw_centered_text("SCORE ICON", 136, 296, 186, 3, (255, 249, 231), 0.72);
     }
 
     fn paint_uploaded_icon(
@@ -899,10 +912,13 @@ impl RgbCanvas {
     fn paint_score_copy(&mut self, record: &MusicRecord) {
         let title = normalize_card_text(&record.title);
         let title_lines = wrap_card_text(&title, 23, 2);
-        let mut y = 238;
+        let line_height = 62;
+        let glyph_height = 7 * 7;
+        let total_height = glyph_height + ((title_lines.len() as i32 - 1).max(0) * line_height);
+        let mut y = 246 - total_height / 2;
         for line in title_lines {
-            self.draw_text(&line, 414, y, 7, (255, 253, 242), 0.98);
-            y += 62;
+            self.draw_mono_text(&line, 414, y, 7, (255, 253, 242), 0.98);
+            y += line_height;
         }
 
         if let Some(subtitle) = record
@@ -912,41 +928,7 @@ impl RgbCanvas {
             .filter(|value| !value.is_empty())
         {
             for line in wrap_card_text(&subtitle, 31, 1) {
-                self.draw_text(&line, 416, 400, 4, (215, 245, 230), 0.95);
-            }
-        }
-
-        self.draw_text("SHARED SCORE", 414, 151, 4, (255, 249, 231), 0.86);
-    }
-
-    fn paint_playback_badge(&mut self, has_audio: bool) {
-        self.fill_rounded_rect(416, 486, 440, 58, 29, (255, 249, 231), 0.14);
-        self.fill_circle(450, 515, 10, (242, 193, 78), 1.0);
-        self.fill_rounded_rect(484, 511, 326, 8, 4, (255, 249, 231), 0.62);
-        self.draw_text(
-            if has_audio {
-                "SCORE + AUDIO"
-            } else {
-                "INTERACTIVE SCORE"
-            },
-            484,
-            502,
-            3,
-            (255, 249, 231),
-            0.9,
-        );
-
-        if has_audio {
-            for (index, height) in [16, 30, 22, 38, 18].iter().enumerate() {
-                self.fill_rounded_rect(
-                    826 + (index as i32 * 13),
-                    515 - height / 2,
-                    7,
-                    *height,
-                    4,
-                    (242, 193, 78),
-                    0.9,
-                );
+                self.draw_mono_text(&line, 416, 400, 4, (215, 245, 230), 0.95);
             }
         }
     }
@@ -985,6 +967,35 @@ impl RgbCanvas {
         );
     }
 
+    fn draw_a4_speed_wordmark(
+        &mut self,
+        x: i32,
+        y: i32,
+        scale: i32,
+        color: (u8, u8, u8),
+        alpha: f32,
+    ) {
+        for index in 0..3 {
+            let slash_x = x + index * 12;
+            self.fill_slanted_bar(slash_x, y + 4, scale, 28, color, alpha * 0.9);
+        }
+        self.draw_text("FUMEN", x + 42, y, scale, color, alpha);
+    }
+
+    fn fill_slanted_bar(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        color: (u8, u8, u8),
+        alpha: f32,
+    ) {
+        for row in 0..height {
+            self.fill_rect(x + row / 3, y + row, width, 1, color, alpha);
+        }
+    }
+
     fn draw_text(
         &mut self,
         text: &str,
@@ -1012,6 +1023,36 @@ impl RgbCanvas {
                 }
             }
             cursor_x += 6 * scale;
+        }
+    }
+
+    fn draw_mono_text(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        scale: i32,
+        color: (u8, u8, u8),
+        alpha: f32,
+    ) {
+        let mut cursor_x = x;
+        for character in text.chars() {
+            let glyph = glyph_rows(character);
+            for (row_index, row) in glyph.iter().enumerate() {
+                for col in 0..5 {
+                    if row & (1 << (4 - col)) != 0 {
+                        self.fill_rect(
+                            cursor_x + (col * scale),
+                            y + (row_index as i32 * scale),
+                            scale,
+                            scale,
+                            color,
+                            alpha,
+                        );
+                    }
+                }
+            }
+            cursor_x += 7 * scale;
         }
     }
 
