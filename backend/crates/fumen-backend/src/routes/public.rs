@@ -602,6 +602,7 @@ async fn render_listen_page_html(
     let index_html = tokio::fs::read_to_string(&index_path)
         .await
         .map_err(AppError::from)?;
+    let index_html = rewrite_listen_asset_paths(&index_html);
 
     if let Some(head_end) = index_html.find("</head>") {
         let mut html = String::with_capacity(index_html.len() + meta_tags.len() + 1);
@@ -615,6 +616,13 @@ async fn render_listen_page_html(
         "<!doctype html><html lang=\"en\"><head>{}</head><body><main id=\"app\"></main></body></html>",
         meta_tags
     ))
+}
+
+fn rewrite_listen_asset_paths(index_html: &str) -> String {
+    index_html
+        .replace("\"/_app/", "\"/listen-assets/_app/")
+        .replace("\"/config.js\"", "\"/listen-assets/config.js\"")
+        .replace("\"/favicon.svg\"", "\"/listen-assets/favicon.svg\"")
 }
 
 pub(crate) fn frontend_dist_path() -> Option<PathBuf> {

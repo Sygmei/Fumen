@@ -220,6 +220,7 @@ async fn async_main() -> Result<()> {
         .layer(cors_layer);
 
     if let Some(frontend_dist) = routes::public::frontend_dist_path() {
+        app = app.nest_service("/listen-assets", ServeDir::new(&frontend_dist));
         app = app.fallback_service(
             ServeDir::new(&frontend_dist)
                 .not_found_service(ServeFile::new(frontend_dist.join("index.html"))),
