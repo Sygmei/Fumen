@@ -14,6 +14,7 @@ use axum::{
 use bytes::Bytes;
 use flate2::{Compression, write::ZlibEncoder};
 use fumen_core::models::MusicRecord;
+use image::{GenericImageView, imageops::FilterType};
 use std::io::Write;
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -327,7 +328,7 @@ pub(crate) async fn public_music_share_card(
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
-    let svg = render_share_card_svg(&record);
+    let svg = render_share_card_svg(&state, &access_key, &record);
     Ok(text_response(
         svg,
         "image/svg+xml; charset=utf-8",
@@ -343,7 +344,16 @@ pub(crate) async fn public_music_share_card_png(
         .await?
         .ok_or_else(|| AppError::not_found("Music not found"))?;
 
-    let png = render_share_card_png(&record)?;
+    let icon_bytes = match record.icon_image_key.as_deref() {
+        Some(icon_key) => state
+            .storage
+            .get_bytes(icon_key)
+            .await
+            .ok()
+            .map(|(bytes, _, _)| bytes),
+        None => None,
+    };
+    let png = render_share_card_png(&record, icon_bytes.as_deref())?;
     let mut response = binary_response(Bytes::from(png), "image/png".to_owned(), None, None);
     response.headers_mut().insert(
         header::CACHE_CONTROL,
@@ -666,7 +676,7 @@ fn score_share_description(record: &MusicRecord) -> String {
     "Open this score on Fumen.".to_owned()
 }
 
-fn render_share_card_svg(record: &MusicRecord) -> String {
+fn render_share_card_svg(state: &AppState, access_key: &str, record: &MusicRecord) -> String {
     let title_lines = wrap_svg_text(&record.title, 31, 2);
     let subtitle_lines = record
         .subtitle
@@ -680,6 +690,20 @@ fn render_share_card_svg(record: &MusicRecord) -> String {
         "Interactive score + audio playback"
     } else {
         "Interactive score"
+    };
+    let escaped_access_key = percent_encode_path_segment(access_key);
+    let icon_markup = if record.icon_image_key.is_some() {
+        format!(
+            r##"<image href="{}/api/public/{}/icon" x="24" y="24" width="186" height="186" preserveAspectRatio="xMidYMid slice" clip-path="url(#scoreIconClip)"/>"##,
+            html_escape(state.config.app_base_url.trim_end_matches('/')),
+            html_escape(&escaped_access_key),
+        )
+    } else {
+        format!(
+            r##"<rect x="30" y="30" width="174" height="174" rx="28" fill="#10231f" opacity="0.94"/>
+    <text x="117" y="128" text-anchor="middle" dominant-baseline="middle" fill="#f2c14e" font-family="Georgia, 'Times New Roman', serif" font-size="72" font-weight="700">{}</text>"##,
+            svg_escape(&badge),
+        )
     };
 
     format!(
@@ -698,6 +722,7 @@ fn render_share_card_svg(record: &MusicRecord) -> String {
     <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
       <feDropShadow dx="0" dy="28" stdDeviation="26" flood-color="#06100d" flood-opacity="0.38"/>
     </filter>
+    <clipPath id="scoreIconClip"><rect x="24" y="24" width="186" height="186" rx="30"/></clipPath>
   </defs>
   <rect width="1200" height="630" fill="url(#bg)"/>
   <rect width="1200" height="630" fill="url(#glow)"/>
@@ -709,12 +734,15 @@ fn render_share_card_svg(record: &MusicRecord) -> String {
     <path d="M116 287 H1038"/>
     <path d="M116 328 H1038"/>
   </g>
+  <g transform="translate(72 52)">
+    <image href="{favicon_url}" x="0" y="0" width="52" height="54"/>
+    <text x="70" y="37" fill="#fff9e7" font-family="Verdana, Geneva, sans-serif" font-size="30" font-weight="800" letter-spacing="5">FUMEN</text>
+  </g>
   <g transform="translate(112 112)" filter="url(#shadow)">
     <rect width="234" height="234" rx="42" fill="#f9f3df"/>
-    <path d="M56 164 C90 96 145 91 184 44 V154 C184 186 159 206 126 206 C102 206 84 194 84 176 C84 157 105 144 133 144 C144 144 155 146 165 150 V88 C126 126 92 124 56 164 Z" fill="#10231f"/>
-    <text x="117" y="136" text-anchor="middle" dominant-baseline="middle" fill="#f2c14e" font-family="Georgia, 'Times New Roman', serif" font-size="60" font-weight="700">{badge}</text>
+    {icon_markup}
   </g>
-  <text x="414" y="162" fill="#fff9e7" font-family="Verdana, Geneva, sans-serif" font-size="24" font-weight="700" letter-spacing="4">FUMEN SCORE</text>
+  <text x="414" y="162" fill="#fff9e7" font-family="Verdana, Geneva, sans-serif" font-size="24" font-weight="700" letter-spacing="4">SHARED SCORE</text>
   <text fill="#fffdf2" font-family="Georgia, 'Times New Roman', serif" font-size="64" font-weight="700">{title_tspans}</text>
   <text fill="#d7f5e6" font-family="Verdana, Geneva, sans-serif" font-size="31" font-weight="600">{subtitle_tspans}</text>
   <g transform="translate(416 486)">
@@ -725,18 +753,28 @@ fn render_share_card_svg(record: &MusicRecord) -> String {
   </g>
 </svg>"##,
         aria_label = html_escape(&score_share_title(record)),
-        badge = svg_escape(&badge),
+        favicon_url = html_escape(&format!(
+            "{}/favicon.svg",
+            state.config.app_base_url.trim_end_matches('/')
+        )),
+        icon_markup = icon_markup,
         footer = svg_escape(footer),
         title_tspans = title_tspans,
         subtitle_tspans = subtitle_tspans,
     )
 }
 
-fn render_share_card_png(record: &MusicRecord) -> Result<Vec<u8>, AppError> {
+fn render_share_card_png(
+    record: &MusicRecord,
+    icon_bytes: Option<&[u8]>,
+) -> Result<Vec<u8>, AppError> {
     let mut canvas = RgbCanvas::new(1200, 630);
+    let badge = score_badge(record);
     canvas.paint_background();
     canvas.paint_staff_lines();
-    canvas.paint_score_tile();
+    canvas.paint_brand();
+    canvas.paint_score_tile(record, &badge, icon_bytes);
+    canvas.paint_score_copy(record);
     canvas.paint_playback_badge(record.audio_object_key.is_some());
     encode_png_rgb(canvas.width, canvas.height, &canvas.pixels)
 }
@@ -788,20 +826,115 @@ impl RgbCanvas {
         }
     }
 
-    fn paint_score_tile(&mut self) {
+    fn paint_brand(&mut self) {
+        self.fill_circle(98, 79, 36, (249, 243, 223), 0.16);
+        self.fill_circle(96, 80, 24, (242, 193, 78), 0.95);
+        self.fill_circle(86, 85, 13, (16, 24, 32), 0.92);
+        self.fill_rounded_rect(106, 48, 9, 54, 5, (16, 24, 32), 0.92);
+        self.fill_rounded_rect(114, 48, 30, 8, 4, (16, 24, 32), 0.92);
+        self.draw_text("FUMEN", 156, 61, 6, (255, 249, 231), 0.98);
+    }
+
+    fn paint_score_tile(&mut self, record: &MusicRecord, badge: &str, icon_bytes: Option<&[u8]>) {
         self.fill_rounded_rect(112, 112, 234, 234, 42, (249, 243, 223), 1.0);
-        self.fill_circle(204, 260, 33, (16, 35, 31), 1.0);
-        self.fill_circle(198, 260, 23, (249, 243, 223), 1.0);
-        self.fill_rect(228, 128, 18, 130, (16, 35, 31), 1.0);
-        self.fill_rect(245, 128, 58, 18, (16, 35, 31), 1.0);
-        self.fill_circle(144, 276, 26, (242, 193, 78), 1.0);
-        self.fill_rect(164, 166, 15, 110, (242, 193, 78), 1.0);
+        self.fill_rounded_rect(136, 136, 186, 186, 30, (16, 35, 31), 0.96);
+
+        if let Some(icon_bytes) = icon_bytes {
+            if self.paint_uploaded_icon(icon_bytes, 136, 136, 186, 186, 30) {
+                self.fill_rect(136, 289, 186, 33, (16, 35, 31), 0.5);
+                self.draw_centered_text("SCORE ICON", 136, 296, 186, 3, (255, 249, 231), 0.85);
+                return;
+            }
+        }
+
+        self.fill_circle(206, 258, 29, (242, 193, 78), 0.95);
+        self.fill_rounded_rect(226, 168, 14, 102, 4, (242, 193, 78), 0.95);
+        self.fill_rounded_rect(238, 168, 48, 12, 4, (242, 193, 78), 0.95);
+
+        let icon_text = normalize_card_text(
+            if record
+                .icon
+                .as_deref()
+                .is_some_and(|icon| !icon.trim().is_empty())
+            {
+                badge
+            } else {
+                &record.title
+            },
+        );
+        let icon_text = icon_text.chars().take(2).collect::<String>();
+        self.draw_centered_text(&icon_text, 136, 210, 186, 15, (255, 249, 231), 1.0);
+        self.draw_centered_text("SCORE ICON", 136, 296, 186, 3, (255, 249, 231), 0.72);
+    }
+
+    fn paint_uploaded_icon(
+        &mut self,
+        icon_bytes: &[u8],
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        radius: i32,
+    ) -> bool {
+        let Ok(image) = image::load_from_memory(icon_bytes) else {
+            return false;
+        };
+        let resized = image.resize_to_fill(width as u32, height as u32, FilterType::Lanczos3);
+
+        for py in 0..height {
+            for px in 0..width {
+                if !rounded_rect_contains(px, py, width, height, radius) {
+                    continue;
+                }
+
+                let pixel = resized.get_pixel(px as u32, py as u32);
+                let alpha = f32::from(pixel.0[3]) / 255.0;
+                self.blend_pixel(x + px, y + py, (pixel.0[0], pixel.0[1], pixel.0[2]), alpha);
+            }
+        }
+
+        true
+    }
+
+    fn paint_score_copy(&mut self, record: &MusicRecord) {
+        let title = normalize_card_text(&record.title);
+        let title_lines = wrap_card_text(&title, 23, 2);
+        let mut y = 238;
+        for line in title_lines {
+            self.draw_text(&line, 414, y, 7, (255, 253, 242), 0.98);
+            y += 62;
+        }
+
+        if let Some(subtitle) = record
+            .subtitle
+            .as_deref()
+            .map(normalize_card_text)
+            .filter(|value| !value.is_empty())
+        {
+            for line in wrap_card_text(&subtitle, 31, 1) {
+                self.draw_text(&line, 416, 400, 4, (215, 245, 230), 0.95);
+            }
+        }
+
+        self.draw_text("SHARED SCORE", 414, 151, 4, (255, 249, 231), 0.86);
     }
 
     fn paint_playback_badge(&mut self, has_audio: bool) {
         self.fill_rounded_rect(416, 486, 440, 58, 29, (255, 249, 231), 0.14);
         self.fill_circle(450, 515, 10, (242, 193, 78), 1.0);
         self.fill_rounded_rect(484, 511, 326, 8, 4, (255, 249, 231), 0.62);
+        self.draw_text(
+            if has_audio {
+                "SCORE + AUDIO"
+            } else {
+                "INTERACTIVE SCORE"
+            },
+            484,
+            502,
+            3,
+            (255, 249, 231),
+            0.9,
+        );
 
         if has_audio {
             for (index, height) in [16, 30, 22, 38, 18].iter().enumerate() {
@@ -828,6 +961,57 @@ impl RgbCanvas {
                     self.blend_pixel(x, y, (11, 20, 19), 0.32);
                 }
             }
+        }
+    }
+
+    fn draw_centered_text(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        width: i32,
+        scale: i32,
+        color: (u8, u8, u8),
+        alpha: f32,
+    ) {
+        let text_width = text_pixel_width(text, scale);
+        self.draw_text(
+            text,
+            x + ((width - text_width) / 2).max(0),
+            y,
+            scale,
+            color,
+            alpha,
+        );
+    }
+
+    fn draw_text(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        scale: i32,
+        color: (u8, u8, u8),
+        alpha: f32,
+    ) {
+        let mut cursor_x = x;
+        for character in text.chars() {
+            let glyph = glyph_rows(character);
+            for (row_index, row) in glyph.iter().enumerate() {
+                for col in 0..5 {
+                    if row & (1 << (4 - col)) != 0 {
+                        self.fill_rect(
+                            cursor_x + (col * scale),
+                            y + (row_index as i32 * scale),
+                            scale,
+                            scale,
+                            color,
+                            alpha,
+                        );
+                    }
+                }
+            }
+            cursor_x += 6 * scale;
         }
     }
 
@@ -979,6 +1163,235 @@ fn crc32(data: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+fn rounded_rect_contains(px: i32, py: i32, width: i32, height: i32, radius: i32) -> bool {
+    let dx = if px < radius {
+        radius - px
+    } else if px >= width - radius {
+        px - (width - radius - 1)
+    } else {
+        0
+    };
+    let dy = if py < radius {
+        radius - py
+    } else if py >= height - radius {
+        py - (height - radius - 1)
+    } else {
+        0
+    };
+
+    dx == 0 || dy == 0 || dx * dx + dy * dy <= radius * radius
+}
+
+fn normalize_card_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else if matches!(character, ' ' | '-' | '_' | ':' | '/' | '&' | '+') {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn wrap_card_text(value: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in value.split_whitespace() {
+        let separator = if current.is_empty() { 0 } else { 1 };
+        if !current.is_empty() && current.len() + separator + word.len() > max_chars {
+            lines.push(current);
+            current = String::new();
+            if lines.len() == max_lines {
+                break;
+            }
+        }
+
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+
+    if lines.len() < max_lines && !current.is_empty() {
+        lines.push(current);
+    }
+
+    if lines.is_empty() {
+        lines.push("UNTITLED SCORE".to_owned());
+    }
+
+    if lines.len() == max_lines {
+        let original = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        let displayed = lines.join(" ");
+        if original.len() > displayed.len() {
+            if let Some(last) = lines.last_mut() {
+                *last = ellipsize_card_text(last, max_chars);
+            }
+        }
+    }
+
+    lines
+}
+
+fn ellipsize_card_text(value: &str, max_chars: usize) -> String {
+    let mut result = value
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    result.push_str("...");
+    result
+}
+
+fn text_pixel_width(text: &str, scale: i32) -> i32 {
+    text.chars().count() as i32 * 6 * scale
+}
+
+fn glyph_rows(character: char) -> [u8; 7] {
+    match character.to_ascii_uppercase() {
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01111, 0b10000, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+        ],
+        'J' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'Q' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010,
+        ],
+        'X' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'Z' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '3' => [
+            0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        '4' => [
+            0b10010, 0b10010, 0b10010, 0b11111, 0b00010, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110,
+        ],
+        '6' => [
+            0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
+        ],
+        '-' => [
+            0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000,
+        ],
+        '_' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111,
+        ],
+        ':' => [
+            0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000,
+        ],
+        '/' => [
+            0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000,
+        ],
+        '&' => [
+            0b01100, 0b10010, 0b10100, 0b01000, 0b10101, 0b10010, 0b01101,
+        ],
+        '+' => [
+            0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000,
+        ],
+        '.' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100,
+        ],
+        ' ' => [0; 7],
+        _ => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b00100, 0b00000, 0b00100,
+        ],
+    }
 }
 
 fn score_badge(record: &MusicRecord) -> String {
