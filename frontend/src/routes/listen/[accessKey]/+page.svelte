@@ -184,6 +184,36 @@
 
         return `${publicMusic.title} | Fumen`;
     });
+    let listenShareTitle = $derived.by(() => {
+        if (!publicMusic?.title) {
+            return "Listen on Fumen";
+        }
+
+        if (publicMusic.subtitle?.trim()) {
+            return `${publicMusic.title} - ${publicMusic.subtitle}`;
+        }
+
+        return publicMusic.title;
+    });
+    let listenShareDescription = $derived.by(() => {
+        if (!publicMusic) {
+            return "Open an interactive score on Fumen.";
+        }
+
+        if (publicMusic.can_stream_audio && publicMusic.musicxml_url) {
+            return "Open the interactive score and listen with Fumen.";
+        }
+
+        if (publicMusic.can_stream_audio) {
+            return "Listen to this score on Fumen.";
+        }
+
+        return "Open this score on Fumen.";
+    });
+    let listenShareImageUrl = $derived(
+        `${page.url.origin}/api/public/${encodeURIComponent(accessKey)}/share-card.png`,
+    );
+    let listenShareUrl = $derived(page.url.href);
     let renderedAnnotations = $derived.by(() => {
         const seen = new Map<string, number>();
         const result: RenderedAnnotation[] = [];
@@ -1279,6 +1309,20 @@
 
 <svelte:head>
     <title>{listenPageTitle}</title>
+    <meta name="description" content={listenShareDescription} />
+    <meta property="og:type" content="music.song" />
+    <meta property="og:site_name" content="Fumen" />
+    <meta property="og:title" content={listenShareTitle} />
+    <meta property="og:description" content={listenShareDescription} />
+    <meta property="og:url" content={listenShareUrl} />
+    <meta property="og:image" content={listenShareImageUrl} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={listenShareTitle} />
+    <meta name="twitter:description" content={listenShareDescription} />
+    <meta name="twitter:image" content={listenShareImageUrl} />
 </svelte:head>
 
 <main class="page public-shell public-listen-shell">

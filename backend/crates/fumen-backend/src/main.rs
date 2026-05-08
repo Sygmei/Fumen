@@ -212,6 +212,7 @@ async fn async_main() -> Result<()> {
         storage,
     };
     let mut app = Router::new()
+        .merge(routes::public::listen_routes(state.clone()))
         .nest("/api", api_routes(state.clone()))
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))

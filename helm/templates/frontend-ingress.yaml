@@ -18,6 +18,20 @@ spec:
     - host: "{{ .Values.frontend.ingress.domain }}"
       http:
         paths:
+          - path: /listen
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "fumen.backend.fullname" . }}
+                port:
+                  name: http
+          - path: /api/public
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "fumen.backend.fullname" . }}
+                port:
+                  name: http
           - path: /
             pathType: Prefix
             backend:
@@ -28,6 +42,20 @@ spec:
     - host: "www.{{ .Values.frontend.ingress.domain }}"
       http:
         paths:
+          - path: /listen
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "fumen.backend.fullname" . }}
+                port:
+                  name: http
+          - path: /api/public
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "fumen.backend.fullname" . }}
+                port:
+                  name: http
           - path: /
             pathType: Prefix
             backend:
