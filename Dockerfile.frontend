@@ -29,7 +29,7 @@ RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force \
     && chown -R app:app /app
 
-ENV API_BASE_URL=""
+ENV API_BASE_URL="/api"
 ENV HOST=0.0.0.0
 ENV PORT=8080
 

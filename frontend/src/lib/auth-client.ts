@@ -40,9 +40,7 @@ function resolveApiBaseUrl(): string {
     return 'http://127.0.0.1:3000/api'
   }
 
-  throw new Error(
-    'Missing API base URL. Set VITE_API_BASE_URL for local development or API_BASE_URL in the frontend runtime.',
-  )
+  return new URL('/api', globalThis.location?.origin ?? 'http://localhost').toString().replace(/\/+$/, '')
 }
 
 function resolveApiClientBaseUrl(apiBaseUrl: string): string {

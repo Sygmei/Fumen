@@ -15,7 +15,7 @@ export function resolveServerApiBaseUrl(origin = "http://localhost:5173") {
         return "http://127.0.0.1:3000/api";
     }
 
-    throw new Error("Missing API_BASE_URL for SvelteKit server requests.");
+    return new URL("/api", origin).toString().replace(/\/+$/, "");
 }
 
 export async function fetchPublicMusic(
