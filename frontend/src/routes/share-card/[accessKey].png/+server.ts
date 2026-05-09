@@ -8,6 +8,7 @@ import {
 import {
     fetchBinaryDataUri,
     loadScoreCardFontFiles,
+    loadScoreCardPathFontCount,
     renderScoreCardSvg,
 } from "$lib/server-score-card";
 
@@ -34,6 +35,8 @@ export const GET: RequestHandler = async ({ fetch, params, url }) => {
         ariaLabel: scoreShareTitle(music),
     });
 
+    const fontFiles = loadScoreCardFontFiles();
+    const pathFontCount = loadScoreCardPathFontCount();
     const resvgOptions: ResvgRenderOptions & {
         font: NonNullable<ResvgRenderOptions["font"]> & {
             fontFiles: string[];
@@ -41,8 +44,8 @@ export const GET: RequestHandler = async ({ fetch, params, url }) => {
     } = {
         fitTo: { mode: "width", value: 1200 },
         font: {
-            fontFiles: loadScoreCardFontFiles(),
-            loadSystemFonts: false,
+            fontFiles,
+            loadSystemFonts: fontFiles.length === 0 || pathFontCount < 2,
         },
     };
     const resvg = new Resvg(svg, resvgOptions);
@@ -53,6 +56,9 @@ export const GET: RequestHandler = async ({ fetch, params, url }) => {
             "content-type": "image/png",
             "cache-control": "public, max-age=300",
             "x-content-type-options": "nosniff",
+            "x-score-card-fonts": String(fontFiles.length),
+            "x-score-card-path-fonts": String(pathFontCount),
+            "x-score-card-render": "paths",
         },
     });
 };

@@ -11,6 +11,9 @@ RUN npm ci
 
 COPY frontend/ ./
 RUN npm run build
+RUN test -f /app/build/client/fonts/fira-code-medium.ttf \
+    && test -f /app/build/client/fonts/fira-code-bold.ttf \
+    && test -f /app/build/client/fonts/a4-speed-bold.otf
 
 FROM npm-base
 

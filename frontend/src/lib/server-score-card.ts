@@ -1,16 +1,77 @@
 import fumenLogoSvg from "../../public/favicon.svg?raw";
+import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+
+const require = createRequire(import.meta.url);
+const TextToSVG = require("text-to-svg") as {
+    loadSync: (fontPath: string) => TextToSvgRenderer;
+};
 
 const A4_SPEED_FONT_PATH = "fonts/a4-speed-bold.otf";
 const FIRA_CODE_MEDIUM_FONT_PATH = "fonts/fira-code-medium.ttf";
 const FIRA_CODE_BOLD_FONT_PATH = "fonts/fira-code-bold.ttf";
 
 let fontFiles: string[] | null = null;
+let pathFontCache: {
+    a4Speed?: TextToSvgRenderer;
+    firaMedium?: TextToSvgRenderer;
+    firaBold?: TextToSvgRenderer;
+} | null = null;
+
+type TextToSvgRenderer = {
+    getD: (
+        text: string,
+        options: {
+            x: number;
+            y: number;
+            fontSize: number;
+            anchor?: string;
+            letterSpacing?: number;
+            tracking?: number;
+        },
+    ) => string;
+};
 
 export function loadScoreCardFontFiles() {
     fontFiles ??= resolveFontFiles();
     return fontFiles;
+}
+
+export function loadScoreCardPathFonts() {
+    if (pathFontCache) {
+        return pathFontCache;
+    }
+
+    const fira500Path = resolvePublicAssetPath(FIRA_CODE_MEDIUM_FONT_PATH);
+    const fira700Path = resolvePublicAssetPath(FIRA_CODE_BOLD_FONT_PATH);
+    const a4SpeedPath = resolvePublicAssetPath(A4_SPEED_FONT_PATH);
+
+    pathFontCache = {
+        firaMedium: loadScoreCardPathFont("Fira Code Medium", fira500Path),
+        firaBold: loadScoreCardPathFont("Fira Code Bold", fira700Path),
+        a4Speed: loadScoreCardPathFont("A4 Speed", a4SpeedPath),
+    };
+
+    return pathFontCache;
+}
+
+export function loadScoreCardPathFontCount() {
+    const fonts = loadScoreCardPathFonts();
+    return [fonts.firaMedium, fonts.firaBold, fonts.a4Speed].filter(Boolean).length;
+}
+
+function loadScoreCardPathFont(label: string, fontPath: string | null) {
+    if (!fontPath) {
+        return undefined;
+    }
+
+    try {
+        return TextToSVG.loadSync(fontPath);
+    } catch (error) {
+        console.warn(`Unable to load ${label} for score card path rendering`, error);
+        return undefined;
+    }
 }
 
 function resolveFontFiles() {
@@ -71,10 +132,17 @@ export function renderScoreCardSvg({
     const subtitleLineHeight = subtitleLines.length >= 2 ? 38 : 46;
     const scoreIcon = scoreBadge(title, icon);
     const fumenLogoDataUri = svgDataUri(fumenLogoSvg);
+    const pathFonts = loadScoreCardPathFonts();
     const iconMarkup = scoreIconDataUri
         ? `<image href="${htmlEscape(scoreIconDataUri)}" x="24" y="24" width="198" height="198" preserveAspectRatio="xMidYMid slice" clip-path="url(#scoreIconClip)"/>`
         : `<rect x="30" y="30" width="186" height="186" rx="30" fill="#10231f" opacity="0.94"/>
-    <text x="123" y="129" text-anchor="middle" dominant-baseline="middle" fill="#f2c14e" font-family="'Fira Code', monospace" font-size="76" font-weight="700">${htmlEscape(scoreIcon)}</text>`;
+    ${svgTextPath(pathFonts.firaBold, scoreIcon, {
+        x: 123,
+        y: 129,
+        fontSize: 76,
+        fill: "#f2c14e",
+        anchor: "center middle",
+    })}`;
 
     return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="${htmlEscape(ariaLabel)}">
   <defs>
@@ -105,14 +173,20 @@ export function renderScoreCardSvg({
   </g>
   <g transform="translate(142 64)">
     <image href="${htmlEscape(fumenLogoDataUri)}" x="10" y="0" width="66" height="68"/>
-    <text x="92" y="52" textLength="144" lengthAdjust="spacingAndGlyphs" fill="#fff9e7" font-family="'A4 SPEED', sans-serif" font-size="56" font-weight="500">Fumen</text>
+    ${svgTextPath(pathFonts.firaBold, "FUMEN", {
+        x: 92,
+        y: 52,
+        fontSize: 48,
+        fill: "#fff9e7",
+        anchor: "left baseline",
+    })}
   </g>
   <g transform="translate(142 154)" filter="url(#shadow)">
     <rect width="246" height="246" rx="44" fill="#f9f3df"/>
     ${iconMarkup}
   </g>
-  <text fill="#fffdf2" font-family="'Fira Code', monospace" font-size="${titleFontSize}" font-weight="700" dominant-baseline="middle">${svgCenteredTspans(titleLines, 450, titleCenterY, titleLineHeight)}</text>
-  <text fill="#d7f5e6" font-family="'Fira Code', monospace" font-size="${subtitleFontSize}" font-weight="500">${svgTspans(subtitleLines, 452, subtitleY, subtitleLineHeight)}</text>
+  ${svgCenteredTextPaths(pathFonts.firaBold, titleLines, 450, titleCenterY, titleLineHeight, titleFontSize, "#fffdf2", "left middle")}
+  ${svgTextPaths(pathFonts.firaMedium, subtitleLines, 452, subtitleY, subtitleLineHeight, subtitleFontSize, "#d7f5e6", "left baseline")}
 </svg>`;
 }
 
@@ -207,23 +281,69 @@ function splitLongWord(word: string, maxChars: number) {
     return chunks;
 }
 
-function svgCenteredTspans(
+function svgCenteredTextPaths(
+    font: TextToSvgRenderer | undefined,
     lines: string[],
     x: number,
     centerY: number,
     lineHeight: number,
+    fontSize: number,
+    fill: string,
+    anchor: string,
 ) {
     const firstY = centerY - ((lines.length - 1) * lineHeight) / 2;
-    return svgTspans(lines, x, firstY, lineHeight);
+    return svgTextPaths(font, lines, x, firstY, lineHeight, fontSize, fill, anchor);
 }
 
-function svgTspans(lines: string[], x: number, y: number, lineHeight: number) {
+function svgTextPaths(
+    font: TextToSvgRenderer | undefined,
+    lines: string[],
+    x: number,
+    y: number,
+    lineHeight: number,
+    fontSize: number,
+    fill: string,
+    anchor: string,
+) {
     return lines
         .map(
             (line, index) =>
-                `<tspan x="${x}" y="${y + index * lineHeight}">${htmlEscape(line)}</tspan>`,
+                svgTextPath(font, line, {
+                    x,
+                    y: y + index * lineHeight,
+                    fontSize,
+                    fill,
+                    anchor,
+                }),
         )
         .join("");
+}
+
+function svgTextPath(
+    font: TextToSvgRenderer | undefined,
+    text: string,
+    options: {
+        x: number;
+        y: number;
+        fontSize: number;
+        fill: string;
+        anchor: string;
+        tracking?: number;
+    },
+) {
+    if (!font) {
+        return `<text x="${options.x}" y="${options.y}" fill="${htmlEscape(options.fill)}" font-size="${options.fontSize}">${htmlEscape(text)}</text>`;
+    }
+
+    const path = font.getD(text, {
+        x: options.x,
+        y: options.y,
+        fontSize: options.fontSize,
+        anchor: options.anchor,
+        tracking: options.tracking,
+    });
+
+    return `<path fill="${htmlEscape(options.fill)}" d="${path}"/>`;
 }
 
 function htmlEscape(value: string) {
