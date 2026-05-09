@@ -14,6 +14,7 @@
         prettyDate,
         qualityProfileLabel,
     } from "$lib/utils";
+    import { scoreShareImageVersion } from "$lib/share-card";
     import {
         STEM_QUALITY_PROFILES,
         type StemQualityProfile,
@@ -138,6 +139,14 @@
     const processingGridSteps = $derived(buildProcessingGrid(processingSteps));
     const processingStallMessage = $derived(
         processingProgress?.state_message || "",
+    );
+    const shareCardAccessKey = $derived(
+        (currentMusic.public_id?.trim() || currentMusic.public_token).trim(),
+    );
+    const shareCardPreviewUrl = $derived(
+        shareCardAccessKey
+            ? `/share-card/${encodeURIComponent(shareCardAccessKey)}.png?v=${scoreShareImageVersion(currentMusic)}`
+            : "",
     );
 
     function stepTooltip(step: ProcessingStep) {
@@ -413,6 +422,47 @@
     {/if}
     {#if currentMusic.midi_error}
         <p class="hint">{currentMusic.midi_error}</p>
+    {/if}
+    {#if shareCardPreviewUrl}
+        <section class="admin-score-share-preview">
+            <div class="admin-playtime-header">
+                <div>
+                    <p class="meta-label">Share card</p>
+                    <h3>Social preview</h3>
+                </div>
+                <div class="actions admin-playtime-actions">
+                    <a
+                        class="button secondary"
+                        href={shareCardPreviewUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                    >
+                        Open image
+                    </a>
+                    <a
+                        class="button ghost"
+                        href={currentMusic.public_url}
+                        target="_blank"
+                        rel="noreferrer"
+                    >
+                        Public link
+                    </a>
+                </div>
+            </div>
+            <a
+                class="admin-score-share-card"
+                href={shareCardPreviewUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open share card preview for ${currentMusic.title}`}
+            >
+                <img
+                    src={shareCardPreviewUrl}
+                    alt={`Share card preview for ${currentMusic.title}`}
+                    loading="lazy"
+                />
+            </a>
+        </section>
     {/if}
     {#if canViewProcessingLog}
         <section class="admin-playtime-section">

@@ -12,7 +12,7 @@
     "api:generate": "node ./scripts/generate-api-client.mjs"
   },
   "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/adapter-node": "^5.4.0",
     "@sveltejs/kit": "^2.57.1",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tsconfig/svelte": "^5.0.8",
@@ -25,7 +25,9 @@
     "vite": "^8.0.5"
   },
   "dependencies": {
+    "@fontsource/fira-code": "^5.2.7",
     "@lucide/svelte": "^1.8.0",
+    "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4.2.2",
     "opensheetmusicdisplay": "^1.4.5",
     "qr-scanner": "^1.4.2",

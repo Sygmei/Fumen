@@ -113,13 +113,12 @@ pub(crate) use fumen_core::{
 
 use anyhow::{Context, Result};
 use axum::{
-    Json, Router,
+    Router,
     extract::DefaultBodyLimit,
     http::{
         HeaderValue,
         header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     },
-    response::IntoResponse,
 };
 use config::{AppConfig, StorageConfig};
 use db::{open_database_pool, run_migrations};
@@ -130,7 +129,6 @@ use storage::Storage;
 use tower_http::{
     compression::CompressionLayer,
     cors::{AllowOrigin, Any, CorsLayer},
-    services::{ServeDir, ServeFile},
 };
 use tracing::info;
 use utoipa::OpenApi;
@@ -211,23 +209,12 @@ async fn async_main() -> Result<()> {
         db_ro,
         storage,
     };
-    let mut app = Router::new()
-        .merge(routes::public::listen_routes(state.clone()))
+    let app = Router::new()
         .nest("/api", api_routes(state.clone()))
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", openapi::ApiDoc::openapi()))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(CompressionLayer::new())
         .layer(cors_layer);
-
-    if let Some(frontend_dist) = routes::public::frontend_dist_path() {
-        app = app.nest_service("/listen-assets", ServeDir::new(&frontend_dist));
-        app = app.fallback_service(
-            ServeDir::new(&frontend_dist)
-                .not_found_service(ServeFile::new(frontend_dist.join("index.html"))),
-        );
-    } else {
-        app = app.route("/", crate::op_get!(state, "/", root_message));
-    }
 
     let address: SocketAddr = state
         .config
@@ -265,10 +252,4 @@ fn build_cors_layer(config: &AppConfig) -> Result<CorsLayer> {
             Ok(base.allow_origin(AllowOrigin::list(origins)))
         }
     }
-}
-
-async fn root_message() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "message": "Fumen backend is running. Build the frontend to serve it from this process."
-    }))
 }

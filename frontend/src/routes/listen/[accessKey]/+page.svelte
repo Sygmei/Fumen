@@ -22,6 +22,7 @@
     import ScoreIcon from "$components/ScoreIcon.svelte";
     import { appShell } from "$lib/app-shell.svelte";
     import { showAnnotationModal } from "$components/modals";
+    import { scoreShareImageVersion } from "$lib/share-card";
     import {
         Download,
         ChevronDown,
@@ -210,9 +211,12 @@
 
         return "Open this score on Fumen.";
     });
-    let listenShareImageUrl = $derived(
-        `${page.url.origin}/api/public/${encodeURIComponent(accessKey)}/share-card.png`,
-    );
+    let listenShareImageUrl = $derived.by(() => {
+        const version = publicMusic
+            ? `?v=${scoreShareImageVersion(publicMusic)}`
+            : "";
+        return `${page.url.origin}/share-card/${encodeURIComponent(accessKey)}.png${version}`;
+    });
     let listenShareUrl = $derived(page.url.href);
     let renderedAnnotations = $derived.by(() => {
         const seen = new Map<string, number>();
