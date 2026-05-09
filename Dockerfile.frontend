@@ -1,4 +1,8 @@
-FROM node:22-bookworm-slim AS build
+FROM node:25-bookworm-slim AS npm-base
+
+RUN npm install -g npm@11.6.2
+
+FROM npm-base AS build
 
 WORKDIR /app
 
@@ -8,7 +12,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM node:22-bookworm-slim
+FROM npm-base
 
 ARG APP_UID=10001
 ARG APP_GID=10001
