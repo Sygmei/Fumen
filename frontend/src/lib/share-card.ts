@@ -1,4 +1,4 @@
-const SCORE_SHARE_CARD_VERSION = "5";
+const SCORE_SHARE_CARD_VERSION = "6";
 
 type ScoreShareMetadata = {
     title: string;

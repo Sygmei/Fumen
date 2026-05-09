@@ -7,7 +7,7 @@ import {
 } from "$lib/server-public-api";
 import {
     fetchBinaryDataUri,
-    loadScoreCardFontBuffers,
+    loadScoreCardFontFiles,
     renderScoreCardSvg,
 } from "$lib/server-score-card";
 
@@ -36,12 +36,12 @@ export const GET: RequestHandler = async ({ fetch, params, url }) => {
 
     const resvgOptions: ResvgRenderOptions & {
         font: NonNullable<ResvgRenderOptions["font"]> & {
-            fontBuffers: Uint8Array[];
+            fontFiles: string[];
         };
     } = {
         fitTo: { mode: "width", value: 1200 },
         font: {
-            fontBuffers: await loadScoreCardFontBuffers(),
+            fontFiles: loadScoreCardFontFiles(),
             loadSystemFonts: false,
         },
     };

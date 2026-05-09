@@ -1,47 +1,51 @@
 import fumenLogoSvg from "../../public/favicon.svg?raw";
-import { createRequire } from "node:module";
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
-const require = createRequire(import.meta.url);
-const A4_SPEED_FONT_URL =
-    "https://fonts.cdnfonts.com/s/61447/A4SPEED-Bold%20-%20DAFONT%20OTF.woff";
+const A4_SPEED_FONT_PATH = "fonts/a4-speed-bold.otf";
+const FIRA_CODE_MEDIUM_FONT_PATH = "fonts/fira-code-medium.ttf";
+const FIRA_CODE_BOLD_FONT_PATH = "fonts/fira-code-bold.ttf";
 
-let fontBuffersPromise: Promise<Uint8Array[]> | null = null;
+let fontFiles: string[] | null = null;
 
-export async function loadScoreCardFontBuffers() {
-    fontBuffersPromise ??= loadFonts();
-    return fontBuffersPromise;
+export function loadScoreCardFontFiles() {
+    fontFiles ??= resolveFontFiles();
+    return fontFiles;
 }
 
-async function loadFonts() {
-    const fira500Path = require.resolve(
-        "@fontsource/fira-code/files/fira-code-latin-500-normal.woff",
-    );
-    const fira700Path = require.resolve(
-        "@fontsource/fira-code/files/fira-code-latin-700-normal.woff",
-    );
+function resolveFontFiles() {
+    const fira500Path = resolvePublicAssetPath(FIRA_CODE_MEDIUM_FONT_PATH);
+    const fira700Path = resolvePublicAssetPath(FIRA_CODE_BOLD_FONT_PATH);
+    const a4SpeedPath = resolvePublicAssetPath(A4_SPEED_FONT_PATH);
 
-    const [fira500, fira700, a4Speed] = await Promise.all([
-        readFile(fira500Path),
-        readFile(fira700Path),
-        fetchFont(A4_SPEED_FONT_URL),
-    ]);
-
-    return [fira500, fira700, ...(a4Speed ? [a4Speed] : [])];
-}
-
-async function fetchFont(url: string) {
-    try {
-        const response = await fetch(url);
-        if (!response.ok) {
-            return null;
-        }
-
-        return new Uint8Array(await response.arrayBuffer());
-    } catch (error) {
-        console.warn("Unable to load score card font", error);
-        return null;
+    if (!fira500Path || !fira700Path) {
+        console.warn("Unable to resolve score card Fira Code font assets");
     }
+
+    if (!a4SpeedPath) {
+        console.warn("Unable to resolve score card A4 Speed font asset");
+    }
+
+    return [
+        ...(fira500Path ? [fira500Path] : []),
+        ...(fira700Path ? [fira700Path] : []),
+        ...(a4SpeedPath ? [a4SpeedPath] : []),
+    ];
+}
+
+function resolvePublicAssetPath(relativePath: string) {
+    const candidates = [
+        join(process.cwd(), "build", "client", relativePath),
+        join(process.cwd(), "public", relativePath),
+    ];
+
+    for (const candidate of candidates) {
+        if (existsSync(candidate)) {
+            return candidate;
+        }
+    }
+
+    return null;
 }
 
 export function renderScoreCardSvg({
