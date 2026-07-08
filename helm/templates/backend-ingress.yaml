@@ -1,3 +1,4 @@
+{{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -6,14 +7,20 @@ metadata:
     app.kubernetes.io/name: {{ include "fumen.name" . }}
     app.kubernetes.io/component: backend
     app.kubernetes.io/instance: {{ .Release.Name }}
+  {{- if .Values.ingress.httpsRedirect.enabled }}
   annotations:
     traefik.ingress.kubernetes.io/router.middlewares: "{{ .Release.Namespace }}-https-redirect-mw@kubernetescrd"
+  {{- end }}
 spec:
-  ingressClassName: traefik
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  {{- if .Values.certificates.enabled }}
   tls:
     - hosts:
         - "{{ .Values.backend.ingress.domain }}"
       secretName: {{ include "fumen.certificateSecretName" . }}
+  {{- end }}
   rules:
     - host: "{{ .Values.backend.ingress.domain }}"
       http:
@@ -25,3 +32,4 @@ spec:
                 name: {{ include "fumen.backend.fullname" . }}
                 port:
                   name: http
+{{- end }}

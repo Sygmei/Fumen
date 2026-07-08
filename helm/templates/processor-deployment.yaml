@@ -26,6 +26,15 @@ spec:
         app.kubernetes.io/component: processor
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "fumen.name" . }}
+              app.kubernetes.io/component: processor
+              app.kubernetes.io/instance: {{ .Release.Name }}
       securityContext:
         runAsNonRoot: true
         fsGroup: 65532

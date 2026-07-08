@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/component: frontend
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.frontend.replicas }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -25,6 +25,15 @@ spec:
         app.kubernetes.io/component: frontend
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "fumen.name" . }}
+              app.kubernetes.io/component: frontend
+              app.kubernetes.io/instance: {{ .Release.Name }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -44,11 +53,11 @@ spec:
             runAsNonRoot: true
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: {{ .Values.frontend.resources.requests.cpu | quote }}
+              memory: {{ .Values.frontend.resources.requests.memory | quote }}
             limits:
-              cpu: 200m
-              memory: 128Mi
+              cpu: {{ .Values.frontend.resources.limits.cpu | quote }}
+              memory: {{ .Values.frontend.resources.limits.memory | quote }}
           ports:
             - name: http
               containerPort: 8080
@@ -56,7 +65,15 @@ spec:
             httpGet:
               path: /
               port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           livenessProbe:
             httpGet:
               path: /
               port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5

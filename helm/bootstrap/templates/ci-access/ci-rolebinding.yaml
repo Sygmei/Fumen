@@ -1,0 +1,15 @@
+{{- if .Values.ci_access.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "{{ .Release.Name }}-ci-binding"
+  namespace: {{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.ci_access.service_account_name }}
+    namespace: {{ default .Release.Namespace .Values.ci_access.service_account_namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "{{ .Release.Name }}-ci-role"
+{{- end }}

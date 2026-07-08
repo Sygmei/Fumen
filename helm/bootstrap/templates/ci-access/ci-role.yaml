@@ -1,0 +1,59 @@
+{{- if .Values.ci_access.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: "{{ .Release.Name }}-ci-role"
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - services
+      - configmaps
+      - secrets
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - apiGroups: [""]
+    resources:
+      - events
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: [""]
+    resources:
+      - pods/log
+    verbs: ["get", "list"]
+
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - statefulsets
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - apiGroups: ["networking.k8s.io", "extensions"]
+    resources:
+      - ingresses
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - apiGroups: ["traefik.io"]
+    resources:
+      - middlewares
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - apiGroups: ["cert-manager.io"]
+    resources:
+      - certificates
+      - issuers
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - apiGroups: ["keda.sh"]
+    resources:
+      - scaledobjects
+      - scaledjobs
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}

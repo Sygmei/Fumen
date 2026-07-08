@@ -1,0 +1,15 @@
+Fumen has been deployed in namespace {{ .Release.Namespace }}.
+
+Required existing secrets:
+- postgresql-credentials: connection-string, connection-string-admin, connection-string-ro
+- jwt-credentials: secret
+- s3-creds: bucket-name, access-key-id, secret-key, region-name, endpoint-url
+{{- if and .Values.ingress.enabled .Values.certificates.enabled }}
+- cloudflare-secret: token
+{{- end }}
+
+Backend:
+- {{ include "fumen.backend.fullname" . }}
+
+Frontend:
+- {{ include "fumen.frontend.fullname" . }}

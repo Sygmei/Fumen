@@ -1,6 +1,6 @@
 backend:
   version: "1.6.0"
-  replicas: 1
+  replicas: 2
   resources:
     requests:
       cpu: "250m"
@@ -72,6 +72,23 @@ processor:
 
 frontend:
   version: "1.6.0"
+  replicas: 2
   apiBaseUrl: ""
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
   ingress:
     domain: "yourdomain.com"
+
+ingress:
+  enabled: true
+  className: traefik
+  httpsRedirect:
+    enabled: true
+
+certificates:
+  enabled: true

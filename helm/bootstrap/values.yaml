@@ -1,0 +1,7 @@
+ci_access:
+  enabled: true
+  create_service_account: true
+  service_account_name: ci-helm
+  service_account_namespace: ""
+  create_token_secret: true
+  token_secret_name: ci-helm-token

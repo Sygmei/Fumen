@@ -1,0 +1,119 @@
+name: Helm upgrade
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "helm/**"
+      - ".github/workflows/helm-upgrade.yaml"
+  workflow_dispatch:
+
+env:
+  RELEASE_NAME: fumen
+  NAMESPACE: fumen
+  CHART_PATH: "./helm"
+  VALUES_FILE: ""
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Set up Helm values
+        run: |
+          if [ -z "${HELM_VALUES_B64:-}" ]; then
+            echo "HELM_VALUES_B64 GitHub secret is empty or missing"
+            exit 1
+          fi
+
+          echo "$HELM_VALUES_B64" | base64 -d > "$RUNNER_TEMP/values.yaml"
+          echo "VALUES_FILE=$RUNNER_TEMP/values.yaml" >> $GITHUB_ENV
+        env:
+          HELM_VALUES_B64: ${{ secrets.HELM_VALUES_B64 }}
+
+      - name: Set up kubeconfig
+        run: |
+          if [ -z "${KUBECONFIG_B64:-}" ]; then
+            echo "KUBECONFIG_B64 GitHub secret is empty or missing"
+            exit 1
+          fi
+
+          echo "$KUBECONFIG_B64" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          chmod 600 "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> $GITHUB_ENV
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+
+      - name: Validate kubeconfig
+        run: |
+          kubectl config current-context
+          kubectl auth can-i get deployments.apps --namespace "$NAMESPACE" --quiet
+
+      - name: Check rendered resources
+        run: |
+          helm template "$RELEASE_NAME" "$CHART_PATH" \
+            --namespace "$NAMESPACE" \
+            -f "$VALUES_FILE" \
+            > "$RUNNER_TEMP/rendered.yaml"
+
+          kubectl apply --dry-run=server --validate=false --namespace "$NAMESPACE" -f "$RUNNER_TEMP/rendered.yaml"
+
+      - name: Helm upgrade
+        run: |
+          helm upgrade --install "$RELEASE_NAME" "$CHART_PATH" \
+            --namespace "$NAMESPACE" \
+            --create-namespace \
+            -f "$VALUES_FILE" \
+            --atomic \
+            --timeout 5m \
+            --debug
+
+      - name: Diagnose deployment failure
+        if: failure()
+        run: |
+          echo "## Helm status"
+          helm status "$RELEASE_NAME" --namespace "$NAMESPACE" || true
+
+          echo "## Pods"
+          kubectl get pods --namespace "$NAMESPACE" -o wide || true
+
+          echo "## Deployments"
+          kubectl get deployments --namespace "$NAMESPACE" -o wide || true
+
+          echo "## ReplicaSets"
+          kubectl get replicasets --namespace "$NAMESPACE" -o wide || true
+
+          echo "## Jobs"
+          kubectl get jobs --namespace "$NAMESPACE" -o wide || true
+
+          echo "## Services"
+          kubectl get services --namespace "$NAMESPACE" -o wide || true
+
+          echo "## Ingresses"
+          kubectl get ingresses --namespace "$NAMESPACE" -o wide || true
+
+          echo "## KEDA resources"
+          kubectl get scaledobjects.keda.sh,scaledjobs.keda.sh --namespace "$NAMESPACE" -o wide || true
+
+          echo "## Traefik middlewares"
+          kubectl get middlewares.traefik.io --namespace "$NAMESPACE" -o wide || true
+
+          echo "## cert-manager resources"
+          kubectl get issuers,certificates --namespace "$NAMESPACE" -o wide || true
+
+          echo "## Recent events"
+          kubectl get events --namespace "$NAMESPACE" --sort-by=.lastTimestamp || true
+
+          echo "## Backend deployment details"
+          kubectl describe deployment "$RELEASE_NAME-fumen-backend" --namespace "$NAMESPACE" || true
+
+          echo "## Frontend deployment details"
+          kubectl describe deployment "$RELEASE_NAME-fumen-frontend" --namespace "$NAMESPACE" || true
